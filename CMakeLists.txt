@@ -38,6 +38,7 @@ add_executable(IBStart WIN32
   src/app/main.cpp
   src/ui/main_window.cpp
   src/app/IBStart.rc
+  src/app/app.manifest
 )
 target_include_directories(IBStart PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/app")
 target_link_libraries(IBStart PRIVATE ibstart_core Comctl32)
