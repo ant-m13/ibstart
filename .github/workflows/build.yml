@@ -45,6 +45,16 @@ jobs:
           }
       - name: Build Release
         run: cmake --build out/build/ci --parallel
+      - name: Verify embedded visual styles manifest
+        shell: pwsh
+        run: |
+          $embedded = 'out/build/ci/embedded.manifest'
+          & mt.exe -nologo '-inputresource:out/build/ci/IBStart.exe;#1' "-out:$embedded"
+          if ($LASTEXITCODE -ne 0) { throw 'Unable to extract the embedded application manifest.' }
+          $manifest = Get-Content -Raw $embedded
+          if ($manifest -notmatch 'Microsoft\.Windows\.Common-Controls' -or $manifest -notmatch 'version="6\.0\.0\.0"') {
+            throw 'IBStart.exe must embed Microsoft.Windows.Common-Controls v6.'
+          }
       - name: Run CTest
         run: ctest --test-dir out/build/ci --output-on-failure
       - name: Verify binary size
