@@ -159,8 +159,9 @@ domain::Database Catalog::DatabaseFor(std::wstring_view name) const {
   result.external = entry->ValueOr(L"External");
   result.locale = entry->ValueOr(L"Locale");
   result.client_connection_speed = entry->ValueOr(L"ClientConnectionSpeed");
+  result.app_arch = entry->ValueOr(L"AppArch");
   result.additional_parameters = entry->ValueOr(L"AdditionalParameters");
-  constexpr std::wstring_view known[] = {L"Connect", L"ID", L"Folder", L"OrderInList", L"Version", L"App", L"DefaultApp", L"WA", L"External", L"Locale", L"ClientConnectionSpeed", L"AdditionalParameters"};
+  constexpr std::wstring_view known[] = {L"Connect", L"ID", L"Folder", L"OrderInList", L"Version", L"App", L"DefaultApp", L"WA", L"External", L"Locale", L"ClientConnectionSpeed", L"AppArch", L"AdditionalParameters"};
   for (const auto& field : entry->fields) {
     if (std::none_of(std::begin(known), std::end(known), [&](std::wstring_view key) { return EqualNoCase(key, field.key); })) result.unknown_fields.push_back(field);
   }

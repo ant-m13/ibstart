@@ -84,6 +84,16 @@ bool NewerVersion(std::wstring_view left, std::wstring_view right) {
   return left > right;
 }
 
+bool VersionMatches(std::wstring_view installed, std::wstring_view requested) {
+  if (EqualNoCase(installed, requested)) return true;
+  // In ibases.v8i a platform can be specified without its build number, for
+  // example 8.3.27.  An installed 8.3.27.1688 is then a valid match, whereas
+  // 8.3.270 must not accidentally match 8.3.27.
+  return installed.size() > requested.size() &&
+      _wcsnicmp(installed.data(), requested.data(), requested.size()) == 0 &&
+      installed[requested.size()] == L'.';
+}
+
 }  // namespace
 
 std::wstring QuoteWindowsArgument(std::wstring_view argument) {
@@ -137,20 +147,47 @@ std::vector<std::wstring> SplitCommandArguments(std::wstring_view text) {
   return result;
 }
 
+std::optional<domain::ClientArchitecture> ParseAppArchitecture(std::wstring_view value) {
+  const auto normalized = Trim(value);
+  if (EqualNoCase(normalized, L"x86")) return domain::ClientArchitecture::x86;
+  if (EqualNoCase(normalized, L"x86_64")) return domain::ClientArchitecture::x64;
+  if (EqualNoCase(normalized, L"x86_prt")) return domain::ClientArchitecture::x86_priority;
+  if (EqualNoCase(normalized, L"x86_64_prt")) return domain::ClientArchitecture::x64_priority;
+  return std::nullopt;
+}
+
+std::optional<domain::ClientArchitecture> AppArchitectureFromParameters(std::wstring_view text) {
+  const auto arguments = SplitCommandArguments(text);
+  for (size_t index = 0; index < arguments.size(); ++index) {
+    const auto& argument = arguments[index];
+    if (EqualNoCase(argument, L"/AppArch") && index + 1 < arguments.size()) return ParseAppArchitecture(arguments[index + 1]);
+    constexpr std::wstring_view prefix = L"/AppArch=";
+    if (argument.size() > prefix.size() && _wcsnicmp(argument.c_str(), prefix.data(), prefix.size()) == 0) {
+      return ParseAppArchitecture(std::wstring_view(argument).substr(prefix.size()));
+    }
+  }
+  return std::nullopt;
+}
+
 std::optional<domain::PlatformInstallation> SelectPlatform(
     std::span<const domain::PlatformInstallation> candidates, const domain::LaunchOptions& options) {
   std::vector<domain::PlatformInstallation> filtered;
+  const auto architecture = options.architecture;
   for (const auto& candidate : candidates) {
-    if (options.version != L"" && options.version != L"Авто" && !EqualNoCase(candidate.version, options.version)) continue;
+    if (options.version != L"" && options.version != L"Авто" && !VersionMatches(candidate.version, options.version)) continue;
     if (options.bitness != domain::ClientBitness::automatic && candidate.bitness != options.bitness) continue;
+    if ((architecture == domain::ClientArchitecture::x86 && candidate.bitness != domain::ClientBitness::x86) ||
+        (architecture == domain::ClientArchitecture::x64 && candidate.bitness != domain::ClientBitness::x64)) continue;
     if (options.client_type == domain::ClientType::thin && !candidate.has_thin_client) continue;
     filtered.push_back(candidate);
   }
-  std::sort(filtered.begin(), filtered.end(), [](const auto& left, const auto& right) {
-    const int leftRank = left.bitness == domain::ClientBitness::x64 ? 0 : 1;
-    const int rightRank = right.bitness == domain::ClientBitness::x64 ? 0 : 1;
+  std::sort(filtered.begin(), filtered.end(), [architecture](const auto& left, const auto& right) {
+    if (left.version != right.version) return NewerVersion(left.version, right.version);
+    const bool prefer64 = architecture == domain::ClientArchitecture::x64_priority;
+    const int leftRank = left.bitness == (prefer64 ? domain::ClientBitness::x64 : domain::ClientBitness::x86) ? 0 : 1;
+    const int rightRank = right.bitness == (prefer64 ? domain::ClientBitness::x64 : domain::ClientBitness::x86) ? 0 : 1;
     if (leftRank != rightRank) return leftRank < rightRank;
-    return NewerVersion(left.version, right.version);
+    return left.executable.wstring() < right.executable.wstring();
   });
   if (filtered.empty()) return std::nullopt;
   return filtered.front();

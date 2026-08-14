@@ -10,6 +10,7 @@
 namespace ibstart::domain {
 
 enum class ClientBitness { automatic, x64, x86 };
+enum class ClientArchitecture { automatic, x86, x64, x86_priority, x64_priority };
 enum class ClientType { automatic, thick, thin, web };
 enum class LaunchMode { enterprise, designer, web_client };
 
@@ -43,6 +44,7 @@ struct Database {
   std::wstring external;
   std::wstring locale;
   std::wstring client_connection_speed;
+  std::wstring app_arch;
   std::wstring additional_parameters;
   std::vector<Field> unknown_fields;
 };
@@ -57,6 +59,7 @@ struct PlatformInstallation {
 struct LaunchOptions {
   LaunchMode mode{LaunchMode::enterprise};
   ClientBitness bitness{ClientBitness::automatic};
+  ClientArchitecture architecture{ClientArchitecture::automatic};
   ClientType client_type{ClientType::automatic};
   std::wstring version{L"Авто"};
   std::wstring common_parameters;

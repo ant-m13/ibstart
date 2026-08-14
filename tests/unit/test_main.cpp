@@ -69,6 +69,10 @@ void TestNoBomAndCatalog() {
   CHECK(catalog.Databases().size() == 1);
   CHECK(ibstart::catalog::Catalog::IsWebConnection(catalog.Databases().front()->ValueOr(L"Connect")));
   CHECK(catalog.DatabaseFor(L"Web").unknown_fields.size() == 1);
+  auto architectureDocument = ibstart::v8i::V8iDocument::ParseUtf8("[AppArch base]\nConnect=Srvr=\"server\";Ref=\"base\"\nAppArch=x86_64_prt\n");
+  ibstart::catalog::Catalog architectureCatalog(std::move(architectureDocument));
+  CHECK(architectureCatalog.DatabaseFor(L"AppArch base").app_arch == L"x86_64_prt");
+  CHECK(architectureCatalog.DatabaseFor(L"AppArch base").unknown_fields.empty());
 }
 
 void TestSafeStore() {
@@ -93,8 +97,18 @@ void TestCommandBuilderAndSelection() {
     {L"C:\\Program Files (x86)\\1cv8\\8.3.24\\bin\\1cv8.exe", L"8.3.24", ibstart::domain::ClientBitness::x86, true},
     {L"C:\\Program Files\\1cv8\\8.3.24\\bin\\1cv8.exe", L"8.3.24", ibstart::domain::ClientBitness::x64, true}};
   ibstart::domain::LaunchOptions options; options.mode = ibstart::domain::LaunchMode::designer; const auto chosen = ibstart::launcher::SelectPlatform(platforms, options);
-  CHECK(chosen && chosen->bitness == ibstart::domain::ClientBitness::x64);
+  CHECK(chosen && chosen->bitness == ibstart::domain::ClientBitness::x86);
   options.bitness = ibstart::domain::ClientBitness::x86; const auto x86 = ibstart::launcher::SelectPlatform(platforms, options); CHECK(x86 && x86->bitness == ibstart::domain::ClientBitness::x86); options.bitness = ibstart::domain::ClientBitness::automatic;
+  options.architecture = ibstart::domain::ClientArchitecture::x64; const auto x64 = ibstart::launcher::SelectPlatform(platforms, options); CHECK(x64 && x64->bitness == ibstart::domain::ClientBitness::x64);
+  options.architecture = ibstart::domain::ClientArchitecture::x64_priority; const auto priority64 = ibstart::launcher::SelectPlatform(platforms, options); CHECK(priority64 && priority64->bitness == ibstart::domain::ClientBitness::x64);
+  options.architecture = ibstart::domain::ClientArchitecture::automatic;
+  options.version = L"8.3"; const auto versionPrefix = ibstart::launcher::SelectPlatform(platforms, options); CHECK(versionPrefix && versionPrefix->version == L"8.3.24");
+  options.version = L"Авто";
+  CHECK(ibstart::launcher::ParseAppArchitecture(L"x86_64_prt") == ibstart::domain::ClientArchitecture::x64_priority);
+  CHECK(ibstart::launcher::ParseAppArchitecture(L"x86") == ibstart::domain::ClientArchitecture::x86);
+  CHECK(!ibstart::launcher::ParseAppArchitecture(L"x64"));
+  CHECK(ibstart::launcher::AppArchitectureFromParameters(L"/N Иван /AppArch x86_64_prt") == ibstart::domain::ClientArchitecture::x64_priority);
+  CHECK(ibstart::launcher::AppArchitectureFromParameters(L"/AppArch=x86") == ibstart::domain::ClientArchitecture::x86);
   ibstart::domain::Database file; file.connect = L"File=\"C:\\Базы 1С\\Тест\""; file.additional_parameters = L"/N \"Иван Иванов\"";
   const auto fileCommand = ibstart::launcher::BuildCommand(file, *chosen, options);
   CHECK(fileCommand.arguments[0] == L"DESIGNER"); CHECK(fileCommand.arguments[1] == L"/F"); CHECK(fileCommand.arguments[2] == L"C:\\Базы 1С\\Тест");

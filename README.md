@@ -61,7 +61,7 @@ ctest --preset msvc-x64-release
 
 ## `ibases.v8i` и безопасность
 
-IBStart не удаляет каталоги файловых баз: действие «Удалить» удаляет только секцию из списка. При сохранении сохраняются поддерживаемые поля `Connect`, `ID`, `Folder`, `OrderInList`, `Version`, `App`, `DefaultApp`, `WA`, `External`, `Locale`, `ClientConnectionSpeed`, `AdditionalParameters` и незнакомые поля сторонних инструментов.
+IBStart не удаляет каталоги файловых баз: действие «Удалить» удаляет только секцию из списка. При сохранении сохраняются поддерживаемые поля `Connect`, `ID`, `Folder`, `OrderInList`, `Version`, `App`, `DefaultApp`, `WA`, `External`, `Locale`, `ClientConnectionSpeed`, `AppArch`, `AdditionalParameters` и незнакомые поля сторонних инструментов.
 
 Дополнительные параметры передаются пользователем как текст. IBStart не создаёт отдельное хранилище логинов/паролей. Если введён `/P`, программа предупреждает, что пароль может оказаться в открытом виде в `ibases.v8i`; в логах значения после `/P`, `password` и `token` маскируются. Не передавайте пароль через ярлык.
 
