@@ -37,7 +37,9 @@ struct Database {
   std::wstring connect;
   std::wstring folder;
   std::wstring order_in_list;
+  std::wstring order_in_tree;
   std::wstring version;
+  std::wstring default_version;
   std::wstring app;
   std::wstring default_app;
   std::wstring wa;

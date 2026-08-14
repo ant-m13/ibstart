@@ -1,5 +1,7 @@
 #include "core/catalog/catalog.hpp"
 
+#include <objbase.h>
+
 #include <algorithm>
 #include <cerrno>
 #include <cwchar>
@@ -57,8 +59,12 @@ std::optional<long long> NumericOrder(std::wstring_view value) {
   return order;
 }
 bool LessEntry(const domain::Entry* left, const domain::Entry* right) {
-  const auto leftOrder = left->ValueOr(L"OrderInList");
-  const auto rightOrder = right->ValueOr(L"OrderInList");
+  const auto orderForTree = [](const domain::Entry* entry) {
+    const auto treeOrder = entry->ValueOr(L"OrderInTree");
+    return treeOrder.empty() ? entry->ValueOr(L"OrderInList") : treeOrder;
+  };
+  const auto leftOrder = orderForTree(left);
+  const auto rightOrder = orderForTree(right);
   const auto leftNumeric = NumericOrder(leftOrder);
   const auto rightNumeric = NumericOrder(rightOrder);
   if (leftNumeric && rightNumeric && *leftNumeric != *rightNumeric) return *leftNumeric < *rightNumeric;
@@ -102,6 +108,12 @@ std::wstring FolderForParent(const v8i::V8iDocument& document, std::wstring_view
   std::wstring result = L"/";
   for (auto it = names.rbegin(); it != names.rend(); ++it) result = AppendFolder(result, *it);
   return result;
+}
+std::wstring NewDatabaseId() {
+  GUID id{};
+  if (CoCreateGuid(&id) != S_OK) return {};
+  wchar_t text[40]{};
+  return StringFromGUID2(id, text, 40) > 0 ? std::wstring(text) : std::wstring();
 }
 void RewriteFolderPrefix(v8i::V8iDocument& document, std::wstring_view old_prefix, std::wstring_view new_prefix) {
   for (auto& section : document.sections) {
@@ -152,7 +164,9 @@ domain::Database Catalog::DatabaseFor(std::wstring_view name) const {
   result.connect = entry->ValueOr(L"Connect");
   result.folder = entry->ValueOr(L"Folder");
   result.order_in_list = entry->ValueOr(L"OrderInList");
+  result.order_in_tree = entry->ValueOr(L"OrderInTree");
   result.version = entry->ValueOr(L"Version");
+  result.default_version = entry->ValueOr(L"DefaultVersion");
   result.app = entry->ValueOr(L"App");
   result.default_app = entry->ValueOr(L"DefaultApp");
   result.wa = entry->ValueOr(L"WA");
@@ -161,7 +175,7 @@ domain::Database Catalog::DatabaseFor(std::wstring_view name) const {
   result.client_connection_speed = entry->ValueOr(L"ClientConnectionSpeed");
   result.app_arch = entry->ValueOr(L"AppArch");
   result.additional_parameters = entry->ValueOr(L"AdditionalParameters");
-  constexpr std::wstring_view known[] = {L"Connect", L"ID", L"Folder", L"OrderInList", L"Version", L"App", L"DefaultApp", L"WA", L"External", L"Locale", L"ClientConnectionSpeed", L"AppArch", L"AdditionalParameters"};
+  constexpr std::wstring_view known[] = {L"Connect", L"ID", L"Folder", L"OrderInList", L"OrderInTree", L"Version", L"DefaultVersion", L"App", L"DefaultApp", L"WA", L"External", L"Locale", L"ClientConnectionSpeed", L"AppArch", L"AdditionalParameters"};
   for (const auto& field : entry->fields) {
     if (std::none_of(std::begin(known), std::end(known), [&](std::wstring_view key) { return EqualNoCase(key, field.key); })) result.unknown_fields.push_back(field);
   }
@@ -213,7 +227,7 @@ bool Catalog::AddFileDatabase(std::wstring name, const std::filesystem::path& di
       !std::filesystem::is_regular_file(directory / L"1Cv8.1CD", error)) return false;
   auto& entry = document_.Add(std::move(name)).entry;
   entry.Set(L"Connect", QuoteConnectionPath(directory));
-  entry.Set(L"ID", entry.name);
+  entry.Set(L"ID", NewDatabaseId());
   entry.Set(L"Folder", FolderForParent(document_, parent));
   Renumber(parent);
   return true;
@@ -223,7 +237,7 @@ bool Catalog::AddServerDatabase(std::wstring name, std::wstring connect, std::ws
   if (name.empty() || connect.empty() || Find(name) != nullptr || !ValidParent(document_, parent)) return false;
   auto& entry = document_.Add(std::move(name)).entry;
   entry.Set(L"Connect", std::move(connect));
-  entry.Set(L"ID", entry.name);
+  entry.Set(L"ID", NewDatabaseId());
   entry.Set(L"Folder", FolderForParent(document_, parent));
   Renumber(parent);
   return true;
@@ -301,7 +315,12 @@ bool Catalog::Move(std::wstring_view name, std::wstring parent, size_t position)
   auto siblings = ChildrenOf(parent);
   siblings.erase(std::remove_if(siblings.begin(), siblings.end(), [&](const domain::Entry* candidate) { return candidate == entry; }), siblings.end());
   siblings.insert(siblings.begin() + std::min(position, siblings.size()), entry);
-  for (size_t index = 0; index < siblings.size(); ++index) const_cast<domain::Entry*>(siblings[index])->Set(L"OrderInList", std::to_wstring(index + 1));
+  for (size_t index = 0; index < siblings.size(); ++index) {
+    auto* entry = const_cast<domain::Entry*>(siblings[index]);
+    const auto order = std::to_wstring(index + 1);
+    entry->Set(L"OrderInList", order);
+    entry->Set(L"OrderInTree", order);
+  }
   if (!EqualNoCase(oldParent, parent)) Renumber(oldParent);
   return true;
 }
@@ -321,7 +340,12 @@ bool Catalog::MoveBy(std::wstring_view name, int offset) {
 
 void Catalog::Renumber(std::wstring_view parent) {
   const auto children = ChildrenOf(parent);
-  for (size_t index = 0; index < children.size(); ++index) const_cast<domain::Entry*>(children[index])->Set(L"OrderInList", std::to_wstring(index + 1));
+  for (size_t index = 0; index < children.size(); ++index) {
+    auto* entry = const_cast<domain::Entry*>(children[index]);
+    const auto order = std::to_wstring(index + 1);
+    entry->Set(L"OrderInList", order);
+    entry->Set(L"OrderInTree", order);
+  }
 }
 
 std::optional<std::wstring> Catalog::WebUrl(std::wstring_view connect) {
