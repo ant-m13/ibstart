@@ -56,6 +56,16 @@ void AttachButtonIcon(HWND button, HINSTANCE instance, int resource, std::vector
   if (!SendMessageW(button, BCM_SETIMAGELIST, 0, reinterpret_cast<LPARAM>(&layout))) { ImageList_Destroy(images); return; }
   storage.push_back(images);
 }
+void AddButtonTooltip(HWND tooltip, HWND button, const wchar_t* text) {
+  if (!tooltip || !button || !text) return;
+  TOOLINFOW info{};
+  info.cbSize = sizeof(info);
+  info.uFlags = TTF_IDISHWND | TTF_SUBCLASS;
+  info.hwnd = GetParent(button);
+  info.uId = reinterpret_cast<UINT_PTR>(button);
+  info.lpszText = const_cast<wchar_t*>(text);
+  SendMessageW(tooltip, TTM_ADDTOOLW, 0, reinterpret_cast<LPARAM>(&info));
+}
 int ButtonIdealWidth(HWND button, int fallback) {
   SIZE size{};
   if (!button || !SendMessageW(button, BCM_GETIDEALSIZE, 0, reinterpret_cast<LPARAM>(&size)) || size.cx <= 0) return fallback;
@@ -158,11 +168,18 @@ int MainWindow::Show(int show_command) {
       windowX, windowY, windowWidth, windowHeight, nullptr, nullptr, instance_, this);
   if (!window_) return 1;
   ShowWindow(window_, show_command); UpdateWindow(window_);
-  ACCEL accelerators[] = {{FVIRTKEY, VK_F3, kEnterprise}, {FVIRTKEY, VK_F4, kDesigner}, {static_cast<BYTE>(FVIRTKEY | FCONTROL), 'F', kFocusSearch},
+  constexpr BYTE control = FVIRTKEY | FCONTROL;
+  constexpr BYTE controlAlt = FVIRTKEY | FCONTROL | FALT;
+  constexpr BYTE controlShift = FVIRTKEY | FCONTROL | FSHIFT;
+  constexpr BYTE altShift = FVIRTKEY | FALT | FSHIFT;
+  ACCEL accelerators[] = {{FVIRTKEY, VK_F1, kAbout}, {FVIRTKEY, VK_F2, kEdit}, {FVIRTKEY, VK_F3, kEnterprise}, {FVIRTKEY, VK_F4, kDesigner}, {FVIRTKEY, VK_F5, kRefresh},
+      {control, 'F', kFocusSearch}, {control, 'O', kOpenList}, {controlAlt, 'F', kAddFile}, {controlAlt, 'S', kAddServer}, {controlAlt, 'G', kAddGroup},
+      {controlAlt, 'I', kToggleFavorite}, {controlAlt, 'M', kSimpleMode}, {controlShift, VK_DELETE, kCache}, {controlShift, 'S', kShortcut},
+      {controlShift, VK_UP, kMoveUp}, {controlShift, VK_DOWN, kMoveDown}, {altShift, VK_DELETE, kDelete},
       {static_cast<BYTE>(FVIRTKEY | FALT), '1', kFavorite1}, {static_cast<BYTE>(FVIRTKEY | FALT), '2', kFavorite1 + 1}, {static_cast<BYTE>(FVIRTKEY | FALT), '3', kFavorite1 + 2},
       {static_cast<BYTE>(FVIRTKEY | FALT), '4', kFavorite1 + 3}, {static_cast<BYTE>(FVIRTKEY | FALT), '5', kFavorite1 + 4}, {static_cast<BYTE>(FVIRTKEY | FALT), '6', kFavorite1 + 5},
       {static_cast<BYTE>(FVIRTKEY | FALT), '7', kFavorite1 + 6}, {static_cast<BYTE>(FVIRTKEY | FALT), '8', kFavorite1 + 7}, {static_cast<BYTE>(FVIRTKEY | FALT), '9', kFavorite1 + 8}};
-  HACCEL accelerator = CreateAcceleratorTableW(accelerators, 12);
+  HACCEL accelerator = CreateAcceleratorTableW(accelerators, static_cast<int>(sizeof(accelerators) / sizeof(*accelerators)));
   MSG message{};
   int getMessageResult = 1;
   while ((getMessageResult = GetMessageW(&message, nullptr, 0, 0)) > 0) { if (!accelerator || !TranslateAcceleratorW(window_, accelerator, &message)) { TranslateMessage(&message); DispatchMessageW(&message); } }
@@ -335,6 +352,18 @@ void MainWindow::CreateControls() {
       SendMessageW(button, WM_SETFONT, reinterpret_cast<WPARAM>(button_font_), TRUE);
     }
   }
+  const HWND tooltips = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
+      CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, window_, nullptr, instance_, nullptr);
+  if (tooltips) {
+    SetWindowPos(tooltips, HWND_TOPMOST, 0, 0, 0, 0, SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+    if (controls_font_) SendMessageW(tooltips, WM_SETFONT, reinterpret_cast<WPARAM>(controls_font_), TRUE);
+    AddButtonTooltip(tooltips, enterprise_, L"Запустить в режиме Предприятие — F3");
+    AddButtonTooltip(tooltips, designer_, L"Запустить в режиме Конфигуратор — F4");
+    AddButtonTooltip(tooltips, edit_, L"Изменить выбранную запись — F2");
+    AddButtonTooltip(tooltips, cache_, L"Очистить кэш выбранной базы — Ctrl+Shift+Del");
+    AddButtonTooltip(tooltips, shortcut_, L"Создать ярлык выбранной базы — Ctrl+Shift+S");
+    AddButtonTooltip(tooltips, remove_, L"Удалить выбранную запись — Alt+Shift+Del");
+  }
   AttachButtonIcon(enterprise_, instance_, IDI_ACTION_ENTERPRISE, button_images_);
   AttachButtonIcon(designer_, instance_, IDI_ACTION_DESIGNER, button_images_);
   AttachButtonIcon(edit_, instance_, IDI_ACTION_EDIT, button_images_);
@@ -343,9 +372,9 @@ void MainWindow::CreateControls() {
   AttachButtonIcon(remove_, instance_, IDI_ACTION_DELETE, button_images_);
   status_ = CreateWindowW(STATUSCLASSNAMEW, L"", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window_, nullptr, instance_, nullptr);
   HMENU menu = CreateMenu(), file = CreatePopupMenu(), view = CreatePopupMenu(), help = CreatePopupMenu();
-  AppendMenuW(file, MF_STRING, kOpenList, L"Открыть список баз…"); AppendMenuW(file, MF_STRING, kAddFile, L"Добавить файловую базу…"); AppendMenuW(file, MF_STRING, kAddServer, L"Добавить серверную базу…"); AppendMenuW(file, MF_STRING, kAddGroup, L"Добавить группу…"); AppendMenuW(file, MF_STRING, kRefresh, L"Обновить список");
-  AppendMenuW(view, MF_STRING, kToggleFavorite, L"Добавить/убрать из избранного\tAlt+1…Alt+9");
-  AppendMenuW(view, MF_STRING, kSimpleMode, L"Простой режим"); AppendMenuW(help, MF_STRING, kAbout, L"О программе…"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(file), L"Файл"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(view), L"Вид"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(help), L"Справка"); SetMenu(window_, menu);
+  AppendMenuW(file, MF_STRING, kOpenList, L"Открыть список баз…\tCtrl+O"); AppendMenuW(file, MF_STRING, kAddFile, L"Добавить файловую базу…\tCtrl+Alt+F"); AppendMenuW(file, MF_STRING, kAddServer, L"Добавить серверную базу…\tCtrl+Alt+S"); AppendMenuW(file, MF_STRING, kAddGroup, L"Добавить группу…\tCtrl+Alt+G"); AppendMenuW(file, MF_STRING, kRefresh, L"Обновить список\tF5");
+  AppendMenuW(view, MF_STRING, kToggleFavorite, L"Добавить/убрать из избранного\tCtrl+Alt+I");
+  AppendMenuW(view, MF_STRING, kSimpleMode, L"Простой режим\tCtrl+Alt+M"); AppendMenuW(help, MF_STRING, kAbout, L"О программе…\tF1"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(file), L"Файл"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(view), L"Вид"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(help), L"Справка"); SetMenu(window_, menu);
   SetSimpleMode(settings_.simple_mode);
   DisplaySelected();
 }
@@ -526,14 +555,18 @@ bool MainWindow::MeasureContextMenuItem(MEASUREITEMSTRUCT* measure) const {
 
   HDC context = GetDC(window_);
   if (!context) return false;
-  const HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+  const HFONT font = controls_font_ ? controls_font_ : static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
   const auto previous = SelectObject(context, font);
-  SIZE size{};
-  GetTextExtentPoint32W(context, item->text.c_str(), static_cast<int>(item->text.size()), &size);
+  SIZE titleSize{};
+  SIZE shortcutSize{};
+  GetTextExtentPoint32W(context, item->text.c_str(), static_cast<int>(item->text.size()), &titleSize);
+  if (!item->shortcut.empty()) {
+    GetTextExtentPoint32W(context, item->shortcut.c_str(), static_cast<int>(item->shortcut.size()), &shortcutSize);
+  }
   SelectObject(context, previous);
   ReleaseDC(window_, context);
   measure->itemHeight = 28;
-  measure->itemWidth = std::max<UINT>(138, static_cast<UINT>(size.cx + 44));
+  measure->itemWidth = std::max<UINT>(210u, static_cast<UINT>(titleSize.cx) + static_cast<UINT>(shortcutSize.cx) + 66u);
   return true;
 }
 
@@ -571,13 +604,25 @@ bool MainWindow::DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const {
     if (disabled) DrawStateW(draw->hDC, nullptr, nullptr, reinterpret_cast<LPARAM>(item->icon), 0, iconX, iconY, 20, 20, DST_ICON | DSS_DISABLED);
     else DrawIconEx(draw->hDC, iconX, iconY, item->icon, 20, 20, 0, nullptr, DI_NORMAL);
   }
-  const HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+  const HFONT font = controls_font_ ? controls_font_ : static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
   SelectObject(draw->hDC, font);
   SetBkMode(draw->hDC, TRANSPARENT);
-  SetTextColor(draw->hDC, GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : (disabled ? COLOR_GRAYTEXT : COLOR_MENUTEXT)));
   RECT textRect = draw->rcItem;
   textRect.left += 35;
-  DrawTextW(draw->hDC, item->text.c_str(), static_cast<int>(item->text.size()), &textRect, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+  textRect.right -= 10;
+  if (!item->shortcut.empty()) {
+    SIZE shortcutSize{};
+    GetTextExtentPoint32W(draw->hDC, item->shortcut.c_str(), static_cast<int>(item->shortcut.size()), &shortcutSize);
+    RECT shortcutRect = draw->rcItem;
+    shortcutRect.right -= 10;
+    shortcutRect.left = std::max(textRect.left + 64, shortcutRect.right - shortcutSize.cx);
+    textRect.right = shortcutRect.left - 12;
+    const COLORREF shortcutColor = disabled ? GetSysColor(COLOR_GRAYTEXT) : selected ? RGB(218, 242, 255) : RGB(91, 109, 121);
+    SetTextColor(draw->hDC, shortcutColor);
+    DrawTextW(draw->hDC, item->shortcut.c_str(), static_cast<int>(item->shortcut.size()), &shortcutRect, DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_NOPREFIX);
+  }
+  SetTextColor(draw->hDC, GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : (disabled ? COLOR_GRAYTEXT : COLOR_MENUTEXT)));
+  DrawTextW(draw->hDC, item->text.c_str(), static_cast<int>(item->text.size()), &textRect, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
   if (draw->itemState & ODS_FOCUS) DrawFocusRect(draw->hDC, &draw->rcItem);
   RestoreDC(draw->hDC, saved);
   return true;
@@ -639,8 +684,8 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   HMENU menu = CreatePopupMenu();
   if (!menu) return;
   context_menu_items_.reserve(16);
-  const auto append = [&](bool enabled, bool checked, UINT command, int iconResource, std::wstring text) {
-    ContextMenuItem visual{command, iconResource == 0 ? nullptr : LoadResourceIcon(instance_, iconResource, 20), std::move(text)};
+  const auto append = [&](bool enabled, bool checked, UINT command, int iconResource, std::wstring text, std::wstring shortcut = {}) {
+    ContextMenuItem visual{command, iconResource == 0 ? nullptr : LoadResourceIcon(instance_, iconResource, 20), std::move(text), std::move(shortcut)};
     context_menu_items_.push_back(std::move(visual));
     MENUITEMINFOW item{};
     item.cbSize = sizeof(item);
@@ -652,23 +697,23 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
     InsertMenuItemW(menu, static_cast<UINT>(GetMenuItemCount(menu)), TRUE, &item);
   };
   const auto separator = [&] { AppendMenuW(menu, MF_SEPARATOR, 0, nullptr); };
-  append(database, false, kEnterprise, IDI_ACTION_ENTERPRISE, L"Предприятие\tF3");
-  append(database, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор\tF4");
+  append(database, false, kEnterprise, IDI_ACTION_ENTERPRISE, L"Предприятие", L"F3");
+  append(database, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор", L"F4");
   separator();
-  append(database, favorite, kToggleFavorite, IDI_ACTION_FAVORITE, favorite ? L"Убрать из избранного" : L"Добавить в избранное");
-  append(editable, false, kEdit, IDI_ACTION_EDIT, L"Изменить…");
-  append(database && !settings_.simple_mode, false, kCache, IDI_ACTION_CACHE, L"Очистить кэш…");
-  append(database && !settings_.simple_mode, false, kShortcut, IDI_ACTION_SHORTCUT, L"Создать ярлык");
+  append(database, favorite, kToggleFavorite, IDI_ACTION_FAVORITE, favorite ? L"Убрать из избранного" : L"Добавить в избранное", L"Ctrl+Alt+I");
+  append(editable, false, kEdit, IDI_ACTION_EDIT, L"Изменить…", L"F2");
+  append(database && !settings_.simple_mode, false, kCache, IDI_ACTION_CACHE, L"Очистить кэш…", L"Ctrl+Shift+Del");
+  append(database && !settings_.simple_mode, false, kShortcut, IDI_ACTION_SHORTCUT, L"Создать ярлык", L"Ctrl+Shift+S");
   separator();
-  append(editable, false, kMoveUp, 0, L"Переместить вверх");
-  append(editable, false, kMoveDown, 0, L"Переместить вниз");
-  append(editable, false, kDelete, IDI_ACTION_DELETE, L"Удалить…");
+  append(editable, false, kMoveUp, 0, L"Переместить вверх", L"Ctrl+Shift+Up");
+  append(editable, false, kMoveDown, 0, L"Переместить вниз", L"Ctrl+Shift+Down");
+  append(editable, false, kDelete, IDI_ACTION_DELETE, L"Удалить…", L"Alt+Shift+Del");
   separator();
-  append(!settings_.simple_mode, false, kAddFile, IDI_ACTION_ADD, group ? L"Добавить файловую базу в группу…" : L"Добавить файловую базу…");
-  append(!settings_.simple_mode, false, kAddServer, IDI_ACTION_ADD, group ? L"Добавить серверную базу в группу…" : L"Добавить серверную базу…");
-  append(!settings_.simple_mode, false, kAddGroup, IDI_TREE_FOLDER, group ? L"Добавить вложенную группу…" : L"Добавить группу…");
+  append(!settings_.simple_mode, false, kAddFile, IDI_ACTION_ADD, group ? L"Добавить файловую базу в группу…" : L"Добавить файловую базу…", L"Ctrl+Alt+F");
+  append(!settings_.simple_mode, false, kAddServer, IDI_ACTION_ADD, group ? L"Добавить серверную базу в группу…" : L"Добавить серверную базу…", L"Ctrl+Alt+S");
+  append(!settings_.simple_mode, false, kAddGroup, IDI_TREE_FOLDER, group ? L"Добавить вложенную группу…" : L"Добавить группу…", L"Ctrl+Alt+G");
   separator();
-  append(true, false, kRefresh, IDI_ACTION_REFRESH, L"Обновить список");
+  append(true, false, kRefresh, IDI_ACTION_REFRESH, L"Обновить список", L"F5");
 
   SetForegroundWindow(window_);
   const UINT command = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, window_, nullptr);

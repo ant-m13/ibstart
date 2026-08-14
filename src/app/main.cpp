@@ -37,7 +37,7 @@ std::wstring ErrorText(const std::exception& error) noexcept {
 
 int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
   SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2);
-  INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES | ICC_TREEVIEW_CLASSES | ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES};
+  INITCOMMONCONTROLSEX controls{sizeof(controls), ICC_STANDARD_CLASSES | ICC_WIN95_CLASSES | ICC_TREEVIEW_CLASSES | ICC_LISTVIEW_CLASSES | ICC_BAR_CLASSES};
   if (!InitCommonControlsEx(&controls)) {
     MessageBoxW(nullptr, L"Не удалось инициализировать системные элементы управления.", L"ИБ Старт", MB_OK | MB_ICONERROR);
     return 1;

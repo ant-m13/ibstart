@@ -29,6 +29,7 @@ class MainWindow {
     UINT command{};
     HICON icon{};
     std::wstring text;
+    std::wstring shortcut;
   };
 
   static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
