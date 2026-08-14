@@ -228,6 +228,15 @@ bool Catalog::AddServerDatabase(std::wstring name, std::wstring connect, std::ws
   return true;
 }
 
+bool Catalog::RenameDatabase(std::wstring_view name, std::wstring new_name) {
+  auto* entry = Find(name);
+  if (entry == nullptr || !entry->IsDatabase() || new_name.empty()) return false;
+  const auto* existing = Find(new_name);
+  if (existing != nullptr && existing != entry) return false;
+  entry->name = std::move(new_name);
+  return true;
+}
+
 bool Catalog::RenameGroup(std::wstring_view name, std::wstring new_name) {
   auto* entry = Find(name);
   if (entry == nullptr || entry->IsDatabase() || new_name.empty()) return false;
