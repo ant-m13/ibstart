@@ -58,7 +58,7 @@ void AttachButtonIcon(HWND button, HINSTANCE instance, int resource, std::vector
 int ButtonIdealWidth(HWND button, int fallback) {
   SIZE size{};
   if (!button || !SendMessageW(button, BCM_GETIDEALSIZE, 0, reinterpret_cast<LPARAM>(&size)) || size.cx <= 0) return fallback;
-  return std::max(fallback, size.cx + 8);
+  return std::max(fallback, static_cast<int>(size.cx) + 8);
 }
 std::wstring FriendlyFieldName(std::wstring_view key) {
   struct Label { std::wstring_view key; std::wstring_view text; };
