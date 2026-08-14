@@ -34,6 +34,7 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 string(REPLACE "/O2" "/O1" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
 
 set(IBSTART_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+set(IBSTART_RESOURCE_DIR "${CMAKE_CURRENT_SOURCE_DIR}/src/app")
 file(MAKE_DIRECTORY "${IBSTART_GENERATED_DIR}/core/domain")
 configure_file(src/core/domain/version.hpp.in "${IBSTART_GENERATED_DIR}/core/domain/version.hpp" @ONLY)
 configure_file(src/app/IBStart.rc.in "${IBSTART_GENERATED_DIR}/IBStart.rc" @ONLY)
@@ -64,6 +65,21 @@ add_executable(IBStart WIN32
   "${IBSTART_GENERATED_DIR}/IBStart.rc"
   "${IBSTART_GENERATED_DIR}/app.manifest"
 )
+set(IBSTART_ICON_FILES
+  "${IBSTART_RESOURCE_DIR}/IBStart.ico"
+  "${IBSTART_RESOURCE_DIR}/icons/enterprise.ico"
+  "${IBSTART_RESOURCE_DIR}/icons/designer.ico"
+  "${IBSTART_RESOURCE_DIR}/icons/edit.ico"
+  "${IBSTART_RESOURCE_DIR}/icons/cache.ico"
+  "${IBSTART_RESOURCE_DIR}/icons/shortcut.ico"
+  "${IBSTART_RESOURCE_DIR}/icons/delete.ico"
+  "${IBSTART_RESOURCE_DIR}/icons/add.ico"
+  "${IBSTART_RESOURCE_DIR}/icons/folder.ico"
+  "${IBSTART_RESOURCE_DIR}/icons/database.ico"
+  "${IBSTART_RESOURCE_DIR}/icons/favorite.ico"
+  "${IBSTART_RESOURCE_DIR}/icons/refresh.ico"
+)
+set_property(SOURCE "${IBSTART_GENERATED_DIR}/IBStart.rc" PROPERTY OBJECT_DEPENDS "${IBSTART_ICON_FILES}")
 target_link_libraries(IBStart PRIVATE ibstart_core Comctl32)
 target_compile_definitions(IBStart PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
 target_compile_options(IBStart PRIVATE /W4 /permissive- /EHsc /Zc:__cplusplus /utf-8)

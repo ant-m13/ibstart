@@ -154,6 +154,14 @@ void TestStandardFolderPaths() {
   CHECK(catalog.AddServerDatabase(L"Added database", L"Srvr=\"server\";Ref=\"added\"", L"Added"));
   const auto* addedDatabase = catalog.Find(L"Added database");
   CHECK(addedDatabase && addedDatabase->ValueOr(L"Folder") == L"/Renamed/Added");
+  CHECK(catalog.ParentOf(L"Added database") == L"Added");
+  CHECK(catalog.AddServerDatabase(L"Second database", L"Srvr=\"server\";Ref=\"second\"", L"Added"));
+  CHECK(catalog.MoveBy(L"Second database", -1));
+  const auto* secondDatabase = catalog.Find(L"Second database");
+  addedDatabase = catalog.Find(L"Added database");
+  CHECK(secondDatabase && secondDatabase->ValueOr(L"OrderInList") == L"1");
+  CHECK(addedDatabase && addedDatabase->ValueOr(L"OrderInList") == L"2");
+  CHECK(!catalog.MoveBy(L"Second database", -1));
 }
 
 void TestSecretMasking() {

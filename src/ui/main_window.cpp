@@ -1,5 +1,6 @@
 #include "ui/main_window.hpp"
 
+#include "app/resource.h"
 #include "core/cache/cache_service.hpp"
 #include "core/domain/version.hpp"
 #include "core/domain/utf.hpp"
@@ -27,9 +28,48 @@ constexpr wchar_t kClassName[] = L"IBStart.MainWindow";
 constexpr wchar_t kInputBoxClass[] = L"IBStart.InputBox";
 constexpr UINT kActivateMessage = WM_APP + 23;
 constexpr ULONG_PTR kLaunchCopyData = 0x49425354;
-enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kAbout, kFavorite1 = 200 };
+enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kAbout, kMoveUp, kMoveDown, kFavorite1 = 200 };
+enum TreeImage : int { kDatabaseImage, kFolderImage, kFavoriteImage, kRecentImage };
 
 void Message(HWND owner, std::wstring_view text, std::wstring_view title = L"ИБ Старт", UINT type = MB_OK | MB_ICONINFORMATION) { MessageBoxW(owner, std::wstring(text).c_str(), std::wstring(title).c_str(), type); }
+HICON LoadResourceIcon(HINSTANCE instance, int resource, int size) {
+  return static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(resource), IMAGE_ICON, size, size, LR_DEFAULTCOLOR));
+}
+HFONT CreateUiFont(HWND window, int points, LONG weight) {
+  return CreateFontW(-MulDiv(points, static_cast<int>(GetDpiForWindow(window)), 72), 0, 0, 0, weight, FALSE, FALSE, FALSE,
+      DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+}
+void AttachButtonIcon(HWND button, HINSTANCE instance, int resource, std::vector<HIMAGELIST>& storage) {
+  HIMAGELIST images = ImageList_Create(18, 18, ILC_COLOR32, 1, 1);
+  HICON icon = LoadResourceIcon(instance, resource, 18);
+  if (!images || !icon || ImageList_AddIcon(images, icon) < 0) {
+    if (icon) DestroyIcon(icon);
+    if (images) ImageList_Destroy(images);
+    return;
+  }
+  DestroyIcon(icon);
+  BUTTON_IMAGELIST layout{}; layout.himl = images; layout.margin = {6, 0, 5, 0}; layout.uAlign = BUTTON_IMAGELIST_ALIGN_LEFT;
+  if (!SendMessageW(button, BCM_SETIMAGELIST, 0, reinterpret_cast<LPARAM>(&layout))) { ImageList_Destroy(images); return; }
+  storage.push_back(images);
+}
+std::wstring FriendlyFieldName(std::wstring_view key) {
+  struct Label { std::wstring_view key; std::wstring_view text; };
+  constexpr Label labels[] = {{L"Connect", L"Подключение"}, {L"ID", L"Идентификатор"}, {L"Folder", L"Группа"},
+      {L"OrderInList", L"Порядок"}, {L"Version", L"Версия платформы"}, {L"App", L"Приложение"},
+      {L"DefaultApp", L"Приложение по умолчанию"}, {L"WA", L"Аутентификация ОС"}, {L"External", L"Внешняя"},
+      {L"Locale", L"Локаль"}, {L"ClientConnectionSpeed", L"Скорость соединения"}, {L"AdditionalParameters", L"Доп. параметры"}};
+  for (const auto& label : labels) if (CompareStringOrdinal(key.data(), static_cast<int>(key.size()), label.key.data(), static_cast<int>(label.key.size()), TRUE) == CSTR_EQUAL) return std::wstring(label.text);
+  return std::wstring(key);
+}
+std::wstring ConnectionKind(std::wstring_view connect) {
+  if (catalog::Catalog::IsWebConnection(connect)) return L"Веб-база";
+  if (utf::FindNoCaseOrdinal(connect, L"File=") != std::wstring_view::npos) return L"Файловая информационная база";
+  if (utf::FindNoCaseOrdinal(connect, L"Srvr=") != std::wstring_view::npos) return L"Серверная информационная база";
+  return L"Информационная база";
+}
+std::wstring SingleLine(std::wstring value) {
+  std::replace(value.begin(), value.end(), L'\r', L' '); std::replace(value.begin(), value.end(), L'\n', L' '); std::replace(value.begin(), value.end(), L'\t', L' '); return value;
+}
 
 struct InputState { HWND edit{}; std::optional<std::wstring> result; bool done{false}; };
 LRESULT CALLBACK InputWindowProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
@@ -76,12 +116,20 @@ MainWindow::MainWindow(HINSTANCE instance, std::filesystem::path executable, sto
     storage::Settings settings, std::optional<std::wstring> launch_id)
     : instance_(instance), executable_(std::move(executable)), layout_(std::move(layout)), settings_(std::move(settings)),
       logger_(layout_.root / L"logs"), initial_launch_id_(std::move(launch_id)) {}
-MainWindow::~MainWindow() { if (window_ && IsWindow(window_)) DestroyWindow(window_); }
+MainWindow::~MainWindow() {
+  if (window_ && IsWindow(window_)) DestroyWindow(window_);
+  for (const auto images : button_images_) if (images) ImageList_Destroy(images);
+  if (tree_images_) ImageList_Destroy(tree_images_);
+  if (details_title_font_) DeleteObject(details_title_font_);
+  if (details_subtitle_font_) DeleteObject(details_subtitle_font_);
+  if (details_key_font_) DeleteObject(details_key_font_);
+}
 
 int MainWindow::Show(int show_command) {
-  WNDCLASSW klass{}; klass.hInstance = instance_; klass.lpszClassName = kClassName; klass.lpfnWndProc = WindowProc;
-  klass.hCursor = LoadCursor(nullptr, IDC_ARROW); klass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1); klass.hIcon = LoadIcon(nullptr, IDI_APPLICATION);
-  if (!RegisterClassW(&klass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return 1;
+  WNDCLASSEXW klass{sizeof(klass)}; klass.hInstance = instance_; klass.lpszClassName = kClassName; klass.lpfnWndProc = WindowProc;
+  klass.hCursor = LoadCursor(nullptr, IDC_ARROW); klass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+  klass.hIcon = LoadResourceIcon(instance_, IDI_IBSTART, GetSystemMetrics(SM_CXICON)); klass.hIconSm = LoadResourceIcon(instance_, IDI_IBSTART, GetSystemMetrics(SM_CXSMICON));
+  if (!RegisterClassExW(&klass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return 1;
   int windowX = settings_.window_x;
   int windowY = settings_.window_y;
   if (windowX != CW_USEDEFAULT && windowY != CW_USEDEFAULT) {
@@ -140,6 +188,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
         case kAddFile: AddFileDatabase(); break; case kAddServer: AddServerDatabase(); break; case kAddGroup: AddGroup(); break; case kOpenList: OpenList(); break; case kRefresh: LoadCatalog(); break;
         case kEdit: EditSelected(); break; case kCache: ClearSelectedCache(); break; case kShortcut: CreateShortcut(); break; case kDelete: DeleteSelected(); break;
         case kSimpleMode: SetSimpleMode(!settings_.simple_mode); break; case kToggleFavorite: ToggleFavorite(); break; case kFocusSearch: SetFocus(search_); break; case kAbout: ShowAbout(); break;
+        case kMoveUp: MoveSelected(-1); break; case kMoveDown: MoveSelected(1); break;
         default: if (LOWORD(wparam) >= kFavorite1 && LOWORD(wparam) < kFavorite1 + 9) LaunchFavorite(LOWORD(wparam) - kFavorite1); break;
       } return 0;
     case WM_NOTIFY:
@@ -148,7 +197,26 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
         if (notification->code == NM_CUSTOMDRAW) return DrawTreeSearchMatches(reinterpret_cast<NMTVCUSTOMDRAW*>(lparam));
         if (notification->code == TVN_SELCHANGEDW) { DisplaySelected(); return 0; }
         if (notification->code == TVN_BEGINDRAGW) { const auto* drag = reinterpret_cast<NMTREEVIEWW*>(lparam); TreeView_SelectItem(tree_, drag->itemNew.hItem); dragging_name_ = SelectedName(); SetCapture(window_); return 0; }
-      } break;
+      }
+      if (lparam && reinterpret_cast<NMHDR*>(lparam)->hwndFrom == details_ && reinterpret_cast<NMHDR*>(lparam)->code == NM_CUSTOMDRAW) {
+        return DrawDetailsList(reinterpret_cast<NMLVCUSTOMDRAW*>(lparam));
+      }
+      break;
+    case WM_CONTEXTMENU:
+      if (reinterpret_cast<HWND>(wparam) == tree_) {
+        POINT screen{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+        ShowTreeContextMenu(screen);
+        return 0;
+      }
+      break;
+    case WM_CTLCOLORSTATIC:
+      if (reinterpret_cast<HWND>(lparam) == details_title_ || reinterpret_cast<HWND>(lparam) == details_subtitle_) {
+        const auto context = reinterpret_cast<HDC>(wparam);
+        SetBkMode(context, TRANSPARENT);
+        SetTextColor(context, reinterpret_cast<HWND>(lparam) == details_title_ ? RGB(0, 116, 136) : RGB(82, 96, 109));
+        return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
+      }
+      break;
     case WM_LBUTTONUP:
       if (!dragging_name_.empty() && catalog_) {
         ReleaseCapture(); TVHITTESTINFO hit{}; hit.pt = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)}; MapWindowPoints(window_, tree_, &hit.pt, 1); TreeView_HitTest(tree_, &hit);
@@ -186,27 +254,70 @@ void MainWindow::CreateControls() {
   search_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 58, 7, 600, 25, window_, nullptr, instance_, nullptr);
   tree_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS, 8, 42, 360, 420, window_, nullptr, instance_, nullptr);
   TreeView_SetExtendedStyle(tree_, TVS_EX_DOUBLEBUFFER, TVS_EX_DOUBLEBUFFER);
-  details_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL, 380, 42, 480, 240, window_, nullptr, instance_, nullptr);
+  details_title_ = CreateWindowW(L"STATIC", L"Выберите базу или группу", WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX,
+      390, 49, 460, 26, window_, nullptr, instance_, nullptr);
+  details_subtitle_ = CreateWindowW(L"STATIC", L"Сведения появятся здесь", WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX,
+      390, 76, 460, 20, window_, nullptr, instance_, nullptr);
+  details_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP |
+      LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL, 380, 100, 480, 182, window_, nullptr, instance_, nullptr);
+  ListView_SetExtendedListViewStyle(details_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP);
+  ListView_SetBkColor(details_, RGB(248, 250, 252));
+  ListView_SetTextBkColor(details_, RGB(248, 250, 252));
+  ListView_SetTextColor(details_, RGB(36, 50, 60));
+  LVCOLUMNW keyColumn{}; keyColumn.mask = LVCF_WIDTH; keyColumn.cx = 150; ListView_InsertColumn(details_, 0, &keyColumn);
+  LVCOLUMNW valueColumn{}; valueColumn.mask = LVCF_WIDTH; valueColumn.cx = 325; ListView_InsertColumn(details_, 1, &valueColumn);
+  details_title_font_ = CreateUiFont(window_, 14, FW_SEMIBOLD);
+  details_subtitle_font_ = CreateUiFont(window_, 9, FW_NORMAL);
+  details_key_font_ = CreateUiFont(window_, 9, FW_SEMIBOLD);
+  if (details_title_font_) SendMessageW(details_title_, WM_SETFONT, reinterpret_cast<WPARAM>(details_title_font_), TRUE);
+  if (details_subtitle_font_) SendMessageW(details_subtitle_, WM_SETFONT, reinterpret_cast<WPARAM>(details_subtitle_font_), TRUE);
+
+  tree_images_ = ImageList_Create(18, 18, ILC_COLOR32, 4, 1);
+  if (tree_images_) {
+    constexpr int resources[] = {IDI_TREE_DATABASE, IDI_TREE_FOLDER, IDI_ACTION_FAVORITE, IDI_ACTION_REFRESH};
+    bool complete = true;
+    for (const int resource : resources) {
+      const auto icon = LoadResourceIcon(instance_, resource, 18);
+      if (!icon || ImageList_AddIcon(tree_images_, icon) < 0) complete = false;
+      if (icon) DestroyIcon(icon);
+    }
+    if (complete) TreeView_SetImageList(tree_, tree_images_, TVSIL_NORMAL);
+    else { ImageList_Destroy(tree_images_); tree_images_ = nullptr; }
+  }
   enterprise_ = CreateWindowW(L"BUTTON", L"Предприятие (F3)", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 380, 292, 145, 28, window_, reinterpret_cast<HMENU>(kEnterprise), instance_, nullptr);
   designer_ = CreateWindowW(L"BUTTON", L"Конфигуратор (F4)", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 534, 292, 145, 28, window_, reinterpret_cast<HMENU>(kDesigner), instance_, nullptr);
   edit_ = CreateWindowW(L"BUTTON", L"Изменить", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 688, 292, 85, 28, window_, reinterpret_cast<HMENU>(kEdit), instance_, nullptr);
   cache_ = CreateWindowW(L"BUTTON", L"Очистить кэш", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 380, 328, 105, 28, window_, reinterpret_cast<HMENU>(kCache), instance_, nullptr);
   shortcut_ = CreateWindowW(L"BUTTON", L"Создать ярлык", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 494, 328, 110, 28, window_, reinterpret_cast<HMENU>(kShortcut), instance_, nullptr);
   remove_ = CreateWindowW(L"BUTTON", L"Удалить", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 613, 328, 85, 28, window_, reinterpret_cast<HMENU>(kDelete), instance_, nullptr);
+  AttachButtonIcon(enterprise_, instance_, IDI_ACTION_ENTERPRISE, button_images_);
+  AttachButtonIcon(designer_, instance_, IDI_ACTION_DESIGNER, button_images_);
+  AttachButtonIcon(edit_, instance_, IDI_ACTION_EDIT, button_images_);
+  AttachButtonIcon(cache_, instance_, IDI_ACTION_CACHE, button_images_);
+  AttachButtonIcon(shortcut_, instance_, IDI_ACTION_SHORTCUT, button_images_);
+  AttachButtonIcon(remove_, instance_, IDI_ACTION_DELETE, button_images_);
   status_ = CreateWindowW(STATUSCLASSNAMEW, L"", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window_, nullptr, instance_, nullptr);
   HMENU menu = CreateMenu(), file = CreatePopupMenu(), view = CreatePopupMenu(), help = CreatePopupMenu();
   AppendMenuW(file, MF_STRING, kOpenList, L"Открыть список баз…"); AppendMenuW(file, MF_STRING, kAddFile, L"Добавить файловую базу…"); AppendMenuW(file, MF_STRING, kAddServer, L"Добавить серверную базу…"); AppendMenuW(file, MF_STRING, kAddGroup, L"Добавить группу…"); AppendMenuW(file, MF_STRING, kRefresh, L"Обновить список");
   AppendMenuW(view, MF_STRING, kToggleFavorite, L"Добавить/убрать из избранного\tAlt+1…Alt+9");
   AppendMenuW(view, MF_STRING, kSimpleMode, L"Простой режим"); AppendMenuW(help, MF_STRING, kAbout, L"О программе…"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(file), L"Файл"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(view), L"Вид"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(help), L"Справка"); SetMenu(window_, menu);
   SetSimpleMode(settings_.simple_mode);
+  DisplaySelected();
 }
 
 void MainWindow::Layout(int width, int height) {
   const int statusHeight = 22, top = 42, bottom = statusHeight + 10, leftWidth = std::max(260, width * 42 / 100), rightX = leftWidth + 18, rightWidth = std::max(250, width - rightX - 10);
   MoveWindow(search_, 58, 7, std::max(100, width - 66), 25, TRUE); MoveWindow(tree_, 8, top, leftWidth, std::max(100, height - top - bottom), TRUE);
-  MoveWindow(details_, rightX, top, rightWidth, std::max(100, height - top - 165), TRUE); const int y = height - bottom - 82;
-  MoveWindow(enterprise_, rightX, y, 145, 28, TRUE); MoveWindow(designer_, rightX + 154, y, 145, 28, TRUE); MoveWindow(edit_, rightX + 308, y, 85, 28, TRUE);
-  MoveWindow(cache_, rightX, y + 36, 105, 28, TRUE); MoveWindow(shortcut_, rightX + 114, y + 36, 110, 28, TRUE); MoveWindow(remove_, rightX + 233, y + 36, 85, 28, TRUE);
+  const int cardHeight = std::max(100, height - top - 165);
+  MoveWindow(details_title_, rightX + 10, top + 7, std::max(80, rightWidth - 20), 26, TRUE);
+  MoveWindow(details_subtitle_, rightX + 10, top + 34, std::max(80, rightWidth - 20), 20, TRUE);
+  MoveWindow(details_, rightX, top + 58, rightWidth, std::max(42, cardHeight - 58), TRUE);
+  const int keyWidth = std::clamp(rightWidth * 35 / 100, 120, 190);
+  ListView_SetColumnWidth(details_, 0, keyWidth);
+  ListView_SetColumnWidth(details_, 1, std::max(80, rightWidth - keyWidth - 5));
+  const int y = height - bottom - 82;
+  MoveWindow(enterprise_, rightX, y, 150, 28, TRUE); MoveWindow(designer_, rightX + 159, y, 150, 28, TRUE); MoveWindow(edit_, rightX + 318, y, 105, 28, TRUE);
+  MoveWindow(cache_, rightX, y + 36, 115, 28, TRUE); MoveWindow(shortcut_, rightX + 124, y + 36, 130, 28, TRUE); MoveWindow(remove_, rightX + 263, y + 36, 100, 28, TRUE);
   SendMessageW(status_, WM_SIZE, 0, 0);
 }
 
@@ -251,29 +362,49 @@ void MainWindow::SaveCatalog() {
 
 bool MainWindow::ItemMatches(const catalog::TreeItem& item, std::wstring_view filter) const { if (filter.empty() || utf::FindNoCaseOrdinal(item.name, filter) != std::wstring_view::npos) return true; return std::any_of(item.children.begin(), item.children.end(), [&](const auto& child) { return ItemMatches(child, filter); }); }
 void MainWindow::AddTreeItems(const std::vector<catalog::TreeItem>& items, HTREEITEM parent, std::wstring_view filter) {
-  for (const auto& item : items) { if (!ItemMatches(item, filter)) continue; TVINSERTSTRUCTW row{}; row.hParent = parent; row.hInsertAfter = TVI_LAST; row.item.mask = TVIF_TEXT; row.item.pszText = const_cast<wchar_t*>(item.name.c_str()); const HTREEITEM handle = TreeView_InsertItem(tree_, &row); if (!item.database) { AddTreeItems(item.children, handle, filter); if (!filter.empty()) TreeView_Expand(tree_, handle, TVE_EXPAND); } }
+  for (const auto& item : items) {
+    if (!ItemMatches(item, filter)) continue;
+    TVINSERTSTRUCTW row{}; row.hParent = parent; row.hInsertAfter = TVI_LAST;
+    row.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE;
+    row.item.pszText = const_cast<wchar_t*>(item.name.c_str());
+    row.item.iImage = row.item.iSelectedImage = item.database ? kDatabaseImage : kFolderImage;
+    const HTREEITEM handle = TreeView_InsertItem(tree_, &row);
+    if (!item.database) {
+      AddTreeItems(item.children, handle, filter);
+      if (!filter.empty()) TreeView_Expand(tree_, handle, TVE_EXPAND);
+    }
+  }
 }
 void MainWindow::PopulateTree() {
   if (!tree_) return;
   wchar_t text[512]{}; GetWindowTextW(search_, text, 512); search_filter_ = text; const std::wstring_view filter = search_filter_; TreeView_DeleteAllItems(tree_);
   if (catalog_) {
     AddTreeItems(catalog_->Tree(), TVI_ROOT, filter);
-    const auto addSpecialRoot = [&](std::wstring_view rootName, const std::vector<std::wstring>& names) {
-      TVINSERTSTRUCTW root{}; root.hParent = TVI_ROOT; root.hInsertAfter = TVI_LAST; root.item.mask = TVIF_TEXT; root.item.pszText = const_cast<wchar_t*>(rootName.data());
+    const auto addSpecialRoot = [&](std::wstring_view rootName, const std::vector<std::wstring>& names, int image) {
+      TVINSERTSTRUCTW root{}; root.hParent = TVI_ROOT; root.hInsertAfter = TVI_LAST;
+      root.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE; root.item.pszText = const_cast<wchar_t*>(rootName.data());
+      root.item.iImage = root.item.iSelectedImage = image;
       const HTREEITEM rootHandle = TreeView_InsertItem(tree_, &root);
       bool any = false;
       for (const auto& name : names) {
         const auto* entry = catalog_->Find(name); if (!entry || !entry->IsDatabase() || (!filter.empty() && utf::FindNoCaseOrdinal(entry->name, filter) == std::wstring_view::npos)) continue;
-        TVINSERTSTRUCTW row{}; row.hParent = rootHandle; row.hInsertAfter = TVI_LAST; row.item.mask = TVIF_TEXT; row.item.pszText = const_cast<wchar_t*>(entry->name.c_str()); TreeView_InsertItem(tree_, &row); any = true;
+        TVINSERTSTRUCTW row{}; row.hParent = rootHandle; row.hInsertAfter = TVI_LAST;
+        row.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE; row.item.pszText = const_cast<wchar_t*>(entry->name.c_str());
+        row.item.iImage = row.item.iSelectedImage = kDatabaseImage; TreeView_InsertItem(tree_, &row); any = true;
       }
       if (any) TreeView_Expand(tree_, rootHandle, TVE_EXPAND); else TreeView_DeleteItem(tree_, rootHandle);
     };
-    addSpecialRoot(L"Избранное", storage::LoadFavorites(layout_));
+    addSpecialRoot(L"Избранное", storage::LoadFavorites(layout_), kFavoriteImage);
     std::vector<std::wstring> recent;
     for (const auto& history : storage::LoadHistory(layout_)) for (const auto* entry : catalog_->Databases()) if (entry->ValueOr(L"ID", entry->name) == history.database_id) { recent.push_back(entry->name); break; }
-    addSpecialRoot(L"Недавние", recent);
+    addSpecialRoot(L"Недавние", recent, kRecentImage);
   }
-  if (initial_launch_id_) { auto wanted = *initial_launch_id_; initial_launch_id_.reset(); if (catalog_) for (const auto* entry : catalog_->Databases()) if (entry->ValueOr(L"ID", entry->name) == wanted) { wanted = entry->name; break; } std::function<HTREEITEM(HTREEITEM)> find = [&](HTREEITEM item) { for (; item; item = TreeView_GetNextSibling(tree_, item)) { wchar_t name[512]{}; TVITEMW row{}; row.mask = TVIF_TEXT; row.hItem = item; row.pszText = name; row.cchTextMax = 512; TreeView_GetItem(tree_, &row); if (wanted == name) return item; if (const auto child = find(TreeView_GetChild(tree_, item))) return child; } return static_cast<HTREEITEM>(nullptr); }; if (const auto target = find(TreeView_GetRoot(tree_))) TreeView_SelectItem(tree_, target); }
+  if (initial_launch_id_) {
+    auto wanted = *initial_launch_id_; initial_launch_id_.reset();
+    if (catalog_) for (const auto* entry : catalog_->Databases()) if (entry->ValueOr(L"ID", entry->name) == wanted) { wanted = entry->name; break; }
+    SelectTreeItem(wanted);
+  }
+  DisplaySelected();
 }
 LRESULT MainWindow::DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const {
   if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
@@ -313,8 +444,137 @@ LRESULT MainWindow::DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const {
   RestoreDC(draw->nmcd.hdc, saved);
   return CDRF_DODEFAULT;
 }
+LRESULT MainWindow::DrawDetailsList(NMLVCUSTOMDRAW* draw) const {
+  if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
+  if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) return CDRF_NOTIFYSUBITEMDRAW;
+  if (draw->nmcd.dwDrawStage != (CDDS_ITEMPREPAINT | CDDS_SUBITEM)) return CDRF_DODEFAULT;
+  const auto row = static_cast<int>(draw->nmcd.dwItemSpec);
+  draw->clrTextBk = row % 2 == 0 ? RGB(242, 248, 249) : RGB(250, 252, 253);
+  if (draw->iSubItem == 0) {
+    draw->clrText = RGB(0, 111, 129);
+    if (details_key_font_) {
+      SelectObject(draw->nmcd.hdc, details_key_font_);
+      return CDRF_NEWFONT;
+    }
+  } else {
+    draw->clrText = RGB(36, 50, 60);
+  }
+  return CDRF_DODEFAULT;
+}
 std::wstring MainWindow::SelectedName() const { const auto item = TreeView_GetSelection(tree_); if (!item) return {}; wchar_t text[512]{}; TVITEMW data{}; data.mask = TVIF_TEXT; data.hItem = item; data.pszText = text; data.cchTextMax = 512; return TreeView_GetItem(tree_, &data) ? text : L""; }
-void MainWindow::DisplaySelected() { if (!catalog_) return; const auto name = SelectedName(); const auto* entry = catalog_->Find(name); if (!entry) { SetWindowTextW(details_, L""); EnableWindow(enterprise_, FALSE); EnableWindow(designer_, FALSE); EnableWindow(cache_, FALSE); EnableWindow(shortcut_, FALSE); return; } std::wstring text = L"Имя: " + entry->name + L"\r\n"; for (const auto& field : entry->fields) text += field.key + L" = " + field.value + L"\r\n"; SetWindowTextW(details_, text.c_str()); const bool database = entry->IsDatabase(); EnableWindow(enterprise_, database); EnableWindow(designer_, database); EnableWindow(cache_, database); EnableWindow(shortcut_, database); }
+bool MainWindow::SelectTreeItem(std::wstring_view name) {
+  if (!tree_ || name.empty()) return false;
+  const auto find = [&](auto&& self, HTREEITEM item) -> HTREEITEM {
+    for (; item; item = TreeView_GetNextSibling(tree_, item)) {
+      wchar_t text[512]{}; TVITEMW row{}; row.mask = TVIF_TEXT; row.hItem = item; row.pszText = text; row.cchTextMax = 512;
+      if (TreeView_GetItem(tree_, &row) && name == text) return item;
+      if (const auto child = self(self, TreeView_GetChild(tree_, item))) return child;
+    }
+    return nullptr;
+  };
+  const auto item = find(find, TreeView_GetRoot(tree_));
+  if (!item) return false;
+  TreeView_SelectItem(tree_, item);
+  TreeView_EnsureVisible(tree_, item);
+  return true;
+}
+
+void MainWindow::ShowTreeContextMenu(POINT screen) {
+  if (!tree_ || !catalog_) return;
+  if (screen.x == -1 && screen.y == -1) {
+    const auto selected = TreeView_GetSelection(tree_);
+    RECT bounds{};
+    if (selected && TreeView_GetItemRect(tree_, selected, &bounds, TRUE)) {
+      screen = {bounds.left, bounds.bottom};
+      MapWindowPoints(tree_, nullptr, &screen, 1);
+    } else {
+      screen = {8, 8};
+      MapWindowPoints(tree_, nullptr, &screen, 1);
+    }
+  } else {
+    POINT client = screen;
+    ScreenToClient(tree_, &client);
+    TVHITTESTINFO hit{}; hit.pt = client;
+    if (TreeView_HitTest(tree_, &hit) && (hit.flags & TVHT_ONITEM)) TreeView_SelectItem(tree_, hit.hItem);
+    else TreeView_SelectItem(tree_, nullptr);
+  }
+
+  const auto name = SelectedName();
+  const auto* entry = catalog_->Find(name);
+  const bool database = entry && entry->IsDatabase();
+  const bool group = entry && entry->IsGroup();
+  const bool editable = entry && !settings_.simple_mode;
+  const std::wstring addParent = group ? entry->name : entry ? catalog_->ParentOf(entry->name) : std::wstring();
+  const auto favorites = storage::LoadFavorites(layout_);
+  const bool favorite = std::find(favorites.begin(), favorites.end(), name) != favorites.end();
+
+  HMENU menu = CreatePopupMenu();
+  if (!menu) return;
+  const auto state = [](bool enabled) { return static_cast<UINT>(MF_STRING | (enabled ? MF_ENABLED : MF_GRAYED)); };
+  AppendMenuW(menu, state(database), kEnterprise, L"Предприятие\tF3");
+  AppendMenuW(menu, state(database), kDesigner, L"Конфигуратор\tF4");
+  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(menu, state(database) | (favorite ? MF_CHECKED : MF_UNCHECKED), kToggleFavorite,
+      favorite ? L"Убрать из избранного" : L"Добавить в избранное");
+  AppendMenuW(menu, state(editable), kEdit, L"Изменить…");
+  AppendMenuW(menu, state(database && !settings_.simple_mode), kCache, L"Очистить кэш…");
+  AppendMenuW(menu, state(database && !settings_.simple_mode), kShortcut, L"Создать ярлык");
+  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(menu, state(editable), kMoveUp, L"Переместить вверх");
+  AppendMenuW(menu, state(editable), kMoveDown, L"Переместить вниз");
+  AppendMenuW(menu, state(editable), kDelete, L"Удалить…");
+  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(menu, state(!settings_.simple_mode), kAddFile, group ? L"Добавить файловую базу в группу…" : L"Добавить файловую базу…");
+  AppendMenuW(menu, state(!settings_.simple_mode), kAddServer, group ? L"Добавить серверную базу в группу…" : L"Добавить серверную базу…");
+  AppendMenuW(menu, state(!settings_.simple_mode), kAddGroup, group ? L"Добавить вложенную группу…" : L"Добавить группу…");
+  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(menu, MF_STRING, kRefresh, L"Обновить список");
+
+  SetForegroundWindow(window_);
+  const UINT command = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, window_, nullptr);
+  DestroyMenu(menu);
+  if (!command) return;
+  if (command == kAddFile) AddFileDatabase(addParent);
+  else if (command == kAddServer) AddServerDatabase(addParent);
+  else if (command == kAddGroup) AddGroup(addParent);
+  else SendMessageW(window_, WM_COMMAND, MAKEWPARAM(command, 0), 0);
+}
+
+void MainWindow::DisplaySelected() {
+  if (!details_) return;
+  ListView_DeleteAllItems(details_);
+  const auto name = SelectedName();
+  const auto* entry = catalog_ ? catalog_->Find(name) : nullptr;
+  if (!entry) {
+    SetWindowTextW(details_title_, name.empty() ? L"Выберите базу или группу" : name.c_str());
+    SetWindowTextW(details_subtitle_, name.empty() ? L"Сведения появятся здесь" : L"Служебный раздел списка");
+    EnableWindow(enterprise_, FALSE); EnableWindow(designer_, FALSE); EnableWindow(edit_, FALSE);
+    EnableWindow(cache_, FALSE); EnableWindow(shortcut_, FALSE); EnableWindow(remove_, FALSE);
+    return;
+  }
+
+  const std::wstring type = entry->IsDatabase() ? ConnectionKind(entry->ValueOr(L"Connect")) : L"Группа списка баз";
+  SetWindowTextW(details_title_, entry->name.c_str());
+  const std::wstring subtitle = type + L"  •  Полей: " + std::to_wstring(entry->fields.size());
+  SetWindowTextW(details_subtitle_, subtitle.c_str());
+  const auto addRow = [&](std::wstring key, std::wstring value) {
+    if (value.empty()) value = L"—";
+    LVITEMW item{}; item.mask = LVIF_TEXT; item.iItem = ListView_GetItemCount(details_); item.pszText = key.data();
+    const int index = ListView_InsertItem(details_, &item);
+    if (index >= 0) ListView_SetItemText(details_, index, 1, value.data());
+  };
+  addRow(L"Тип", type);
+  for (const auto& field : entry->fields) {
+    auto value = SingleLine(field.value);
+    if (_wcsicmp(field.key.c_str(), L"Folder") == 0 && (value.empty() || value == L"/")) value = L"Корневой уровень";
+    addRow(FriendlyFieldName(field.key), std::move(value));
+  }
+  const bool database = entry->IsDatabase();
+  EnableWindow(enterprise_, database); EnableWindow(designer_, database);
+  EnableWindow(edit_, !settings_.simple_mode); EnableWindow(remove_, !settings_.simple_mode);
+  EnableWindow(cache_, database && !settings_.simple_mode); EnableWindow(shortcut_, database && !settings_.simple_mode);
+  InvalidateRect(details_, nullptr, TRUE);
+}
 
 void MainWindow::LaunchSelected(domain::LaunchMode mode) {
   if (!catalog_) return; const auto name = SelectedName(); const auto* entry = catalog_->Find(name); if (!entry || !entry->IsDatabase()) { Message(window_, L"Выберите информационную базу."); return; }
@@ -327,19 +587,63 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
 }
 
 std::wstring MainWindow::NextName(std::wstring_view stem) const { for (unsigned number = 1;; ++number) { const auto candidate = std::wstring(stem) + L" " + std::to_wstring(number); if (!catalog_ || !catalog_->Find(candidate)) return candidate; } }
-void MainWindow::AddFileDatabase() { if (settings_.simple_mode) return; BROWSEINFOW info{}; info.hwndOwner = window_; info.lpszTitle = L"Выберите каталог файловой базы (с 1Cv8.1CD)"; PIDLIST_ABSOLUTE id = SHBrowseForFolderW(&info); if (!id) return; wchar_t path[MAX_PATH]{}; const bool valid = SHGetPathFromIDListW(id, path); CoTaskMemFree(id); if (!valid) return; const std::filesystem::path directory(path); auto proposed = directory.filename().wstring(); if (const auto entered = InputBox(window_, L"Добавить базу", L"Имя базы:", proposed)) proposed = *entered; else return; if (!catalog_->AddFileDatabase(proposed, directory)) { Message(window_, L"Не удалось добавить базу. Каталог должен содержать 1Cv8.1CD, а имя — быть уникальным.", L"ИБ Старт", MB_OK | MB_ICONWARNING); return; } SaveCatalog(); PopulateTree(); }
-void MainWindow::AddServerDatabase() { if (settings_.simple_mode || !catalog_) return; const auto name = InputBox(window_, L"Серверная база", L"Имя базы:", NextName(L"Серверная база")); if (!name) return; const auto connect = InputBox(window_, L"Серверная база", L"Connect (например Srvr=\"server\";Ref=\"base\"):", L""); if (!connect) return; if (!catalog_->AddServerDatabase(*name, *connect)) Message(window_, L"Нужно уникальное имя и непустая строка Connect.", L"ИБ Старт", MB_OK | MB_ICONWARNING); else { SaveCatalog(); PopulateTree(); } }
-void MainWindow::AddGroup() { if (settings_.simple_mode || !catalog_) return; const auto name = InputBox(window_, L"Добавить группу", L"Название группы:", NextName(L"Новая группа")); if (!name) return; if (!catalog_->AddGroup(*name)) Message(window_, L"Группа с таким именем уже существует.", L"ИБ Старт", MB_OK | MB_ICONWARNING); else { SaveCatalog(); PopulateTree(); } }
+void MainWindow::AddFileDatabase(std::wstring parent) {
+  if (settings_.simple_mode || !catalog_) return;
+  BROWSEINFOW info{}; info.hwndOwner = window_; info.lpszTitle = L"Выберите каталог файловой базы (с 1Cv8.1CD)";
+  PIDLIST_ABSOLUTE id = SHBrowseForFolderW(&info);
+  if (!id) return;
+  wchar_t path[MAX_PATH]{}; const bool valid = SHGetPathFromIDListW(id, path); CoTaskMemFree(id);
+  if (!valid) return;
+  const std::filesystem::path directory(path);
+  auto proposed = directory.filename().wstring();
+  if (const auto entered = InputBox(window_, L"Добавить базу", L"Имя базы:", proposed)) proposed = *entered; else return;
+  if (!catalog_->AddFileDatabase(proposed, directory, parent)) {
+    Message(window_, L"Не удалось добавить базу. Каталог должен содержать 1Cv8.1CD, имя должно быть уникальным, а выбранная группа — существовать.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
+    return;
+  }
+  SaveCatalog(); PopulateTree(); SelectTreeItem(proposed);
+}
+void MainWindow::AddServerDatabase(std::wstring parent) {
+  if (settings_.simple_mode || !catalog_) return;
+  const auto name = InputBox(window_, L"Серверная база", L"Имя базы:", NextName(L"Серверная база"));
+  if (!name) return;
+  const auto connect = InputBox(window_, L"Серверная база", L"Connect (например Srvr=\"server\";Ref=\"base\"):", L"");
+  if (!connect) return;
+  if (!catalog_->AddServerDatabase(*name, *connect, parent)) {
+    Message(window_, L"Нужно уникальное имя, непустая строка Connect и существующая группа.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
+  } else {
+    SaveCatalog(); PopulateTree(); SelectTreeItem(*name);
+  }
+}
+void MainWindow::AddGroup(std::wstring parent) {
+  if (settings_.simple_mode || !catalog_) return;
+  const auto name = InputBox(window_, L"Добавить группу", L"Название группы:", NextName(L"Новая группа"));
+  if (!name) return;
+  if (!catalog_->AddGroup(*name, parent)) {
+    Message(window_, L"Имя группы уже используется или родительская группа недоступна.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
+  } else {
+    SaveCatalog(); PopulateTree(); SelectTreeItem(*name);
+  }
+}
 void MainWindow::EditSelected() { if (settings_.simple_mode || !catalog_) return; const auto selected = SelectedName(); auto* entry = catalog_->Find(selected); if (!entry) return; const auto value = entry->IsDatabase() ? entry->ValueOr(L"Connect") : entry->name; const auto changed = InputBox(window_, L"Изменить", entry->IsDatabase() ? L"Строка Connect:" : L"Название группы:", value); if (!changed || changed->empty()) return; if (entry->IsDatabase()) entry->Set(L"Connect", *changed); else if (!catalog_->RenameGroup(selected, *changed)) { Message(window_, L"Имя уже используется.", L"ИБ Старт", MB_OK | MB_ICONWARNING); return; } SaveCatalog(); PopulateTree(); }
 void MainWindow::DeleteSelected() { if (settings_.simple_mode || !catalog_) return; const auto name = SelectedName(); if (name.empty()) return; if (MessageBoxW(window_, (L"Удалить «" + name + L"» только из списка баз? Каталог файловой базы не удаляется.").c_str(), L"ИБ Старт", MB_YESNO | MB_ICONWARNING) != IDYES) return; catalog_->Remove(name); SaveCatalog(); PopulateTree(); }
+void MainWindow::MoveSelected(int offset) {
+  if (settings_.simple_mode || !catalog_) return;
+  const auto name = SelectedName();
+  if (!catalog_->MoveBy(name, offset)) {
+    SetStatus(offset < 0 ? L"Элемент уже находится первым в группе." : L"Элемент уже находится последним в группе.");
+    return;
+  }
+  SaveCatalog(); PopulateTree(); SelectTreeItem(name);
+}
 void MainWindow::ClearSelectedCache() { if (settings_.simple_mode || !catalog_) return; try { const auto database = catalog_->DatabaseFor(SelectedName()); const auto candidates = cache::CandidatesFor(database); if (candidates.empty()) { Message(window_, L"Безопасных каталогов кэша для этой базы не найдено."); return; } std::wstring list = L"Будут очищены только следующие каталоги кэша:\n"; for (const auto& item : candidates) list += item.path.wstring() + L"\n"; if (cache::HasActiveOneCProcess()) list += L"\nОбнаружен активный процесс 1С. Закройте его перед очисткой.\n"; if (MessageBoxW(window_, list.c_str(), L"Очистка кэша", MB_YESNO | MB_ICONWARNING) != IDYES) return; const auto result = cache::Clear(candidates); logger_.Info(L"Очистка кэша: файлов=" + std::to_wstring(result.files) + L", байт=" + std::to_wstring(result.bytes)); Message(window_, L"Очищено файлов: " + std::to_wstring(result.files) + L"\nОсвобождено байт: " + std::to_wstring(result.bytes)); } catch (...) { Message(window_, L"Выберите базу для очистки кэша.", L"ИБ Старт", MB_OK | MB_ICONWARNING); } }
 void MainWindow::CreateShortcut() { if (!catalog_) return; try { const auto database = catalog_->DatabaseFor(SelectedName()); shell::CreateDesktopShortcut(executable_, database.id, database.name); Message(window_, L"Ярлык создан на рабочем столе."); } catch (...) { Message(window_, L"Не удалось создать ярлык.", L"ИБ Старт", MB_OK | MB_ICONERROR); } }
 void MainWindow::OpenList() { if (settings_.simple_mode) return; wchar_t filename[MAX_PATH]{}; OPENFILENAMEW dialog{}; dialog.lStructSize = sizeof(dialog); dialog.hwndOwner = window_; dialog.lpstrFilter = L"ibases.v8i\0ibases.v8i\0Все файлы\0*.*\0"; dialog.lpstrFile = filename; dialog.nMaxFile = MAX_PATH; dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST; if (GetOpenFileNameW(&dialog)) { settings_.active_ibases = filename; storage::SaveSettings(layout_, settings_); LoadCatalog(); } }
 void MainWindow::SetStatus(std::wstring text) { if (status_) SendMessageW(status_, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(text.c_str())); }
 std::wstring MainWindow::CatalogStatistics() const { return L"Баз: " + std::to_wstring(catalog_ ? catalog_->Databases().size() : 0) + L" | Платформ: " + std::to_wstring(platforms_.size()); }
-void MainWindow::SetSimpleMode(bool enabled) { settings_.simple_mode = enabled; const int visible = enabled ? SW_HIDE : SW_SHOW; if (edit_) ShowWindow(edit_, visible); if (cache_) ShowWindow(cache_, visible); if (shortcut_) ShowWindow(shortcut_, visible); if (remove_) ShowWindow(remove_, visible); HMENU menu = GetMenu(window_); if (menu) CheckMenuItem(menu, kSimpleMode, MF_BYCOMMAND | (enabled ? MF_CHECKED : MF_UNCHECKED)); }
+void MainWindow::SetSimpleMode(bool enabled) { settings_.simple_mode = enabled; const int visible = enabled ? SW_HIDE : SW_SHOW; if (edit_) ShowWindow(edit_, visible); if (cache_) ShowWindow(cache_, visible); if (shortcut_) ShowWindow(shortcut_, visible); if (remove_) ShowWindow(remove_, visible); HMENU menu = GetMenu(window_); if (menu) CheckMenuItem(menu, kSimpleMode, MF_BYCOMMAND | (enabled ? MF_CHECKED : MF_UNCHECKED)); DisplaySelected(); }
 void MainWindow::ToggleFavorite() { if (!catalog_) return; const auto name = SelectedName(); const auto* entry = catalog_->Find(name); if (!entry || !entry->IsDatabase()) { Message(window_, L"Выберите базу для добавления в избранное."); return; } auto favorites = storage::LoadFavorites(layout_); const auto found = std::find(favorites.begin(), favorites.end(), name); if (found == favorites.end()) { favorites.insert(favorites.begin(), name); if (favorites.size() > 9) favorites.resize(9); SetStatus(L"Добавлено в избранное: " + name); } else { favorites.erase(found); SetStatus(L"Удалено из избранного: " + name); } storage::SaveFavorites(layout_, favorites); PopulateTree(); }
-void MainWindow::LaunchFavorite(size_t slot) { auto favorites = storage::LoadFavorites(layout_); if (slot >= favorites.size()) { Message(window_, L"Этот слот избранного пока не назначен."); return; } SetWindowTextW(search_, L""); PopulateTree(); const auto wanted = favorites[slot]; std::function<HTREEITEM(HTREEITEM)> find = [&](HTREEITEM item) { for (; item; item = TreeView_GetNextSibling(tree_, item)) { wchar_t name[512]{}; TVITEMW row{}; row.mask = TVIF_TEXT; row.hItem = item; row.pszText = name; row.cchTextMax = 512; TreeView_GetItem(tree_, &row); if (wanted == name) return item; if (const auto child = find(TreeView_GetChild(tree_, item))) return child; } return static_cast<HTREEITEM>(nullptr); }; if (const auto target = find(TreeView_GetRoot(tree_))) { TreeView_SelectItem(tree_, target); LaunchSelected(domain::LaunchMode::enterprise); } }
+void MainWindow::LaunchFavorite(size_t slot) { auto favorites = storage::LoadFavorites(layout_); if (slot >= favorites.size()) { Message(window_, L"Этот слот избранного пока не назначен."); return; } SetWindowTextW(search_, L""); PopulateTree(); if (SelectTreeItem(favorites[slot])) LaunchSelected(domain::LaunchMode::enterprise); }
 void MainWindow::ShowAbout() const { const std::wstring text = L"ИБ Старт (IBStart)\nВерсия " + std::wstring(version::value) + L"\n\nЛёгкий менеджер запусков информационных баз 1С:Предприятие.\n\nЛицензия MIT. IBStart не является официальным продуктом фирмы «1С»."; MessageBoxW(window_, text.c_str(), L"О программе — ИБ Старт", MB_OK | MB_ICONINFORMATION); }
 void MainWindow::ReportUnhandledError(std::string_view message) noexcept { try { const auto wide = utf::FromUtf8(message); logger_.Error(L"Необработанная ошибка UI: " + wide); const auto text = L"Произошла непредвиденная ошибка. Подробности записаны в:\n" + logger_.path().wstring(); MessageBoxW(window_, text.c_str(), L"ИБ Старт", MB_OK | MB_ICONERROR); } catch (...) { MessageBoxW(window_, L"Произошла непредвиденная ошибка.", L"ИБ Старт", MB_OK | MB_ICONERROR); } }
 
