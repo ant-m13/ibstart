@@ -30,6 +30,7 @@ namespace {
 constexpr wchar_t kClassName[] = L"IBStart.MainWindow";
 constexpr wchar_t kInputBoxClass[] = L"IBStart.InputBox";
 constexpr wchar_t kDatabaseEditorClass[] = L"IBStart.DatabaseEditor";
+constexpr wchar_t kAdvancedDatabaseOptionsClass[] = L"IBStart.AdvancedDatabaseOptions";
 constexpr UINT kActivateMessage = WM_APP + 23;
 constexpr ULONG_PTR kLaunchCopyData = 0x49425354;
 constexpr int kMinimumWindowWidth = 940;
@@ -157,7 +158,12 @@ enum class DatabaseConnectionKind { file, web, server };
 struct DatabaseEditorData {
   std::wstring name;
   std::wstring connect;
+  std::wstring id;
+  std::wstring folder;
+  std::wstring order_in_list;
+  std::wstring order_in_tree;
   std::wstring version;
+  std::wstring default_version;
   std::wstring app;
   std::wstring default_app;
   std::wstring wa;
@@ -232,8 +238,8 @@ std::wstring BuildConnection(DatabaseConnectionKind kind, std::wstring_view orig
 
 enum DatabaseEditorControl : int {
   kDatabaseName = 1000, kConnectionFile, kConnectionWeb, kConnectionServer, kFilePath, kBrowseFilePath,
-  kWebAddress, kServerCluster, kServerReference, kLaunchVersion, kLaunchApp, kLaunchDefaultApp,
-  kLaunchWindowsAuth, kLaunchExternal, kLaunchLocale, kLaunchSpeed, kLaunchArchitecture, kLaunchParameters
+  kWebAddress, kServerCluster, kServerReference, kLaunchVersion, kLaunchApp, kLaunchWindowsAuth,
+  kLaunchSpeed, kLaunchArchitecture, kOpenAdvancedDatabaseOptions
 };
 
 struct DatabaseEditorState {
@@ -253,12 +259,8 @@ struct DatabaseEditorState {
   HWND version{};
   HWND architecture{};
   HWND app{};
-  HWND default_app{};
   HWND windows_auth{};
-  HWND external{};
-  HWND locale{};
   HWND speed{};
-  HWND parameters{};
   HFONT font{};
   HFONT button_font{};
   DatabaseEditorData initial;
@@ -285,6 +287,18 @@ std::wstring ApplicationValue(std::wstring_view label) {
   if (EqualNoCase(label, L"Толстый клиент")) return L"ThickClient";
   if (EqualNoCase(label, L"Тонкий клиент")) return L"ThinClient";
   if (EqualNoCase(label, L"Веб-клиент")) return L"WebClient";
+  return std::wstring(label);
+}
+std::wstring DefaultApplicationLabel(std::wstring_view value) {
+  if (value.empty()) return L"Не задано";
+  if (EqualNoCase(value, L"ThickClient")) return L"Толстый клиент";
+  if (EqualNoCase(value, L"ThinClient")) return L"Тонкий клиент";
+  return std::wstring(value);
+}
+std::wstring DefaultApplicationValue(std::wstring_view label) {
+  if (EqualNoCase(label, L"Не задано")) return {};
+  if (EqualNoCase(label, L"Толстый клиент")) return L"ThickClient";
+  if (EqualNoCase(label, L"Тонкий клиент")) return L"ThinClient";
   return std::wstring(label);
 }
 std::wstring ArchitectureLabel(std::wstring_view value) {
@@ -326,6 +340,10 @@ std::wstring FlagValue(HWND checkbox, std::wstring_view previous) {
   if (SendMessageW(checkbox, BM_GETCHECK, 0, 0) == BST_CHECKED) return previous.empty() || !IsEnabledFlag(previous) ? L"1" : std::wstring(previous);
   return L"0";
 }
+bool IsOptionalOrder(std::wstring_view value) {
+  if (value.empty()) return true;
+  return std::all_of(value.begin(), value.end(), [](wchar_t character) { return std::iswdigit(character) != 0; });
+}
 void UpdateConnectionControls(DatabaseEditorState& state) {
   const bool file = state.kind == DatabaseConnectionKind::file;
   const bool web = state.kind == DatabaseConnectionKind::web;
@@ -347,6 +365,209 @@ void BrowseForFileBase(HWND dialog, DatabaseEditorState& state) {
   CoTaskMemFree(id);
   if (valid) SetWindowTextW(state.file, path);
 }
+
+enum AdvancedDatabaseOptionsControl : int {
+  kAdvancedDefaultApp = 1400, kAdvancedDefaultVersion, kAdvancedOrderInList, kAdvancedOrderInTree,
+  kAdvancedExternal, kAdvancedLocale, kAdvancedParameters,
+  kAdvancedHelpDefaultApp, kAdvancedHelpDefaultVersion, kAdvancedHelpId, kAdvancedHelpFolder,
+  kAdvancedHelpOrderInList, kAdvancedHelpOrderInTree, kAdvancedHelpExternal, kAdvancedHelpLocale,
+  kAdvancedHelpParameters
+};
+
+struct AdvancedDatabaseOptionsState {
+  HWND default_app{};
+  HWND default_version{};
+  HWND order_in_list{};
+  HWND order_in_tree{};
+  HWND external{};
+  HWND locale{};
+  HWND parameters{};
+  HFONT font{};
+  HFONT button_font{};
+  DatabaseEditorData initial;
+  std::optional<DatabaseEditorData> result;
+  bool done{false};
+};
+
+std::wstring FolderLabel(std::wstring_view folder) {
+  return folder.empty() || folder == L"/" ? L"Корневой уровень" : std::wstring(folder);
+}
+void ShowAdvancedParameterHelp(HWND owner, int command) {
+  std::wstring title;
+  std::wstring text;
+  switch (command) {
+    case kAdvancedHelpDefaultApp:
+      title = L"Приложение при автоопределении (DefaultApp)";
+      text = L"Используется стандартным стартером 1С, когда «Режим клиента» имеет значение «Автоматически». "
+             L"Допустимы тонкий или толстый клиент. Не задавайте это поле, если предпочтение не требуется.";
+      break;
+    case kAdvancedHelpDefaultVersion:
+      title = L"Версия по умолчанию (DefaultVersion)";
+      text = L"Версия платформы, фактически выбранная стартером 1С при автоматическом выборе. "
+             L"IBStart использует её, если основная «Версия платформы» не задана.";
+      break;
+    case kAdvancedHelpId:
+      title = L"Идентификатор базы (ID)";
+      text = L"Уникальный идентификатор записи списка баз. Он создаётся при добавлении базы и показан только для справки. "
+             L"Повторяющийся ID может привести к объединению разных записей стандартным стартером.";
+      break;
+    case kAdvancedHelpFolder:
+      title = L"Группа списка (Folder)";
+      text = L"Путь к группе в дереве списка баз. В IBStart он меняется перетаскиванием базы или команды перемещения, "
+             L"поэтому здесь показан только для справки.";
+      break;
+    case kAdvancedHelpOrderInList:
+      title = L"Порядок в списке (OrderInList)";
+      text = L"Числовой порядок записи для плоского списка баз. При перемещении базы IBStart автоматически перенумеровывает записи.";
+      break;
+    case kAdvancedHelpOrderInTree:
+      title = L"Порядок в дереве (OrderInTree)";
+      text = L"Числовой порядок базы внутри её группы. IBStart учитывает его при построении дерева и обновляет при перемещении базы.";
+      break;
+    case kAdvancedHelpExternal:
+      title = L"Внешняя запись (External)";
+      text = L"Отмечает запись, полученную из подключаемого общего списка баз. Обычно это значение задаётся источником общего списка.";
+      break;
+    case kAdvancedHelpLocale:
+      title = L"Локаль (Locale)";
+      text = L"Локаль запуска 1С, например ru_RU. Оставьте пустым, чтобы применялись обычные настройки платформы.";
+      break;
+    case kAdvancedHelpParameters:
+      title = L"Дополнительные параметры запуска (AdditionalParameters)";
+      text = L"Необязательные ключи командной строки 1С, передаваемые при запуске выбранной базы. "
+             L"Например: /AppArch x86_64_prt. Параметры с паролями хранить здесь небезопасно.";
+      break;
+    default: return;
+  }
+  Message(owner, text, title, MB_OK | MB_ICONINFORMATION);
+}
+void CreateAdvancedDatabaseOptionsControls(HWND dialog, AdvancedDatabaseOptionsState& state) {
+  const UINT dpi = GetDpiForWindow(dialog);
+  const auto px = [dpi](int logical) { return ScaleForDpi(logical, dpi); };
+  const auto create = [&](DWORD exStyle, const wchar_t* className, std::wstring_view text, DWORD style, int x, int y, int width, int height, int id, HFONT font) {
+    const HWND control = CreateWindowExW(exStyle, className, std::wstring(text).c_str(), WS_CHILD | WS_VISIBLE | style,
+        px(x), px(y), px(width), px(height), dialog, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), GetModuleHandleW(nullptr), nullptr);
+    SetControlFont(control, font);
+    return control;
+  };
+  const HFONT textFont = state.font;
+  const HFONT buttonFont = state.button_font ? state.button_font : textFont;
+  const auto help = [&](int y, int command) { create(0, L"BUTTON", L"?", WS_TABSTOP, 582, y, 48, 25, command, buttonFont); };
+
+  create(0, L"BUTTON", L"Автоматический выбор запуска", BS_GROUPBOX, 14, 14, 632, 102, 0, textFont);
+  create(0, L"STATIC", L"Клиент при автоопределении:", 0, 28, 42, 190, 20, 0, textFont);
+  state.default_app = create(0, WC_COMBOBOXW, L"", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 224, 38, 348, 120, kAdvancedDefaultApp, textFont);
+  for (const auto* label : {L"Не задано", L"Тонкий клиент", L"Толстый клиент"}) SendMessageW(state.default_app, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label));
+  SetComboValue(state.default_app, DefaultApplicationLabel(state.initial.default_app));
+  help(38, kAdvancedHelpDefaultApp);
+  create(0, L"STATIC", L"Версия по умолчанию:", 0, 28, 76, 190, 20, 0, textFont);
+  state.default_version = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.default_version, WS_TABSTOP | ES_AUTOHSCROLL, 224, 72, 348, 25, kAdvancedDefaultVersion, textFont);
+  help(72, kAdvancedHelpDefaultVersion);
+
+  create(0, L"BUTTON", L"Реквизиты списка", BS_GROUPBOX, 14, 128, 632, 172, 0, textFont);
+  create(0, L"STATIC", L"Идентификатор базы:", 0, 28, 156, 156, 20, 0, textFont);
+  create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.id, ES_READONLY | ES_AUTOHSCROLL, 192, 152, 380, 25, 0, textFont);
+  help(152, kAdvancedHelpId);
+  create(0, L"STATIC", L"Группа списка:", 0, 28, 190, 156, 20, 0, textFont);
+  create(WS_EX_CLIENTEDGE, L"EDIT", FolderLabel(state.initial.folder), ES_READONLY | ES_AUTOHSCROLL, 192, 186, 380, 25, 0, textFont);
+  help(186, kAdvancedHelpFolder);
+  create(0, L"STATIC", L"Порядок в списке:", 0, 28, 224, 156, 20, 0, textFont);
+  state.order_in_list = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.order_in_list, WS_TABSTOP | ES_AUTOHSCROLL, 192, 220, 380, 25, kAdvancedOrderInList, textFont);
+  help(220, kAdvancedHelpOrderInList);
+  create(0, L"STATIC", L"Порядок в дереве:", 0, 28, 258, 156, 20, 0, textFont);
+  state.order_in_tree = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.order_in_tree, WS_TABSTOP | ES_AUTOHSCROLL, 192, 254, 380, 25, kAdvancedOrderInTree, textFont);
+  help(254, kAdvancedHelpOrderInTree);
+
+  create(0, L"BUTTON", L"Другие параметры", BS_GROUPBOX, 14, 312, 632, 130, 0, textFont);
+  state.external = create(0, L"BUTTON", L"Внешняя информационная база", WS_TABSTOP | BS_AUTOCHECKBOX, 28, 338, 300, 20, kAdvancedExternal, textFont);
+  SendMessageW(state.external, BM_SETCHECK, IsEnabledFlag(state.initial.external) ? BST_CHECKED : BST_UNCHECKED, 0);
+  help(334, kAdvancedHelpExternal);
+  create(0, L"STATIC", L"Локаль:", 0, 28, 370, 156, 20, 0, textFont);
+  state.locale = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.locale, WS_TABSTOP | ES_AUTOHSCROLL, 192, 366, 380, 25, kAdvancedLocale, textFont);
+  help(366, kAdvancedHelpLocale);
+  create(0, L"STATIC", L"Параметры командной строки:", 0, 28, 404, 164, 20, 0, textFont);
+  state.parameters = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.additional_parameters, WS_TABSTOP | ES_AUTOHSCROLL, 192, 400, 380, 25, kAdvancedParameters, textFont);
+  help(400, kAdvancedHelpParameters);
+  create(0, L"BUTTON", L"Сохранить", WS_TABSTOP | BS_DEFPUSHBUTTON, 450, 462, 90, 28, IDOK, buttonFont);
+  create(0, L"BUTTON", L"Отмена", WS_TABSTOP, 550, 462, 84, 28, IDCANCEL, buttonFont);
+}
+std::optional<std::wstring> CollectAdvancedDatabaseOptions(AdvancedDatabaseOptionsState& state) {
+  DatabaseEditorData result = state.initial;
+  result.default_app = DefaultApplicationValue(ReadControlText(state.default_app));
+  result.default_version = TrimText(ReadControlText(state.default_version));
+  result.order_in_list = TrimText(ReadControlText(state.order_in_list));
+  result.order_in_tree = TrimText(ReadControlText(state.order_in_tree));
+  if (!IsOptionalOrder(result.order_in_list) || !IsOptionalOrder(result.order_in_tree)) {
+    return L"Порядок в списке и порядок в дереве должны быть целыми неотрицательными числами или пустыми.";
+  }
+  result.external = FlagValue(state.external, state.initial.external);
+  result.locale = TrimText(ReadControlText(state.locale));
+  result.additional_parameters = ReadControlText(state.parameters);
+  state.result = std::move(result);
+  return std::nullopt;
+}
+LRESULT CALLBACK AdvancedDatabaseOptionsProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam) {
+  auto* state = reinterpret_cast<AdvancedDatabaseOptionsState*>(GetWindowLongPtrW(wnd, GWLP_USERDATA));
+  if (message == WM_NCCREATE) {
+    SetWindowLongPtrW(wnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(reinterpret_cast<CREATESTRUCTW*>(lparam)->lpCreateParams));
+    return TRUE;
+  }
+  if (message == WM_CTLCOLORSTATIC || message == WM_CTLCOLORBTN) return DialogControlColor(message, wparam, lparam);
+  if (message == WM_COMMAND && state) {
+    const int command = LOWORD(wparam);
+    if (command >= kAdvancedHelpDefaultApp && command <= kAdvancedHelpParameters) { ShowAdvancedParameterHelp(wnd, command); return 0; }
+    if (command == IDOK) {
+      if (const auto error = CollectAdvancedDatabaseOptions(*state)) { Message(wnd, *error, L"Проверка данных", MB_OK | MB_ICONWARNING); return 0; }
+      state->done = true;
+      DestroyWindow(wnd);
+      return 0;
+    }
+    if (command == IDCANCEL) { state->done = true; DestroyWindow(wnd); return 0; }
+  }
+  if (message == WM_CLOSE && state) { state->done = true; DestroyWindow(wnd); return 0; }
+  return DefWindowProcW(wnd, message, wparam, lparam);
+}
+std::optional<DatabaseEditorData> EditAdvancedDatabaseOptions(HWND owner, DatabaseEditorData initial) {
+  AdvancedDatabaseOptionsState state;
+  state.initial = std::move(initial);
+  static ATOM atom = [] {
+    WNDCLASSW klass{};
+    klass.hInstance = GetModuleHandleW(nullptr);
+    klass.lpszClassName = kAdvancedDatabaseOptionsClass;
+    klass.lpfnWndProc = AdvancedDatabaseOptionsProc;
+    klass.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    klass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    return RegisterClassW(&klass);
+  }();
+  (void)atom;
+  if (owner) EnableWindow(owner, FALSE);
+  constexpr DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP;
+  constexpr DWORD extendedStyle = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
+  const SIZE outerSize = DialogOuterSize(owner, 660, 510, style, extendedStyle);
+  HWND dialog = CreateWindowExW(extendedStyle, kAdvancedDatabaseOptionsClass, L"Дополнительные настройки базы", style,
+      CW_USEDEFAULT, CW_USEDEFAULT, outerSize.cx, outerSize.cy, owner, nullptr, GetModuleHandleW(nullptr), &state);
+  if (!dialog) {
+    if (owner) EnableWindow(owner, TRUE);
+    return std::nullopt;
+  }
+  state.font = CreateUiFont(dialog, 9, FW_NORMAL);
+  state.button_font = CreateUiFont(dialog, 9, FW_SEMIBOLD);
+  CreateAdvancedDatabaseOptionsControls(dialog, state);
+  PositionDialogNearOwner(dialog, owner);
+  ShowWindow(dialog, SW_SHOW);
+  SetFocus(state.default_app);
+  MSG message{};
+  int pumpResult = 1;
+  while (!state.done && (pumpResult = GetMessageW(&message, nullptr, 0, 0)) > 0) {
+    if (!IsDialogMessageW(dialog, &message)) { TranslateMessage(&message); DispatchMessageW(&message); }
+  }
+  if (IsWindow(dialog)) DestroyWindow(dialog);
+  if (pumpResult == 0) PostQuitMessage(static_cast<int>(message.wParam));
+  if (owner) { EnableWindow(owner, TRUE); SetForegroundWindow(owner); }
+  if (state.font) DeleteObject(state.font);
+  if (state.button_font) DeleteObject(state.button_font);
+  return state.result;
+}
 std::optional<std::wstring> CollectDatabaseEditorResult(DatabaseEditorState& state) {
   DatabaseEditorData result = state.initial;
   result.kind = state.kind;
@@ -363,13 +584,9 @@ std::optional<std::wstring> CollectDatabaseEditorResult(DatabaseEditorState& sta
   result.version = TrimText(ReadControlText(state.version));
   if (EqualNoCase(result.version, L"Авто")) result.version.clear();
   result.app = ApplicationValue(ReadControlText(state.app));
-  result.default_app = TrimText(ReadControlText(state.default_app));
   result.wa = FlagValue(state.windows_auth, state.initial.wa);
-  result.external = FlagValue(state.external, state.initial.external);
-  result.locale = TrimText(ReadControlText(state.locale));
   result.client_connection_speed = SpeedValue(ReadControlText(state.speed));
   result.app_arch = ArchitectureValue(ReadControlText(state.architecture));
-  result.additional_parameters = ReadControlText(state.parameters);
   state.result = std::move(result);
   return std::nullopt;
 }
@@ -401,7 +618,7 @@ void CreateDatabaseEditorControls(HWND dialog, DatabaseEditorState& state, const
   state.reference_label = create(0, L"STATIC", L"Имя информационной базы:", 0, 48, 310, 170, 20, 0, textFont);
   state.reference = create(WS_EX_CLIENTEDGE, L"EDIT", ConnectionValue(state.initial.connect, L"Ref"), WS_TABSTOP | ES_AUTOHSCROLL, 220, 306, 414, 25, kServerReference, textFont);
 
-  create(0, L"BUTTON", L"Параметры запуска", BS_GROUPBOX, 14, 342, 632, 258, 0, textFont);
+  create(0, L"BUTTON", L"Параметры запуска", BS_GROUPBOX, 14, 342, 632, 166, 0, textFont);
   create(0, L"STATIC", L"Версия платформы:", 0, 28, 366, 150, 20, 0, textFont);
   state.version = create(0, WC_COMBOBOXW, L"", WS_TABSTOP | CBS_DROPDOWN | WS_VSCROLL, 160, 362, 175, 160, kLaunchVersion, textFont);
   SendMessageW(state.version, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Авто"));
@@ -425,18 +642,11 @@ void CreateDatabaseEditorControls(HWND dialog, DatabaseEditorState& state, const
   state.speed = create(0, WC_COMBOBOXW, L"", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 470, 396, 164, 100, kLaunchSpeed, textFont);
   for (const auto* label : {L"Обычная", L"Низкая"}) SendMessageW(state.speed, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label));
   SetComboValue(state.speed, SpeedLabel(state.initial.client_connection_speed));
-  create(0, L"STATIC", L"Приложение по умолчанию:", 0, 28, 434, 180, 20, 0, textFont);
-  state.default_app = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.default_app, WS_TABSTOP | ES_AUTOHSCROLL, 210, 430, 170, 25, kLaunchDefaultApp, textFont);
-  create(0, L"STATIC", L"Локаль:", 0, 400, 434, 55, 20, 0, textFont);
-  state.locale = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.locale, WS_TABSTOP | ES_AUTOHSCROLL, 462, 430, 172, 25, kLaunchLocale, textFont);
-  state.windows_auth = create(0, L"BUTTON", L"Использовать аутентификацию ОС", WS_TABSTOP | BS_AUTOCHECKBOX, 28, 466, 250, 20, kLaunchWindowsAuth, textFont);
-  state.external = create(0, L"BUTTON", L"Внешняя информационная база", WS_TABSTOP | BS_AUTOCHECKBOX, 292, 466, 250, 20, kLaunchExternal, textFont);
+  state.windows_auth = create(0, L"BUTTON", L"Использовать аутентификацию ОС", WS_TABSTOP | BS_AUTOCHECKBOX, 28, 434, 290, 20, kLaunchWindowsAuth, textFont);
   SendMessageW(state.windows_auth, BM_SETCHECK, IsEnabledFlag(state.initial.wa) ? BST_CHECKED : BST_UNCHECKED, 0);
-  SendMessageW(state.external, BM_SETCHECK, IsEnabledFlag(state.initial.external) ? BST_CHECKED : BST_UNCHECKED, 0);
-  create(0, L"STATIC", L"Дополнительные параметры запуска:", 0, 28, 496, 260, 20, 0, textFont);
-  state.parameters = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.additional_parameters, WS_TABSTOP | ES_AUTOHSCROLL, 28, 516, 606, 25, kLaunchParameters, textFont);
-  create(0, L"BUTTON", L"Сохранить", WS_TABSTOP | BS_DEFPUSHBUTTON, 450, 620, 90, 28, IDOK, buttonFont);
-  create(0, L"BUTTON", L"Отмена", WS_TABSTOP, 550, 620, 84, 28, IDCANCEL, buttonFont);
+  create(0, L"BUTTON", L"Дополнительные настройки…", WS_TABSTOP, 28, 468, 230, 28, kOpenAdvancedDatabaseOptions, buttonFont);
+  create(0, L"BUTTON", L"Сохранить", WS_TABSTOP | BS_DEFPUSHBUTTON, 450, 532, 90, 28, IDOK, buttonFont);
+  create(0, L"BUTTON", L"Отмена", WS_TABSTOP, 550, 532, 84, 28, IDCANCEL, buttonFont);
   state.kind = state.initial.kind;
   UpdateConnectionControls(state);
 }
@@ -455,6 +665,10 @@ LRESULT CALLBACK DatabaseEditorProc(HWND wnd, UINT message, WPARAM wparam, LPARA
       return 0;
     }
     if (command == kBrowseFilePath) { BrowseForFileBase(wnd, *state); return 0; }
+    if (command == kOpenAdvancedDatabaseOptions) {
+      if (const auto updated = EditAdvancedDatabaseOptions(wnd, state->initial)) state->initial = *updated;
+      return 0;
+    }
     if (command == IDOK) {
       if (const auto error = CollectDatabaseEditorResult(*state)) { Message(wnd, *error, L"Проверка данных", MB_OK | MB_ICONWARNING); return 0; }
       state->done = true;
@@ -483,7 +697,7 @@ std::optional<DatabaseEditorData> EditDatabase(HWND owner, std::wstring_view tit
   if (owner) EnableWindow(owner, FALSE);
   constexpr DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP;
   constexpr DWORD extendedStyle = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
-  const SIZE outerSize = DialogOuterSize(owner, 660, 660, style, extendedStyle);
+  const SIZE outerSize = DialogOuterSize(owner, 660, 570, style, extendedStyle);
   HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT, kDatabaseEditorClass, std::wstring(title).c_str(),
       style, CW_USEDEFAULT, CW_USEDEFAULT, outerSize.cx, outerSize.cy,
       owner, nullptr, GetModuleHandleW(nullptr), &state);
@@ -513,7 +727,12 @@ DatabaseEditorData DatabaseEditorDataFromEntry(const domain::Entry& entry) {
   DatabaseEditorData result;
   result.name = entry.name;
   result.connect = entry.ValueOr(L"Connect");
+  result.id = entry.ValueOr(L"ID");
+  result.folder = entry.ValueOr(L"Folder");
+  result.order_in_list = entry.ValueOr(L"OrderInList");
+  result.order_in_tree = entry.ValueOr(L"OrderInTree");
   result.version = entry.ValueOr(L"Version");
+  result.default_version = entry.ValueOr(L"DefaultVersion");
   result.app = entry.ValueOr(L"App");
   result.default_app = entry.ValueOr(L"DefaultApp");
   result.wa = entry.ValueOr(L"WA");
@@ -527,7 +746,10 @@ DatabaseEditorData DatabaseEditorDataFromEntry(const domain::Entry& entry) {
 }
 void ApplyDatabaseEditorData(domain::Entry& entry, const DatabaseEditorData& data) {
   entry.Set(L"Connect", data.connect);
+  entry.Set(L"OrderInList", data.order_in_list);
+  entry.Set(L"OrderInTree", data.order_in_tree);
   entry.Set(L"Version", data.version);
+  entry.Set(L"DefaultVersion", data.default_version);
   entry.Set(L"App", data.app);
   entry.Set(L"DefaultApp", data.default_app);
   entry.Set(L"WA", data.wa);
@@ -840,30 +1062,72 @@ void MainWindow::CreateControls() {
 }
 
 void MainWindow::Layout(int width, int height) {
-  const int statusHeight = 22, top = 42, bottom = statusHeight + 10, leftWidth = std::max(260, width * 42 / 100), rightX = leftWidth + 18, rightWidth = std::max(250, width - rightX - 10);
-  MoveWindow(search_, 58, 7, std::max(100, width - 66), 25, TRUE); MoveWindow(tree_, 8, top, leftWidth, std::max(100, height - top - bottom), TRUE);
-  const int cardHeight = std::max(100, height - top - 165);
-  MoveWindow(details_title_, rightX + 10, top + 7, std::max(80, rightWidth - 20), 26, TRUE);
-  MoveWindow(details_subtitle_, rightX + 10, top + 34, std::max(80, rightWidth - 20), 20, TRUE);
-  MoveWindow(details_, rightX, top + 58, rightWidth, std::max(42, cardHeight - 58), TRUE);
-  const int keyWidth = std::clamp(rightWidth * 35 / 100, 120, 190);
-  ListView_SetColumnWidth(details_, 0, keyWidth);
-  ListView_SetColumnWidth(details_, 1, std::max(80, rightWidth - keyWidth - 5));
-  const int y = height - bottom - 82;
+  constexpr int statusHeight = 22;
+  constexpr int top = 42;
+  constexpr int bottom = statusHeight + 10;
   constexpr int buttonGap = 8;
-  const int enterpriseWidth = ButtonIdealWidth(enterprise_, 170);
-  const int designerWidth = ButtonIdealWidth(designer_, 185);
-  const int editWidth = ButtonIdealWidth(edit_, 115);
-  const int cacheWidth = ButtonIdealWidth(cache_, 132);
-  const int shortcutWidth = ButtonIdealWidth(shortcut_, 150);
-  const int removeWidth = ButtonIdealWidth(remove_, 115);
-  MoveWindow(enterprise_, rightX, y, enterpriseWidth, 30, TRUE);
-  MoveWindow(designer_, rightX + enterpriseWidth + buttonGap, y, designerWidth, 30, TRUE);
-  MoveWindow(edit_, rightX + enterpriseWidth + designerWidth + buttonGap * 2, y, editWidth, 30, TRUE);
-  MoveWindow(cache_, rightX, y + 36, cacheWidth, 30, TRUE);
-  MoveWindow(shortcut_, rightX + cacheWidth + buttonGap, y + 36, shortcutWidth, 30, TRUE);
-  MoveWindow(remove_, rightX + cacheWidth + shortcutWidth + buttonGap * 2, y + 36, removeWidth, 30, TRUE);
+  constexpr int buttonRowGap = 6;
+  constexpr int buttonHeight = 30;
+  const int leftWidth = std::clamp(width * 42 / 100, 220, std::max(220, width - 300));
+  const int rightX = leftWidth + 18;
+  const int rightWidth = std::max(120, width - rightX - 10);
+
+  struct ButtonLayout { HWND window; int width; int x; int y; };
+  ButtonLayout buttons[] = {
+      {enterprise_, ButtonIdealWidth(enterprise_, 170), 0, 0},
+      {designer_, ButtonIdealWidth(designer_, 185), 0, 0},
+      {edit_, ButtonIdealWidth(edit_, 115), 0, 0},
+      {cache_, ButtonIdealWidth(cache_, 132), 0, 0},
+      {shortcut_, ButtonIdealWidth(shortcut_, 150), 0, 0},
+      {remove_, ButtonIdealWidth(remove_, 115), 0, 0}};
+  int buttonRows = 1;
+  int buttonX = 0;
+  for (auto& button : buttons) {
+    if (buttonX != 0 && buttonX + buttonGap + button.width > rightWidth) {
+      ++buttonRows;
+      buttonX = 0;
+    }
+    if (button.width > rightWidth) button.width = rightWidth;
+    button.x = buttonX;
+    button.y = (buttonRows - 1) * (buttonHeight + buttonRowGap);
+    buttonX += button.width + buttonGap;
+  }
+  const int buttonsHeight = buttonRows * buttonHeight + (buttonRows - 1) * buttonRowGap;
+  const int buttonsY = std::max(top + 100, height - bottom - buttonsHeight);
+  const int detailsY = top + 58;
+  const int detailsHeight = std::max(42, buttonsY - detailsY - 10);
+  const int keyWidth = std::clamp(rightWidth * 35 / 100, 80, 190);
+
+  HDWP positions = BeginDeferWindowPos(11);
+  const auto defer = [&positions](HWND control, int x, int y, int controlWidth, int controlHeight) {
+    if (!positions || !control) return;
+    positions = DeferWindowPos(positions, control, nullptr, x, y, std::max(1, controlWidth), std::max(1, controlHeight),
+        SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
+  };
+  defer(search_, 58, 7, width - 66, 25);
+  defer(tree_, 8, top, leftWidth, height - top - bottom);
+  defer(details_title_, rightX + 10, top + 7, rightWidth - 20, 26);
+  defer(details_subtitle_, rightX + 10, top + 34, rightWidth - 20, 20);
+  defer(details_, rightX, detailsY, rightWidth, detailsHeight);
+  for (const auto& button : buttons) defer(button.window, rightX + button.x, buttonsY + button.y, button.width, buttonHeight);
+  const bool positioned = positions && EndDeferWindowPos(positions) != FALSE;
+  if (!positioned) {
+    // DeferWindowPos can fail only under severe resource pressure.  Keep a
+    // complete fallback layout instead of leaving controls at old positions.
+    MoveWindow(search_, 58, 7, std::max(1, width - 66), 25, TRUE);
+    MoveWindow(tree_, 8, top, leftWidth, std::max(1, height - top - bottom), TRUE);
+    MoveWindow(details_title_, rightX + 10, top + 7, std::max(1, rightWidth - 20), 26, TRUE);
+    MoveWindow(details_subtitle_, rightX + 10, top + 34, std::max(1, rightWidth - 20), 20, TRUE);
+    MoveWindow(details_, rightX, detailsY, rightWidth, detailsHeight, TRUE);
+    for (const auto& button : buttons) MoveWindow(button.window, rightX + button.x, buttonsY + button.y, button.width, buttonHeight, TRUE);
+  }
+  ListView_SetColumnWidth(details_, 0, keyWidth);
+  ListView_SetColumnWidth(details_, 1, std::max(1, rightWidth - keyWidth - 5));
   SendMessageW(status_, WM_SIZE, 0, 0);
+  // Layout changes move child windows away from their previous rectangles.
+  // Repaint the parent and all children in one pass so stale button pixels
+  // cannot remain visible while the user drags a window border.
+  RedrawWindow(window_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
 }
 
 void MainWindow::LoadCatalog(bool report_error) {
@@ -1228,9 +1492,11 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
     domain::LaunchOptions options;
     options.mode = mode;
     options.client_type = ClientTypeFromApplication(database.app);
+    if (options.client_type == domain::ClientType::automatic) options.client_type = ClientTypeFromApplication(database.default_app);
     if (const auto fromParameters = launcher::AppArchitectureFromParameters(database.additional_parameters)) options.architecture = *fromParameters;
     else if (const auto fromDatabase = launcher::ParseAppArchitecture(database.app_arch)) options.architecture = *fromDatabase;
-    if (database.version != L"" && database.version != L"Авто") options.version = database.version;
+    const auto& selectedVersion = database.version.empty() ? database.default_version : database.version;
+    if (selectedVersion != L"" && selectedVersion != L"Авто") options.version = selectedVersion;
     if (options.client_type == domain::ClientType::web) { Message(window_, L"Веб-клиент можно использовать только для веб-базы с адресом http:// или https://.", L"ИБ Старт", MB_OK | MB_ICONWARNING); return; }
     const auto selected = launcher::SelectPlatform(platforms_, options); if (!selected) { Message(window_, L"Подходящая платформа 1С не найдена. Проверьте установку и настройки поиска.", L"ИБ Старт", MB_OK | MB_ICONERROR); return; }
     const auto parameters = database.additional_parameters; if (utf::FindNoCaseOrdinal(parameters, L"/p") != std::wstring_view::npos && MessageBoxW(window_, L"В дополнительных параметрах обнаружен /P. Пароль может храниться в открытом виде в ibases.v8i. Продолжить?", L"Предупреждение", MB_YESNO | MB_ICONWARNING) != IDYES) return;
@@ -1244,7 +1510,7 @@ void MainWindow::AddFileDatabase(std::wstring parent) {
   DatabaseEditorData initial;
   initial.name = NextName(L"Файловая база");
   initial.kind = DatabaseConnectionKind::file;
-  const auto entered = EditDatabase(window_, L"Добавление информационной базы", std::move(initial), platforms_);
+  auto entered = EditDatabase(window_, L"Добавление информационной базы", std::move(initial), platforms_);
   if (!entered) return;
   bool added = false;
   if (entered->kind == DatabaseConnectionKind::file) {
@@ -1259,7 +1525,13 @@ void MainWindow::AddFileDatabase(std::wstring parent) {
     Message(window_, message, L"ИБ Старт", MB_OK | MB_ICONWARNING);
     return;
   }
-  if (auto* entry = catalog_->Find(entered->name)) ApplyDatabaseEditorData(*entry, *entered);
+  if (auto* entry = catalog_->Find(entered->name)) {
+    entered->id = entry->ValueOr(L"ID");
+    entered->folder = entry->ValueOr(L"Folder");
+    if (entered->order_in_list.empty()) entered->order_in_list = entry->ValueOr(L"OrderInList");
+    if (entered->order_in_tree.empty()) entered->order_in_tree = entry->ValueOr(L"OrderInTree");
+    ApplyDatabaseEditorData(*entry, *entered);
+  }
   SaveCatalog(); PopulateTree(); SelectTreeItem(entered->name);
 }
 void MainWindow::AddServerDatabase(std::wstring parent) {
@@ -1267,7 +1539,7 @@ void MainWindow::AddServerDatabase(std::wstring parent) {
   DatabaseEditorData initial;
   initial.name = NextName(L"Серверная база");
   initial.kind = DatabaseConnectionKind::server;
-  const auto entered = EditDatabase(window_, L"Добавление информационной базы", std::move(initial), platforms_);
+  auto entered = EditDatabase(window_, L"Добавление информационной базы", std::move(initial), platforms_);
   if (!entered) return;
   bool added = false;
   if (entered->kind == DatabaseConnectionKind::file) {
@@ -1282,7 +1554,13 @@ void MainWindow::AddServerDatabase(std::wstring parent) {
     Message(window_, message, L"ИБ Старт", MB_OK | MB_ICONWARNING);
     return;
   }
-  if (auto* entry = catalog_->Find(entered->name)) ApplyDatabaseEditorData(*entry, *entered);
+  if (auto* entry = catalog_->Find(entered->name)) {
+    entered->id = entry->ValueOr(L"ID");
+    entered->folder = entry->ValueOr(L"Folder");
+    if (entered->order_in_list.empty()) entered->order_in_list = entry->ValueOr(L"OrderInList");
+    if (entered->order_in_tree.empty()) entered->order_in_tree = entry->ValueOr(L"OrderInTree");
+    ApplyDatabaseEditorData(*entry, *entered);
+  }
   SaveCatalog(); PopulateTree(); SelectTreeItem(entered->name);
 }
 void MainWindow::AddGroup(std::wstring parent) {

@@ -69,9 +69,12 @@ void TestNoBomAndCatalog() {
   CHECK(catalog.Databases().size() == 1);
   CHECK(ibstart::catalog::Catalog::IsWebConnection(catalog.Databases().front()->ValueOr(L"Connect")));
   CHECK(catalog.DatabaseFor(L"Web").unknown_fields.size() == 1);
-  auto architectureDocument = ibstart::v8i::V8iDocument::ParseUtf8("[AppArch base]\nConnect=Srvr=\"server\";Ref=\"base\"\nAppArch=x86_64_prt\n");
+  auto architectureDocument = ibstart::v8i::V8iDocument::ParseUtf8(
+      "[AppArch base]\nConnect=Srvr=\"server\";Ref=\"base\"\nAppArch=x86_64_prt\nDefaultVersion=8.3.27\nOrderInTree=42\n");
   ibstart::catalog::Catalog architectureCatalog(std::move(architectureDocument));
   CHECK(architectureCatalog.DatabaseFor(L"AppArch base").app_arch == L"x86_64_prt");
+  CHECK(architectureCatalog.DatabaseFor(L"AppArch base").default_version == L"8.3.27");
+  CHECK(architectureCatalog.DatabaseFor(L"AppArch base").order_in_tree == L"42");
   CHECK(architectureCatalog.DatabaseFor(L"AppArch base").unknown_fields.empty());
 }
 
@@ -168,6 +171,7 @@ void TestStandardFolderPaths() {
   CHECK(catalog.AddServerDatabase(L"Added database", L"Srvr=\"server\";Ref=\"added\"", L"Added"));
   const auto* addedDatabase = catalog.Find(L"Added database");
   CHECK(addedDatabase && addedDatabase->ValueOr(L"Folder") == L"/Renamed/Added");
+  CHECK(addedDatabase && addedDatabase->ValueOr(L"ID").size() == 38);
   CHECK(catalog.ParentOf(L"Added database") == L"Added");
   CHECK(catalog.AddServerDatabase(L"Second database", L"Srvr=\"server\";Ref=\"second\"", L"Added"));
   CHECK(catalog.RenameDatabase(L"Second database", L"Renamed database"));
@@ -180,6 +184,14 @@ void TestStandardFolderPaths() {
   CHECK(secondDatabase && secondDatabase->ValueOr(L"OrderInList") == L"1");
   CHECK(addedDatabase && addedDatabase->ValueOr(L"OrderInList") == L"2");
   CHECK(!catalog.MoveBy(L"Renamed database", -1));
+
+  auto treeOrderDocument = ibstart::v8i::V8iDocument::ParseUtf8(
+      "[First]\nConnect=File=\"C:\\\\first\"\nOrderInList=1\nOrderInTree=20\n"
+      "[Second]\nConnect=File=\"C:\\\\second\"\nOrderInList=2\nOrderInTree=10\n");
+  ibstart::catalog::Catalog treeOrderCatalog(std::move(treeOrderDocument));
+  const auto treeOrder = treeOrderCatalog.Tree();
+  CHECK(treeOrder.size() == 2);
+  CHECK(treeOrder.size() > 1 && treeOrder.front().name == L"Second");
 }
 
 void TestSecretMasking() {
