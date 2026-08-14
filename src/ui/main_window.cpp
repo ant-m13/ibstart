@@ -130,8 +130,12 @@ void PositionDialogNearOwner(HWND dialog, HWND owner) {
   const RECT work = monitor.rcWork;
   int x = ownerRect.left + ((ownerRect.right - ownerRect.left) - width) / 2;
   int y = ownerRect.top + ((ownerRect.bottom - ownerRect.top) - height) / 2;
-  x = std::clamp(x, work.left, std::max(work.left, work.right - width));
-  y = std::clamp(y, work.top, std::max(work.top, work.bottom - height));
+  const int minimumX = static_cast<int>(work.left);
+  const int minimumY = static_cast<int>(work.top);
+  const int maximumX = std::max(minimumX, static_cast<int>(work.right) - width);
+  const int maximumY = std::max(minimumY, static_cast<int>(work.bottom) - height);
+  x = std::clamp(x, minimumX, maximumX);
+  y = std::clamp(y, minimumY, maximumY);
   SetWindowPos(dialog, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
 }
 
