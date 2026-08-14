@@ -46,6 +46,7 @@ class MainWindow {
   void CreateShortcut();
   void OpenList();
   void SetStatus(std::wstring text);
+  [[nodiscard]] std::wstring CatalogStatistics() const;
   void SetSimpleMode(bool enabled);
   void ToggleFavorite();
   void LaunchFavorite(size_t slot);
