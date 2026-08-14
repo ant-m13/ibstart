@@ -78,6 +78,8 @@ set(IBSTART_ICON_FILES
   "${IBSTART_RESOURCE_DIR}/icons/database.ico"
   "${IBSTART_RESOURCE_DIR}/icons/favorite.ico"
   "${IBSTART_RESOURCE_DIR}/icons/refresh.ico"
+  "${IBSTART_RESOURCE_DIR}/icons/file_database.ico"
+  "${IBSTART_RESOURCE_DIR}/icons/server_database.ico"
 )
 set_property(SOURCE "${IBSTART_GENERATED_DIR}/IBStart.rc" PROPERTY OBJECT_DEPENDS "${IBSTART_ICON_FILES}")
 target_link_libraries(IBStart PRIVATE ibstart_core Comctl32)

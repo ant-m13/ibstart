@@ -28,8 +28,10 @@ constexpr wchar_t kClassName[] = L"IBStart.MainWindow";
 constexpr wchar_t kInputBoxClass[] = L"IBStart.InputBox";
 constexpr UINT kActivateMessage = WM_APP + 23;
 constexpr ULONG_PTR kLaunchCopyData = 0x49425354;
+constexpr int kMinimumWindowWidth = 940;
+constexpr int kMinimumWindowHeight = 460;
 enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kAbout, kMoveUp, kMoveDown, kFavorite1 = 200 };
-enum TreeImage : int { kDatabaseImage, kFolderImage, kFavoriteImage, kRecentImage };
+enum TreeImage : int { kFileDatabaseImage, kServerDatabaseImage, kFolderImage, kFavoriteImage, kRecentImage };
 
 void Message(HWND owner, std::wstring_view text, std::wstring_view title = L"ИБ Старт", UINT type = MB_OK | MB_ICONINFORMATION) { MessageBoxW(owner, std::wstring(text).c_str(), std::wstring(title).c_str(), type); }
 HICON LoadResourceIcon(HINSTANCE instance, int resource, int size) {
@@ -39,6 +41,7 @@ HFONT CreateUiFont(HWND window, int points, LONG weight) {
   return CreateFontW(-MulDiv(points, static_cast<int>(GetDpiForWindow(window)), 72), 0, 0, 0, weight, FALSE, FALSE, FALSE,
       DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 }
+int ScaleForDpi(int logicalPixels, UINT dpi) { return MulDiv(logicalPixels, static_cast<int>(dpi == 0 ? 96 : dpi), 96); }
 void AttachButtonIcon(HWND button, HINSTANCE instance, int resource, std::vector<HIMAGELIST>& storage) {
   HIMAGELIST images = ImageList_Create(20, 20, ILC_COLOR32 | ILC_MASK, 1, 1);
   HICON icon = LoadResourceIcon(instance, resource, 20);
@@ -51,6 +54,11 @@ void AttachButtonIcon(HWND button, HINSTANCE instance, int resource, std::vector
   BUTTON_IMAGELIST layout{}; layout.himl = images; layout.margin = {7, 0, 6, 0}; layout.uAlign = BUTTON_IMAGELIST_ALIGN_LEFT;
   if (!SendMessageW(button, BCM_SETIMAGELIST, 0, reinterpret_cast<LPARAM>(&layout))) { ImageList_Destroy(images); return; }
   storage.push_back(images);
+}
+int ButtonIdealWidth(HWND button, int fallback) {
+  SIZE size{};
+  if (!button || !SendMessageW(button, BCM_GETIDEALSIZE, 0, reinterpret_cast<LPARAM>(&size)) || size.cx <= 0) return fallback;
+  return std::max(fallback, size.cx + 8);
 }
 std::wstring FriendlyFieldName(std::wstring_view key) {
   struct Label { std::wstring_view key; std::wstring_view text; };
@@ -66,6 +74,10 @@ std::wstring ConnectionKind(std::wstring_view connect) {
   if (utf::FindNoCaseOrdinal(connect, L"File=") != std::wstring_view::npos) return L"Файловая информационная база";
   if (utf::FindNoCaseOrdinal(connect, L"Srvr=") != std::wstring_view::npos) return L"Серверная информационная база";
   return L"Информационная база";
+}
+int DatabaseTreeImage(const domain::Entry* entry) {
+  if (entry && utf::FindNoCaseOrdinal(entry->ValueOr(L"Connect"), L"File=") != std::wstring_view::npos) return kFileDatabaseImage;
+  return kServerDatabaseImage;
 }
 std::wstring SingleLine(std::wstring value) {
   std::replace(value.begin(), value.end(), L'\r', L' '); std::replace(value.begin(), value.end(), L'\n', L' '); std::replace(value.begin(), value.end(), L'\t', L' '); return value;
@@ -133,12 +145,14 @@ int MainWindow::Show(int show_command) {
   if (!RegisterClassExW(&klass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return 1;
   int windowX = settings_.window_x;
   int windowY = settings_.window_y;
+  const int windowWidth = std::max(settings_.window_width, ScaleForDpi(kMinimumWindowWidth, GetDpiForSystem()));
+  const int windowHeight = std::max(settings_.window_height, ScaleForDpi(kMinimumWindowHeight, GetDpiForSystem()));
   if (windowX != CW_USEDEFAULT && windowY != CW_USEDEFAULT) {
-    const RECT saved{windowX, windowY, windowX + settings_.window_width, windowY + settings_.window_height};
+    const RECT saved{windowX, windowY, windowX + windowWidth, windowY + windowHeight};
     if (!MonitorFromRect(&saved, MONITOR_DEFAULTTONULL)) { windowX = CW_USEDEFAULT; windowY = CW_USEDEFAULT; }
   }
   window_ = CreateWindowExW(0, kClassName, L"ИБ Старт — IBStart", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
-      windowX, windowY, settings_.window_width, settings_.window_height, nullptr, nullptr, instance_, this);
+      windowX, windowY, windowWidth, windowHeight, nullptr, nullptr, instance_, this);
   if (!window_) return 1;
   ShowWindow(window_, show_command); UpdateWindow(window_);
   ACCEL accelerators[] = {{FVIRTKEY, VK_F3, kEnterprise}, {FVIRTKEY, VK_F4, kDesigner}, {static_cast<BYTE>(FVIRTKEY | FCONTROL), 'F', kFocusSearch},
@@ -180,6 +194,15 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
   switch (message) {
     case WM_CREATE: CreateControls(); LoadCatalog(); return 0;
     case WM_SIZE: Layout(LOWORD(lparam), HIWORD(lparam)); return 0;
+    case WM_GETMINMAXINFO: {
+      auto* limits = reinterpret_cast<MINMAXINFO*>(lparam);
+      if (limits) {
+        const UINT dpi = GetDpiForWindow(window);
+        limits->ptMinTrackSize.x = ScaleForDpi(kMinimumWindowWidth, dpi);
+        limits->ptMinTrackSize.y = ScaleForDpi(kMinimumWindowHeight, dpi);
+      }
+      return 0;
+    }
     case WM_SETFOCUS: SetFocus(search_); return 0;
     case WM_KEYDOWN: if (wparam == VK_F3) { LaunchSelected(domain::LaunchMode::enterprise); return 0; } if (wparam == VK_F4) { LaunchSelected(domain::LaunchMode::designer); return 0; } break;
     case WM_COMMAND:
@@ -279,9 +302,9 @@ void MainWindow::CreateControls() {
   if (details_title_font_) SendMessageW(details_title_, WM_SETFONT, reinterpret_cast<WPARAM>(details_title_font_), TRUE);
   if (details_subtitle_font_) SendMessageW(details_subtitle_, WM_SETFONT, reinterpret_cast<WPARAM>(details_subtitle_font_), TRUE);
 
-  tree_images_ = ImageList_Create(20, 20, ILC_COLOR32 | ILC_MASK, 4, 1);
+  tree_images_ = ImageList_Create(20, 20, ILC_COLOR32 | ILC_MASK, 5, 1);
   if (tree_images_) {
-    constexpr int resources[] = {IDI_TREE_DATABASE, IDI_TREE_FOLDER, IDI_ACTION_FAVORITE, IDI_ACTION_REFRESH};
+    constexpr int resources[] = {IDI_TREE_FILE_DATABASE, IDI_TREE_SERVER_DATABASE, IDI_TREE_FOLDER, IDI_ACTION_FAVORITE, IDI_ACTION_REFRESH};
     bool complete = true;
     for (const int resource : resources) {
       const auto icon = LoadResourceIcon(instance_, resource, 20);
@@ -323,8 +346,19 @@ void MainWindow::Layout(int width, int height) {
   ListView_SetColumnWidth(details_, 0, keyWidth);
   ListView_SetColumnWidth(details_, 1, std::max(80, rightWidth - keyWidth - 5));
   const int y = height - bottom - 82;
-  MoveWindow(enterprise_, rightX, y, 150, 30, TRUE); MoveWindow(designer_, rightX + 159, y, 150, 30, TRUE); MoveWindow(edit_, rightX + 318, y, 105, 30, TRUE);
-  MoveWindow(cache_, rightX, y + 36, 115, 30, TRUE); MoveWindow(shortcut_, rightX + 124, y + 36, 130, 30, TRUE); MoveWindow(remove_, rightX + 263, y + 36, 100, 30, TRUE);
+  constexpr int buttonGap = 8;
+  const int enterpriseWidth = ButtonIdealWidth(enterprise_, 170);
+  const int designerWidth = ButtonIdealWidth(designer_, 185);
+  const int editWidth = ButtonIdealWidth(edit_, 115);
+  const int cacheWidth = ButtonIdealWidth(cache_, 132);
+  const int shortcutWidth = ButtonIdealWidth(shortcut_, 150);
+  const int removeWidth = ButtonIdealWidth(remove_, 115);
+  MoveWindow(enterprise_, rightX, y, enterpriseWidth, 30, TRUE);
+  MoveWindow(designer_, rightX + enterpriseWidth + buttonGap, y, designerWidth, 30, TRUE);
+  MoveWindow(edit_, rightX + enterpriseWidth + designerWidth + buttonGap * 2, y, editWidth, 30, TRUE);
+  MoveWindow(cache_, rightX, y + 36, cacheWidth, 30, TRUE);
+  MoveWindow(shortcut_, rightX + cacheWidth + buttonGap, y + 36, shortcutWidth, 30, TRUE);
+  MoveWindow(remove_, rightX + cacheWidth + shortcutWidth + buttonGap * 2, y + 36, removeWidth, 30, TRUE);
   SendMessageW(status_, WM_SIZE, 0, 0);
 }
 
@@ -374,7 +408,8 @@ void MainWindow::AddTreeItems(const std::vector<catalog::TreeItem>& items, HTREE
     TVINSERTSTRUCTW row{}; row.hParent = parent; row.hInsertAfter = TVI_LAST;
     row.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE;
     row.item.pszText = const_cast<wchar_t*>(item.name.c_str());
-    row.item.iImage = row.item.iSelectedImage = item.database ? kDatabaseImage : kFolderImage;
+    const auto* entry = catalog_ ? catalog_->Find(item.name) : nullptr;
+    row.item.iImage = row.item.iSelectedImage = item.database ? DatabaseTreeImage(entry) : kFolderImage;
     const HTREEITEM handle = TreeView_InsertItem(tree_, &row);
     if (!item.database) {
       AddTreeItems(item.children, handle, filter);
@@ -397,7 +432,7 @@ void MainWindow::PopulateTree() {
         const auto* entry = catalog_->Find(name); if (!entry || !entry->IsDatabase() || (!filter.empty() && utf::FindNoCaseOrdinal(entry->name, filter) == std::wstring_view::npos)) continue;
         TVINSERTSTRUCTW row{}; row.hParent = rootHandle; row.hInsertAfter = TVI_LAST;
         row.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE; row.item.pszText = const_cast<wchar_t*>(entry->name.c_str());
-        row.item.iImage = row.item.iSelectedImage = kDatabaseImage; TreeView_InsertItem(tree_, &row); any = true;
+        row.item.iImage = row.item.iSelectedImage = DatabaseTreeImage(entry); TreeView_InsertItem(tree_, &row); any = true;
       }
       if (any) TreeView_Expand(tree_, rootHandle, TVE_EXPAND); else TreeView_DeleteItem(tree_, rootHandle);
     };
