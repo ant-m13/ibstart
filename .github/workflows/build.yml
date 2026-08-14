@@ -36,6 +36,13 @@ jobs:
         run: ./.github/scripts/setup-msvc.ps1
       - name: Configure CMake
         run: cmake -S . -B out/build/ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+      - name: Verify visual styles manifest
+        shell: pwsh
+        run: |
+          $manifest = Get-Content -Raw out/build/ci/app.manifest
+          if ($manifest -notmatch 'Microsoft\.Windows\.Common-Controls' -or $manifest -notmatch 'version="6\.0\.0\.0"') {
+            throw 'IBStart manifest must enable Microsoft.Windows.Common-Controls v6 for alpha-aware icons and button image lists.'
+          }
       - name: Build Release
         run: cmake --build out/build/ci --parallel
       - name: Run CTest

@@ -40,15 +40,15 @@ HFONT CreateUiFont(HWND window, int points, LONG weight) {
       DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 }
 void AttachButtonIcon(HWND button, HINSTANCE instance, int resource, std::vector<HIMAGELIST>& storage) {
-  HIMAGELIST images = ImageList_Create(18, 18, ILC_COLOR32, 1, 1);
-  HICON icon = LoadResourceIcon(instance, resource, 18);
+  HIMAGELIST images = ImageList_Create(20, 20, ILC_COLOR32 | ILC_MASK, 1, 1);
+  HICON icon = LoadResourceIcon(instance, resource, 20);
   if (!images || !icon || ImageList_AddIcon(images, icon) < 0) {
     if (icon) DestroyIcon(icon);
     if (images) ImageList_Destroy(images);
     return;
   }
   DestroyIcon(icon);
-  BUTTON_IMAGELIST layout{}; layout.himl = images; layout.margin = {6, 0, 5, 0}; layout.uAlign = BUTTON_IMAGELIST_ALIGN_LEFT;
+  BUTTON_IMAGELIST layout{}; layout.himl = images; layout.margin = {7, 0, 6, 0}; layout.uAlign = BUTTON_IMAGELIST_ALIGN_LEFT;
   if (!SendMessageW(button, BCM_SETIMAGELIST, 0, reinterpret_cast<LPARAM>(&layout))) { ImageList_Destroy(images); return; }
   storage.push_back(images);
 }
@@ -118,6 +118,7 @@ MainWindow::MainWindow(HINSTANCE instance, std::filesystem::path executable, sto
       logger_(layout_.root / L"logs"), initial_launch_id_(std::move(launch_id)) {}
 MainWindow::~MainWindow() {
   if (window_ && IsWindow(window_)) DestroyWindow(window_);
+  ClearContextMenuItems();
   for (const auto images : button_images_) if (images) ImageList_Destroy(images);
   if (tree_images_) ImageList_Destroy(tree_images_);
   if (details_title_font_) DeleteObject(details_title_font_);
@@ -217,6 +218,12 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
         return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
       }
       break;
+    case WM_MEASUREITEM:
+      if (lparam && MeasureContextMenuItem(reinterpret_cast<MEASUREITEMSTRUCT*>(lparam))) return TRUE;
+      break;
+    case WM_DRAWITEM:
+      if (lparam && DrawContextMenuItem(reinterpret_cast<const DRAWITEMSTRUCT*>(lparam))) return TRUE;
+      break;
     case WM_LBUTTONUP:
       if (!dragging_name_.empty() && catalog_) {
         ReleaseCapture(); TVHITTESTINFO hit{}; hit.pt = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)}; MapWindowPoints(window_, tree_, &hit.pt, 1); TreeView_HitTest(tree_, &hit);
@@ -272,24 +279,24 @@ void MainWindow::CreateControls() {
   if (details_title_font_) SendMessageW(details_title_, WM_SETFONT, reinterpret_cast<WPARAM>(details_title_font_), TRUE);
   if (details_subtitle_font_) SendMessageW(details_subtitle_, WM_SETFONT, reinterpret_cast<WPARAM>(details_subtitle_font_), TRUE);
 
-  tree_images_ = ImageList_Create(18, 18, ILC_COLOR32, 4, 1);
+  tree_images_ = ImageList_Create(20, 20, ILC_COLOR32 | ILC_MASK, 4, 1);
   if (tree_images_) {
     constexpr int resources[] = {IDI_TREE_DATABASE, IDI_TREE_FOLDER, IDI_ACTION_FAVORITE, IDI_ACTION_REFRESH};
     bool complete = true;
     for (const int resource : resources) {
-      const auto icon = LoadResourceIcon(instance_, resource, 18);
+      const auto icon = LoadResourceIcon(instance_, resource, 20);
       if (!icon || ImageList_AddIcon(tree_images_, icon) < 0) complete = false;
       if (icon) DestroyIcon(icon);
     }
     if (complete) TreeView_SetImageList(tree_, tree_images_, TVSIL_NORMAL);
     else { ImageList_Destroy(tree_images_); tree_images_ = nullptr; }
   }
-  enterprise_ = CreateWindowW(L"BUTTON", L"Предприятие (F3)", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 380, 292, 145, 28, window_, reinterpret_cast<HMENU>(kEnterprise), instance_, nullptr);
-  designer_ = CreateWindowW(L"BUTTON", L"Конфигуратор (F4)", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 534, 292, 145, 28, window_, reinterpret_cast<HMENU>(kDesigner), instance_, nullptr);
-  edit_ = CreateWindowW(L"BUTTON", L"Изменить", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 688, 292, 85, 28, window_, reinterpret_cast<HMENU>(kEdit), instance_, nullptr);
-  cache_ = CreateWindowW(L"BUTTON", L"Очистить кэш", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 380, 328, 105, 28, window_, reinterpret_cast<HMENU>(kCache), instance_, nullptr);
-  shortcut_ = CreateWindowW(L"BUTTON", L"Создать ярлык", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 494, 328, 110, 28, window_, reinterpret_cast<HMENU>(kShortcut), instance_, nullptr);
-  remove_ = CreateWindowW(L"BUTTON", L"Удалить", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 613, 328, 85, 28, window_, reinterpret_cast<HMENU>(kDelete), instance_, nullptr);
+  enterprise_ = CreateWindowW(L"BUTTON", L"Предприятие (F3)", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 380, 292, 150, 30, window_, reinterpret_cast<HMENU>(kEnterprise), instance_, nullptr);
+  designer_ = CreateWindowW(L"BUTTON", L"Конфигуратор (F4)", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 534, 292, 150, 30, window_, reinterpret_cast<HMENU>(kDesigner), instance_, nullptr);
+  edit_ = CreateWindowW(L"BUTTON", L"Изменить", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 688, 292, 105, 30, window_, reinterpret_cast<HMENU>(kEdit), instance_, nullptr);
+  cache_ = CreateWindowW(L"BUTTON", L"Очистить кэш", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 380, 328, 115, 30, window_, reinterpret_cast<HMENU>(kCache), instance_, nullptr);
+  shortcut_ = CreateWindowW(L"BUTTON", L"Создать ярлык", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 504, 328, 130, 30, window_, reinterpret_cast<HMENU>(kShortcut), instance_, nullptr);
+  remove_ = CreateWindowW(L"BUTTON", L"Удалить", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 643, 328, 100, 30, window_, reinterpret_cast<HMENU>(kDelete), instance_, nullptr);
   AttachButtonIcon(enterprise_, instance_, IDI_ACTION_ENTERPRISE, button_images_);
   AttachButtonIcon(designer_, instance_, IDI_ACTION_DESIGNER, button_images_);
   AttachButtonIcon(edit_, instance_, IDI_ACTION_EDIT, button_images_);
@@ -316,8 +323,8 @@ void MainWindow::Layout(int width, int height) {
   ListView_SetColumnWidth(details_, 0, keyWidth);
   ListView_SetColumnWidth(details_, 1, std::max(80, rightWidth - keyWidth - 5));
   const int y = height - bottom - 82;
-  MoveWindow(enterprise_, rightX, y, 150, 28, TRUE); MoveWindow(designer_, rightX + 159, y, 150, 28, TRUE); MoveWindow(edit_, rightX + 318, y, 105, 28, TRUE);
-  MoveWindow(cache_, rightX, y + 36, 115, 28, TRUE); MoveWindow(shortcut_, rightX + 124, y + 36, 130, 28, TRUE); MoveWindow(remove_, rightX + 263, y + 36, 100, 28, TRUE);
+  MoveWindow(enterprise_, rightX, y, 150, 30, TRUE); MoveWindow(designer_, rightX + 159, y, 150, 30, TRUE); MoveWindow(edit_, rightX + 318, y, 105, 30, TRUE);
+  MoveWindow(cache_, rightX, y + 36, 115, 30, TRUE); MoveWindow(shortcut_, rightX + 124, y + 36, 130, 30, TRUE); MoveWindow(remove_, rightX + 263, y + 36, 100, 30, TRUE);
   SendMessageW(status_, WM_SIZE, 0, 0);
 }
 
@@ -461,6 +468,76 @@ LRESULT MainWindow::DrawDetailsList(NMLVCUSTOMDRAW* draw) const {
   }
   return CDRF_DODEFAULT;
 }
+bool MainWindow::MeasureContextMenuItem(MEASUREITEMSTRUCT* measure) const {
+  if (!measure || measure->CtlType != ODT_MENU) return false;
+  const auto* item = reinterpret_cast<const ContextMenuItem*>(measure->itemData);
+  const auto found = std::find_if(context_menu_items_.begin(), context_menu_items_.end(), [item](const auto& candidate) { return &candidate == item; });
+  if (found == context_menu_items_.end()) return false;
+
+  HDC context = GetDC(window_);
+  if (!context) return false;
+  const HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+  const auto previous = SelectObject(context, font);
+  SIZE size{};
+  GetTextExtentPoint32W(context, item->text.c_str(), static_cast<int>(item->text.size()), &size);
+  SelectObject(context, previous);
+  ReleaseDC(window_, context);
+  measure->itemHeight = 28;
+  measure->itemWidth = std::max<UINT>(138, static_cast<UINT>(size.cx + 44));
+  return true;
+}
+
+bool MainWindow::DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const {
+  if (!draw || draw->CtlType != ODT_MENU) return false;
+  const auto* item = reinterpret_cast<const ContextMenuItem*>(draw->itemData);
+  const auto found = std::find_if(context_menu_items_.begin(), context_menu_items_.end(), [item](const auto& candidate) { return &candidate == item; });
+  if (found == context_menu_items_.end()) return false;
+
+  const bool disabled = (draw->itemState & ODS_DISABLED) != 0;
+  const bool selected = (draw->itemState & ODS_SELECTED) != 0 && !disabled;
+  const int saved = SaveDC(draw->hDC);
+  FillRect(draw->hDC, &draw->rcItem, GetSysColorBrush(selected ? COLOR_HIGHLIGHT : COLOR_MENU));
+  const int iconX = draw->rcItem.left + 7;
+  const int iconY = draw->rcItem.top + (static_cast<int>(draw->rcItem.bottom - draw->rcItem.top) - 20) / 2;
+  if (item->command == kMoveUp || item->command == kMoveDown) {
+    const COLORREF color = disabled ? GetSysColor(COLOR_GRAYTEXT) : RGB(0, 144, 162);
+    const HBRUSH brush = CreateSolidBrush(color);
+    const HPEN pen = CreatePen(PS_SOLID, 1, color);
+    const auto previousBrush = SelectObject(draw->hDC, brush);
+    const auto previousPen = SelectObject(draw->hDC, pen);
+    POINT arrow[] = {{iconX + 10, item->command == kMoveUp ? iconY + 1 : iconY + 19},
+        {iconX + 2, item->command == kMoveUp ? iconY + 9 : iconY + 11},
+        {iconX + 7, item->command == kMoveUp ? iconY + 9 : iconY + 11},
+        {iconX + 7, item->command == kMoveUp ? iconY + 19 : iconY + 1},
+        {iconX + 13, item->command == kMoveUp ? iconY + 19 : iconY + 1},
+        {iconX + 13, item->command == kMoveUp ? iconY + 9 : iconY + 11},
+        {iconX + 18, item->command == kMoveUp ? iconY + 9 : iconY + 11}};
+    Polygon(draw->hDC, arrow, 7);
+    SelectObject(draw->hDC, previousBrush);
+    SelectObject(draw->hDC, previousPen);
+    DeleteObject(brush);
+    DeleteObject(pen);
+  } else if (item->icon) {
+    if (disabled) DrawStateW(draw->hDC, nullptr, nullptr, reinterpret_cast<LPARAM>(item->icon), 0, iconX, iconY, 20, 20, DST_ICON | DSS_DISABLED);
+    else DrawIconEx(draw->hDC, iconX, iconY, item->icon, 20, 20, 0, nullptr, DI_NORMAL);
+  }
+  const HFONT font = static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+  SelectObject(draw->hDC, font);
+  SetBkMode(draw->hDC, TRANSPARENT);
+  SetTextColor(draw->hDC, GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : (disabled ? COLOR_GRAYTEXT : COLOR_MENUTEXT)));
+  RECT textRect = draw->rcItem;
+  textRect.left += 35;
+  DrawTextW(draw->hDC, item->text.c_str(), static_cast<int>(item->text.size()), &textRect, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+  if (draw->itemState & ODS_FOCUS) DrawFocusRect(draw->hDC, &draw->rcItem);
+  RestoreDC(draw->hDC, saved);
+  return true;
+}
+
+void MainWindow::ClearContextMenuItems() noexcept {
+  for (const auto& item : context_menu_items_) if (item.icon) DestroyIcon(item.icon);
+  context_menu_items_.clear();
+}
+
 std::wstring MainWindow::SelectedName() const { const auto item = TreeView_GetSelection(tree_); if (!item) return {}; wchar_t text[512]{}; TVITEMW data{}; data.mask = TVIF_TEXT; data.hItem = item; data.pszText = text; data.cchTextMax = 512; return TreeView_GetItem(tree_, &data) ? text : L""; }
 bool MainWindow::SelectTreeItem(std::wstring_view name) {
   if (!tree_ || name.empty()) return false;
@@ -481,6 +558,7 @@ bool MainWindow::SelectTreeItem(std::wstring_view name) {
 
 void MainWindow::ShowTreeContextMenu(POINT screen) {
   if (!tree_ || !catalog_) return;
+  ClearContextMenuItems();
   if (screen.x == -1 && screen.y == -1) {
     const auto selected = TreeView_GetSelection(tree_);
     RECT bounds{};
@@ -510,29 +588,42 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
 
   HMENU menu = CreatePopupMenu();
   if (!menu) return;
-  const auto state = [](bool enabled) { return static_cast<UINT>(MF_STRING | (enabled ? MF_ENABLED : MF_GRAYED)); };
-  AppendMenuW(menu, state(database), kEnterprise, L"Предприятие\tF3");
-  AppendMenuW(menu, state(database), kDesigner, L"Конфигуратор\tF4");
-  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(menu, state(database) | (favorite ? MF_CHECKED : MF_UNCHECKED), kToggleFavorite,
-      favorite ? L"Убрать из избранного" : L"Добавить в избранное");
-  AppendMenuW(menu, state(editable), kEdit, L"Изменить…");
-  AppendMenuW(menu, state(database && !settings_.simple_mode), kCache, L"Очистить кэш…");
-  AppendMenuW(menu, state(database && !settings_.simple_mode), kShortcut, L"Создать ярлык");
-  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(menu, state(editable), kMoveUp, L"Переместить вверх");
-  AppendMenuW(menu, state(editable), kMoveDown, L"Переместить вниз");
-  AppendMenuW(menu, state(editable), kDelete, L"Удалить…");
-  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(menu, state(!settings_.simple_mode), kAddFile, group ? L"Добавить файловую базу в группу…" : L"Добавить файловую базу…");
-  AppendMenuW(menu, state(!settings_.simple_mode), kAddServer, group ? L"Добавить серверную базу в группу…" : L"Добавить серверную базу…");
-  AppendMenuW(menu, state(!settings_.simple_mode), kAddGroup, group ? L"Добавить вложенную группу…" : L"Добавить группу…");
-  AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(menu, MF_STRING, kRefresh, L"Обновить список");
+  context_menu_items_.reserve(16);
+  const auto append = [&](bool enabled, bool checked, UINT command, int iconResource, std::wstring text) {
+    ContextMenuItem visual{command, iconResource == 0 ? nullptr : LoadResourceIcon(instance_, iconResource, 20), std::move(text)};
+    context_menu_items_.push_back(std::move(visual));
+    MENUITEMINFOW item{};
+    item.cbSize = sizeof(item);
+    item.fMask = MIIM_FTYPE | MIIM_ID | MIIM_STATE | MIIM_DATA;
+    item.fType = MFT_OWNERDRAW;
+    item.wID = command;
+    item.fState = (enabled ? MFS_ENABLED : MFS_DISABLED) | (checked ? MFS_CHECKED : 0);
+    item.dwItemData = reinterpret_cast<ULONG_PTR>(&context_menu_items_.back());
+    InsertMenuItemW(menu, static_cast<UINT>(GetMenuItemCount(menu)), TRUE, &item);
+  };
+  const auto separator = [&] { AppendMenuW(menu, MF_SEPARATOR, 0, nullptr); };
+  append(database, false, kEnterprise, IDI_ACTION_ENTERPRISE, L"Предприятие\tF3");
+  append(database, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор\tF4");
+  separator();
+  append(database, favorite, kToggleFavorite, IDI_ACTION_FAVORITE, favorite ? L"Убрать из избранного" : L"Добавить в избранное");
+  append(editable, false, kEdit, IDI_ACTION_EDIT, L"Изменить…");
+  append(database && !settings_.simple_mode, false, kCache, IDI_ACTION_CACHE, L"Очистить кэш…");
+  append(database && !settings_.simple_mode, false, kShortcut, IDI_ACTION_SHORTCUT, L"Создать ярлык");
+  separator();
+  append(editable, false, kMoveUp, 0, L"Переместить вверх");
+  append(editable, false, kMoveDown, 0, L"Переместить вниз");
+  append(editable, false, kDelete, IDI_ACTION_DELETE, L"Удалить…");
+  separator();
+  append(!settings_.simple_mode, false, kAddFile, IDI_ACTION_ADD, group ? L"Добавить файловую базу в группу…" : L"Добавить файловую базу…");
+  append(!settings_.simple_mode, false, kAddServer, IDI_ACTION_ADD, group ? L"Добавить серверную базу в группу…" : L"Добавить серверную базу…");
+  append(!settings_.simple_mode, false, kAddGroup, IDI_TREE_FOLDER, group ? L"Добавить вложенную группу…" : L"Добавить группу…");
+  separator();
+  append(true, false, kRefresh, IDI_ACTION_REFRESH, L"Обновить список");
 
   SetForegroundWindow(window_);
   const UINT command = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, window_, nullptr);
   DestroyMenu(menu);
+  ClearContextMenuItems();
   if (!command) return;
   if (command == kAddFile) AddFileDatabase(addParent);
   else if (command == kAddServer) AddServerDatabase(addParent);
