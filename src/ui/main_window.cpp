@@ -85,7 +85,7 @@ std::wstring FriendlyFieldName(std::wstring_view key) {
   constexpr Label labels[] = {{L"Connect", L"Подключение"}, {L"ID", L"Идентификатор"}, {L"Folder", L"Группа"},
       {L"OrderInList", L"Порядок"}, {L"Version", L"Версия платформы"}, {L"App", L"Приложение"},
       {L"DefaultApp", L"Приложение по умолчанию"}, {L"WA", L"Аутентификация ОС"}, {L"External", L"Внешняя"},
-      {L"Locale", L"Локаль"}, {L"ClientConnectionSpeed", L"Скорость соединения"}, {L"AdditionalParameters", L"Доп. параметры"}};
+      {L"Locale", L"Локаль"}, {L"ClientConnectionSpeed", L"Скорость соединения"}, {L"AppArch", L"Разрядность"}, {L"AdditionalParameters", L"Доп. параметры"}};
   for (const auto& label : labels) if (CompareStringOrdinal(key.data(), static_cast<int>(key.size()), label.key.data(), static_cast<int>(label.key.size()), TRUE) == CSTR_EQUAL) return std::wstring(label.text);
   return std::wstring(key);
 }
@@ -164,6 +164,7 @@ struct DatabaseEditorData {
   std::wstring external;
   std::wstring locale;
   std::wstring client_connection_speed;
+  std::wstring app_arch;
   std::wstring additional_parameters;
   DatabaseConnectionKind kind{DatabaseConnectionKind::server};
 };
@@ -232,7 +233,7 @@ std::wstring BuildConnection(DatabaseConnectionKind kind, std::wstring_view orig
 enum DatabaseEditorControl : int {
   kDatabaseName = 1000, kConnectionFile, kConnectionWeb, kConnectionServer, kFilePath, kBrowseFilePath,
   kWebAddress, kServerCluster, kServerReference, kLaunchVersion, kLaunchApp, kLaunchDefaultApp,
-  kLaunchWindowsAuth, kLaunchExternal, kLaunchLocale, kLaunchSpeed, kLaunchParameters
+  kLaunchWindowsAuth, kLaunchExternal, kLaunchLocale, kLaunchSpeed, kLaunchArchitecture, kLaunchParameters
 };
 
 struct DatabaseEditorState {
@@ -250,6 +251,7 @@ struct DatabaseEditorState {
   HWND server_label{};
   HWND reference_label{};
   HWND version{};
+  HWND architecture{};
   HWND app{};
   HWND default_app{};
   HWND windows_auth{};
@@ -283,6 +285,22 @@ std::wstring ApplicationValue(std::wstring_view label) {
   if (EqualNoCase(label, L"Толстый клиент")) return L"ThickClient";
   if (EqualNoCase(label, L"Тонкий клиент")) return L"ThinClient";
   if (EqualNoCase(label, L"Веб-клиент")) return L"WebClient";
+  return std::wstring(label);
+}
+std::wstring ArchitectureLabel(std::wstring_view value) {
+  if (value.empty()) return L"Автоматически";
+  if (EqualNoCase(value, L"x86")) return L"Только 32 (x86)";
+  if (EqualNoCase(value, L"x86_64")) return L"Только 64 (x86_64)";
+  if (EqualNoCase(value, L"x86_prt")) return L"Приоритет 32 (x86_prt)";
+  if (EqualNoCase(value, L"x86_64_prt")) return L"Приоритет 64 (x86_64_prt)";
+  return std::wstring(value);
+}
+std::wstring ArchitectureValue(std::wstring_view label) {
+  if (EqualNoCase(label, L"Автоматически")) return {};
+  if (EqualNoCase(label, L"Только 32 (x86)")) return L"x86";
+  if (EqualNoCase(label, L"Только 64 (x86_64)")) return L"x86_64";
+  if (EqualNoCase(label, L"Приоритет 32 (x86_prt)")) return L"x86_prt";
+  if (EqualNoCase(label, L"Приоритет 64 (x86_64_prt)")) return L"x86_64_prt";
   return std::wstring(label);
 }
 domain::ClientType ClientTypeFromApplication(std::wstring_view value) {
@@ -350,6 +368,7 @@ std::optional<std::wstring> CollectDatabaseEditorResult(DatabaseEditorState& sta
   result.external = FlagValue(state.external, state.initial.external);
   result.locale = TrimText(ReadControlText(state.locale));
   result.client_connection_speed = SpeedValue(ReadControlText(state.speed));
+  result.app_arch = ArchitectureValue(ReadControlText(state.architecture));
   result.additional_parameters = ReadControlText(state.parameters);
   state.result = std::move(result);
   return std::nullopt;
@@ -382,9 +401,9 @@ void CreateDatabaseEditorControls(HWND dialog, DatabaseEditorState& state, const
   state.reference_label = create(0, L"STATIC", L"Имя информационной базы:", 0, 48, 310, 170, 20, 0, textFont);
   state.reference = create(WS_EX_CLIENTEDGE, L"EDIT", ConnectionValue(state.initial.connect, L"Ref"), WS_TABSTOP | ES_AUTOHSCROLL, 220, 306, 414, 25, kServerReference, textFont);
 
-  create(0, L"BUTTON", L"Параметры запуска", BS_GROUPBOX, 14, 342, 632, 218, 0, textFont);
+  create(0, L"BUTTON", L"Параметры запуска", BS_GROUPBOX, 14, 342, 632, 258, 0, textFont);
   create(0, L"STATIC", L"Версия платформы:", 0, 28, 366, 150, 20, 0, textFont);
-  state.version = create(0, WC_COMBOBOXW, L"", WS_TABSTOP | CBS_DROPDOWN | WS_VSCROLL, 190, 362, 190, 160, kLaunchVersion, textFont);
+  state.version = create(0, WC_COMBOBOXW, L"", WS_TABSTOP | CBS_DROPDOWN | WS_VSCROLL, 160, 362, 175, 160, kLaunchVersion, textFont);
   SendMessageW(state.version, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Авто"));
   for (const auto& platform : platforms) {
     if (SendMessageW(state.version, CB_FINDSTRINGEXACT, static_cast<WPARAM>(-1), reinterpret_cast<LPARAM>(platform.version.c_str())) == CB_ERR) {
@@ -392,26 +411,32 @@ void CreateDatabaseEditorControls(HWND dialog, DatabaseEditorState& state, const
     }
   }
   SetComboValue(state.version, state.initial.version.empty() ? L"Авто" : state.initial.version);
-  create(0, L"STATIC", L"Режим клиента:", 0, 400, 366, 110, 20, 0, textFont);
-  state.app = create(0, WC_COMBOBOXW, L"", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 512, 362, 122, 160, kLaunchApp, textFont);
+  create(0, L"STATIC", L"Разрядность:", 0, 355, 366, 96, 20, 0, textFont);
+  state.architecture = create(0, WC_COMBOBOXW, L"", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 455, 362, 179, 180, kLaunchArchitecture, textFont);
+  for (const auto* label : {L"Автоматически", L"Только 32 (x86)", L"Только 64 (x86_64)", L"Приоритет 32 (x86_prt)", L"Приоритет 64 (x86_64_prt)"}) {
+    SendMessageW(state.architecture, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label));
+  }
+  SetComboValue(state.architecture, ArchitectureLabel(state.initial.app_arch));
+  create(0, L"STATIC", L"Режим клиента:", 0, 28, 400, 120, 20, 0, textFont);
+  state.app = create(0, WC_COMBOBOXW, L"", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 160, 396, 175, 160, kLaunchApp, textFont);
   for (const auto* label : {L"Автоматически", L"Толстый клиент", L"Тонкий клиент", L"Веб-клиент"}) SendMessageW(state.app, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label));
   SetComboValue(state.app, ApplicationLabel(state.initial.app));
-  create(0, L"STATIC", L"Приложение по умолчанию:", 0, 28, 398, 180, 20, 0, textFont);
-  state.default_app = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.default_app, WS_TABSTOP | ES_AUTOHSCROLL, 220, 394, 160, 25, kLaunchDefaultApp, textFont);
-  create(0, L"STATIC", L"Скорость соединения:", 0, 400, 398, 130, 20, 0, textFont);
-  state.speed = create(0, WC_COMBOBOXW, L"", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 530, 394, 104, 100, kLaunchSpeed, textFont);
+  create(0, L"STATIC", L"Скорость соединения:", 0, 355, 400, 110, 20, 0, textFont);
+  state.speed = create(0, WC_COMBOBOXW, L"", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 470, 396, 164, 100, kLaunchSpeed, textFont);
   for (const auto* label : {L"Обычная", L"Низкая"}) SendMessageW(state.speed, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label));
   SetComboValue(state.speed, SpeedLabel(state.initial.client_connection_speed));
-  state.windows_auth = create(0, L"BUTTON", L"Использовать аутентификацию ОС", WS_TABSTOP | BS_AUTOCHECKBOX, 28, 432, 250, 20, kLaunchWindowsAuth, textFont);
-  state.external = create(0, L"BUTTON", L"Внешняя информационная база", WS_TABSTOP | BS_AUTOCHECKBOX, 292, 432, 250, 20, kLaunchExternal, textFont);
+  create(0, L"STATIC", L"Приложение по умолчанию:", 0, 28, 434, 180, 20, 0, textFont);
+  state.default_app = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.default_app, WS_TABSTOP | ES_AUTOHSCROLL, 210, 430, 170, 25, kLaunchDefaultApp, textFont);
+  create(0, L"STATIC", L"Локаль:", 0, 400, 434, 55, 20, 0, textFont);
+  state.locale = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.locale, WS_TABSTOP | ES_AUTOHSCROLL, 462, 430, 172, 25, kLaunchLocale, textFont);
+  state.windows_auth = create(0, L"BUTTON", L"Использовать аутентификацию ОС", WS_TABSTOP | BS_AUTOCHECKBOX, 28, 466, 250, 20, kLaunchWindowsAuth, textFont);
+  state.external = create(0, L"BUTTON", L"Внешняя информационная база", WS_TABSTOP | BS_AUTOCHECKBOX, 292, 466, 250, 20, kLaunchExternal, textFont);
   SendMessageW(state.windows_auth, BM_SETCHECK, IsEnabledFlag(state.initial.wa) ? BST_CHECKED : BST_UNCHECKED, 0);
   SendMessageW(state.external, BM_SETCHECK, IsEnabledFlag(state.initial.external) ? BST_CHECKED : BST_UNCHECKED, 0);
-  create(0, L"STATIC", L"Локаль:", 0, 28, 460, 60, 20, 0, textFont);
-  state.locale = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.locale, WS_TABSTOP | ES_AUTOHSCROLL, 92, 456, 125, 25, kLaunchLocale, textFont);
-  create(0, L"STATIC", L"Дополнительные параметры запуска:", 0, 230, 460, 240, 20, 0, textFont);
-  state.parameters = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.additional_parameters, WS_TABSTOP | ES_AUTOHSCROLL, 230, 456, 404, 25, kLaunchParameters, textFont);
-  create(0, L"BUTTON", L"Сохранить", WS_TABSTOP | BS_DEFPUSHBUTTON, 450, 578, 90, 28, IDOK, buttonFont);
-  create(0, L"BUTTON", L"Отмена", WS_TABSTOP, 550, 578, 84, 28, IDCANCEL, buttonFont);
+  create(0, L"STATIC", L"Дополнительные параметры запуска:", 0, 28, 496, 260, 20, 0, textFont);
+  state.parameters = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.additional_parameters, WS_TABSTOP | ES_AUTOHSCROLL, 28, 516, 606, 25, kLaunchParameters, textFont);
+  create(0, L"BUTTON", L"Сохранить", WS_TABSTOP | BS_DEFPUSHBUTTON, 450, 620, 90, 28, IDOK, buttonFont);
+  create(0, L"BUTTON", L"Отмена", WS_TABSTOP, 550, 620, 84, 28, IDCANCEL, buttonFont);
   state.kind = state.initial.kind;
   UpdateConnectionControls(state);
 }
@@ -458,7 +483,7 @@ std::optional<DatabaseEditorData> EditDatabase(HWND owner, std::wstring_view tit
   if (owner) EnableWindow(owner, FALSE);
   constexpr DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP;
   constexpr DWORD extendedStyle = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
-  const SIZE outerSize = DialogOuterSize(owner, 660, 620, style, extendedStyle);
+  const SIZE outerSize = DialogOuterSize(owner, 660, 660, style, extendedStyle);
   HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT, kDatabaseEditorClass, std::wstring(title).c_str(),
       style, CW_USEDEFAULT, CW_USEDEFAULT, outerSize.cx, outerSize.cy,
       owner, nullptr, GetModuleHandleW(nullptr), &state);
@@ -495,6 +520,7 @@ DatabaseEditorData DatabaseEditorDataFromEntry(const domain::Entry& entry) {
   result.external = entry.ValueOr(L"External");
   result.locale = entry.ValueOr(L"Locale");
   result.client_connection_speed = entry.ValueOr(L"ClientConnectionSpeed");
+  result.app_arch = entry.ValueOr(L"AppArch");
   result.additional_parameters = entry.ValueOr(L"AdditionalParameters");
   result.kind = DetectConnectionKind(result.connect);
   return result;
@@ -508,6 +534,7 @@ void ApplyDatabaseEditorData(domain::Entry& entry, const DatabaseEditorData& dat
   entry.Set(L"External", data.external);
   entry.Set(L"Locale", data.locale);
   entry.Set(L"ClientConnectionSpeed", data.client_connection_speed);
+  entry.Set(L"AppArch", data.app_arch);
   entry.Set(L"AdditionalParameters", data.additional_parameters);
 }
 
@@ -693,7 +720,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
         SetTextColor(context, reinterpret_cast<HWND>(lparam) == details_title_ ? RGB(0, 116, 136) : RGB(82, 96, 109));
         return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
       }
-      break;
+      return DialogControlColor(message, wparam, lparam);
     case WM_MEASUREITEM:
       if (lparam && MeasureContextMenuItem(reinterpret_cast<MEASUREITEMSTRUCT*>(lparam))) return TRUE;
       break;
@@ -1198,7 +1225,12 @@ void MainWindow::DisplaySelected() {
 void MainWindow::LaunchSelected(domain::LaunchMode mode) {
   if (!catalog_) return; const auto name = SelectedName(); const auto* entry = catalog_->Find(name); if (!entry || !entry->IsDatabase()) { Message(window_, L"Выберите информационную базу."); return; }
   try { const auto database = catalog_->DatabaseFor(name); if (const auto webUrl = catalog::Catalog::WebUrl(database.connect)) { const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", webUrl->c_str(), nullptr, nullptr, SW_SHOWNORMAL)); if (result <= 32) throw std::runtime_error("Unable to open the web database URL."); return; }
-    domain::LaunchOptions options; options.mode = mode; options.client_type = ClientTypeFromApplication(database.app); if (database.version != L"" && database.version != L"Авто") options.version = database.version;
+    domain::LaunchOptions options;
+    options.mode = mode;
+    options.client_type = ClientTypeFromApplication(database.app);
+    if (const auto fromParameters = launcher::AppArchitectureFromParameters(database.additional_parameters)) options.architecture = *fromParameters;
+    else if (const auto fromDatabase = launcher::ParseAppArchitecture(database.app_arch)) options.architecture = *fromDatabase;
+    if (database.version != L"" && database.version != L"Авто") options.version = database.version;
     if (options.client_type == domain::ClientType::web) { Message(window_, L"Веб-клиент можно использовать только для веб-базы с адресом http:// или https://.", L"ИБ Старт", MB_OK | MB_ICONWARNING); return; }
     const auto selected = launcher::SelectPlatform(platforms_, options); if (!selected) { Message(window_, L"Подходящая платформа 1С не найдена. Проверьте установку и настройки поиска.", L"ИБ Старт", MB_OK | MB_ICONERROR); return; }
     const auto parameters = database.additional_parameters; if (utf::FindNoCaseOrdinal(parameters, L"/p") != std::wstring_view::npos && MessageBoxW(window_, L"В дополнительных параметрах обнаружен /P. Пароль может храниться в открытом виде в ibases.v8i. Продолжить?", L"Предупреждение", MB_YESNO | MB_ICONWARNING) != IDYES) return;
