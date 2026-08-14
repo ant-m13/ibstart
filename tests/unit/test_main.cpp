@@ -1,4 +1,5 @@
 #include "core/catalog/catalog.hpp"
+#include "core/domain/version.hpp"
 #include "core/launcher/command_builder.hpp"
 #include "core/logging/logging.hpp"
 #include "core/storage/storage.hpp"
@@ -41,6 +42,14 @@ void TestV8iRoundTrip() {
   CHECK(reread && reread->entry.ValueOr(L"Connect") == L"File=\"C:\\Рабочие базы\\Моя база\"");
   const auto withoutFinalNewline = ibstart::v8i::V8iDocument::ParseUtf8("[Base]\nConnect=x");
   CHECK(withoutFinalNewline.SerializeUtf8() == "[Base]\nConnect=x");
+}
+
+void TestProductVersion() {
+  CHECK(!ibstart::version::value.empty());
+  const auto core = std::to_wstring(ibstart::version::major) + L"." + std::to_wstring(ibstart::version::minor) + L"." + std::to_wstring(ibstart::version::patch);
+  const auto file = core + L"." + std::to_wstring(ibstart::version::revision);
+  CHECK(ibstart::version::value.starts_with(core));
+  CHECK(ibstart::version::file_value == file);
 }
 
 void TestNoBomAndCatalog() {
@@ -125,6 +134,7 @@ int wmain() {
     catch (...) { std::wcerr << L"UNCAUGHT unknown exception\n"; ++failures; }
   };
   run(L"V8iRoundTrip", TestV8iRoundTrip);
+  run(L"ProductVersion", TestProductVersion);
   run(L"NoBomAndCatalog", TestNoBomAndCatalog);
   run(L"SafeStore", TestSafeStore);
   run(L"CommandBuilderAndSelection", TestCommandBuilderAndSelection);

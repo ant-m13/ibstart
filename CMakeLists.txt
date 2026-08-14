@@ -1,6 +1,22 @@
 cmake_minimum_required(VERSION 3.24)
 
-project(IBStart VERSION 0.1.0 LANGUAGES CXX)
+include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/IBStartVersion.cmake")
+if(NOT IBSTART_VERSION MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)(-([0-9A-Za-z]+)(\\.([0-9A-Za-z.-]+))?)?$")
+  message(FATAL_ERROR "IBSTART_VERSION must be SemVer without build metadata: ${IBSTART_VERSION}")
+endif()
+set(IBSTART_VERSION_MAJOR "${CMAKE_MATCH_1}")
+set(IBSTART_VERSION_MINOR "${CMAKE_MATCH_2}")
+set(IBSTART_VERSION_PATCH "${CMAKE_MATCH_3}")
+set(IBSTART_VERSION_PRERELEASE "${CMAKE_MATCH_4}")
+set(IBSTART_VERSION_REVISION 0)
+if(IBSTART_VERSION_PRERELEASE MATCHES "([0-9]+)$")
+  set(IBSTART_VERSION_REVISION "${CMAKE_MATCH_1}")
+endif()
+set(IBSTART_VERSION_CORE "${IBSTART_VERSION_MAJOR}.${IBSTART_VERSION_MINOR}.${IBSTART_VERSION_PATCH}")
+set(IBSTART_FILE_VERSION "${IBSTART_VERSION_CORE}.${IBSTART_VERSION_REVISION}")
+set(IBSTART_VERSION_COMMA "${IBSTART_VERSION_MAJOR},${IBSTART_VERSION_MINOR},${IBSTART_VERSION_PATCH},${IBSTART_VERSION_REVISION}")
+
+project(IBStart VERSION "${IBSTART_VERSION_CORE}" LANGUAGES CXX)
 
 if(NOT WIN32)
   message(FATAL_ERROR "IBStart is a native Windows application and must be built on Windows.")
@@ -17,6 +33,14 @@ set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 string(REPLACE "/O2" "/O1" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
 
+set(IBSTART_GENERATED_DIR "${CMAKE_CURRENT_BINARY_DIR}/generated")
+file(MAKE_DIRECTORY "${IBSTART_GENERATED_DIR}/core/domain")
+configure_file(src/core/domain/version.hpp.in "${IBSTART_GENERATED_DIR}/core/domain/version.hpp" @ONLY)
+configure_file(src/app/IBStart.rc.in "${IBSTART_GENERATED_DIR}/IBStart.rc" @ONLY)
+configure_file(src/app/app.manifest.in "${IBSTART_GENERATED_DIR}/app.manifest" @ONLY)
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/ibstart-version.txt" "${IBSTART_VERSION}\n")
+message(STATUS "IBStart product version: ${IBSTART_VERSION} (file version ${IBSTART_FILE_VERSION})")
+
 add_library(ibstart_core STATIC
   src/core/catalog/catalog.cpp
   src/core/v8i/v8i_document.cpp
@@ -29,7 +53,7 @@ add_library(ibstart_core STATIC
   src/core/logging/logging.cpp
   src/core/shell/shortcut.cpp
 )
-target_include_directories(ibstart_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
+target_include_directories(ibstart_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src" "${IBSTART_GENERATED_DIR}")
 target_compile_definitions(ibstart_core PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
 target_compile_options(ibstart_core PRIVATE /W4 /permissive- /EHsc /Zc:__cplusplus /utf-8)
 target_link_libraries(ibstart_core PUBLIC Advapi32 Shell32 Ole32)
@@ -37,10 +61,9 @@ target_link_libraries(ibstart_core PUBLIC Advapi32 Shell32 Ole32)
 add_executable(IBStart WIN32
   src/app/main.cpp
   src/ui/main_window.cpp
-  src/app/IBStart.rc
-  src/app/app.manifest
+  "${IBSTART_GENERATED_DIR}/IBStart.rc"
+  "${IBSTART_GENERATED_DIR}/app.manifest"
 )
-target_include_directories(IBStart PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/app")
 target_link_libraries(IBStart PRIVATE ibstart_core Comctl32)
 target_compile_definitions(IBStart PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
 target_compile_options(IBStart PRIVATE /W4 /permissive- /EHsc /Zc:__cplusplus /utf-8)

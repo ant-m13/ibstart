@@ -15,6 +15,22 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Validate product version
+        id: version
+        shell: pwsh
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+        run: |
+          $version = (./.github/scripts/read-version.ps1).Trim()
+          $tag = "v$version"
+          $null = ./.github/scripts/read-changelog-section.ps1 -Version $version
+          if ($env:EVENT_NAME -eq "pull_request") {
+            $remoteTag = git ls-remote --tags origin "refs/tags/$tag"
+            if ($LASTEXITCODE -ne 0) { throw "Unable to check whether tag $tag already exists." }
+            if ($remoteTag) { throw "Version $version has already been released as $tag. Increment cmake/IBStartVersion.cmake." }
+          }
+          "version=$version" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+          "### IBStart $version" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
       - name: Configure MSVC environment
         shell: pwsh
         run: ./.github/scripts/setup-msvc.ps1
@@ -26,19 +42,26 @@ jobs:
         run: ctest --test-dir out/build/ci --output-on-failure
       - name: Verify binary size
         shell: pwsh
+        env:
+          IBSTART_VERSION: ${{ steps.version.outputs.version }}
         run: |
           $file = Get-Item out/build/ci/IBStart.exe
+          $configuredVersion = (Get-Content -Raw out/build/ci/ibstart-version.txt).Trim()
+          if ($configuredVersion -ne $env:IBSTART_VERSION) { throw "Configured version '$configuredVersion' does not match '$env:IBSTART_VERSION'." }
           if ($file.Length -gt 8388608) { throw "IBStart.exe exceeds the 8 MiB limit: $($file.Length)" }
+          if ($file.VersionInfo.ProductVersion -ne $env:IBSTART_VERSION) { throw "IBStart.exe ProductVersion '$($file.VersionInfo.ProductVersion)' does not match '$env:IBSTART_VERSION'." }
           "IBStart.exe: $($file.Length) bytes" | Out-File -Encoding ascii out/build/ci/checksums.txt
           (Get-FileHash $file -Algorithm SHA256).Hash + "  IBStart.exe" | Add-Content -Encoding ascii out/build/ci/checksums.txt
       - name: Package
         shell: pwsh
-        run: Compress-Archive -Path out/build/ci/IBStart.exe,README.md,LICENSE,CHANGELOG.md -DestinationPath out/build/ci/IBStart-windows-x64.zip
+        env:
+          IBSTART_VERSION: ${{ steps.version.outputs.version }}
+        run: Compress-Archive -Path out/build/ci/IBStart.exe,README.md,LICENSE,CHANGELOG.md -DestinationPath "out/build/ci/IBStart-$env:IBSTART_VERSION-windows-x64.zip"
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
-          name: IBStart-windows-x64
+          name: IBStart-${{ steps.version.outputs.version }}-windows-x64
           path: |
             out/build/ci/IBStart.exe
-            out/build/ci/IBStart-windows-x64.zip
+            out/build/ci/IBStart-${{ steps.version.outputs.version }}-windows-x64.zip
             out/build/ci/checksums.txt
