@@ -373,6 +373,11 @@ std::optional<std::wstring> Catalog::WebUrl(std::wstring_view connect) {
   return std::nullopt;
 }
 
+bool IsBareWebConnection(std::wstring_view connect) {
+  const auto url = Catalog::WebUrl(connect);
+  return url.has_value() && EqualNoCase(Trim(connect), *url);
+}
+
 bool Catalog::IsWebConnection(std::wstring_view connect) { return WebUrl(connect).has_value(); }
 
 }  // namespace ibstart::catalog
