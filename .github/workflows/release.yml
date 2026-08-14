@@ -18,13 +18,13 @@ jobs:
           arch: x64
       - name: Configure and build
         run: |
-          cmake -S . -B out/build/release -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTING=ON
-          cmake --build out/build/release --config Release --parallel
-          ctest --test-dir out/build/release -C Release --output-on-failure
+          cmake -S . -B out/build/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+          cmake --build out/build/release --parallel
+          ctest --test-dir out/build/release --output-on-failure
       - name: Package and checksum
         shell: pwsh
         run: |
-          $exe = Get-Item out/build/release/Release/IBStart.exe
+          $exe = Get-Item out/build/release/IBStart.exe
           if ($exe.Length -gt 8388608) { throw "IBStart.exe exceeds 8 MiB" }
           Compress-Archive -Path $exe.FullName,README.md,LICENSE,CHANGELOG.md -DestinationPath out/build/release/IBStart-windows-x64.zip
           (Get-FileHash $exe -Algorithm SHA256).Hash + "  IBStart.exe" | Out-File -Encoding ascii out/build/release/checksums.txt
@@ -34,6 +34,6 @@ jobs:
         with:
           body_path: CHANGELOG.md
           files: |
-            out/build/release/Release/IBStart.exe
+            out/build/release/IBStart.exe
             out/build/release/IBStart-windows-x64.zip
             out/build/release/checksums.txt
