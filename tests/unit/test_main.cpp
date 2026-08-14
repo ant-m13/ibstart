@@ -1,0 +1,98 @@
+#include "core/catalog/catalog.hpp"
+#include "core/launcher/command_builder.hpp"
+#include "core/logging/logging.hpp"
+#include "core/storage/storage.hpp"
+#include "core/v8i/v8i_file_store.hpp"
+
+#include <Windows.h>
+
+#include <chrono>
+#include <filesystem>
+#include <fstream>
+#include <functional>
+#include <iostream>
+#include <stdexcept>
+#include <string>
+#include <vector>
+
+namespace {
+int failures = 0;
+#define CHECK(condition) do { if (!(condition)) { std::wcerr << L"FAILED " << __FUNCTION__ << L":" << __LINE__ << L"\n"; ++failures; } } while (false)
+
+std::string ReadBytes(const std::filesystem::path& path) { std::ifstream input(path, std::ios::binary); return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()}; }
+void WriteBytes(const std::filesystem::path& path, std::string_view text) { std::ofstream output(path, std::ios::binary | std::ios::trunc); output.write(text.data(), static_cast<std::streamsize>(text.size())); }
+std::filesystem::path Fixture(const wchar_t* name) { return std::filesystem::current_path() / L"tests" / L"fixtures" / name; }
+std::filesystem::path Temp(const wchar_t* suffix) { auto path = std::filesystem::temp_directory_path() / (std::wstring(L"ibstart-tests-") + suffix + L"-" + std::to_wstring(GetCurrentProcessId())); std::error_code error; std::filesystem::remove_all(path, error); std::filesystem::create_directories(path); return path; }
+
+void TestV8iRoundTrip() {
+  const auto bytes = ReadBytes(Fixture(L"nested-unicode.v8i"));
+  const auto document = ibstart::v8i::V8iDocument::ParseUtf8(bytes);
+  CHECK(document.encoding == ibstart::v8i::Utf8Encoding::utf8_bom);
+  CHECK(document.sections.size() == 4);
+  const auto* database = document.Find(L"База с пробелом");
+  CHECK(database != nullptr);
+  CHECK(database->entry.ValueOr(L"UnknownVendorKey") == L"не менять");
+  const auto serialized = document.SerializeUtf8();
+  CHECK(serialized.starts_with("\xEF\xBB\xBF"));
+  const auto again = ibstart::v8i::V8iDocument::ParseUtf8(serialized);
+  const auto* reread = again.Find(L"База с пробелом");
+  CHECK(reread && reread->entry.ValueOr(L"UnknownVendorKey") == L"не менять");
+  CHECK(reread && reread->entry.ValueOr(L"Connect") == L"File=\"C:\\Рабочие базы\\Моя база\"");
+}
+
+void TestNoBomAndCatalog() {
+  auto document = ibstart::v8i::V8iDocument::ParseUtf8(ReadBytes(Fixture(L"no-bom-unknown.v8i")));
+  CHECK(document.encoding == ibstart::v8i::Utf8Encoding::utf8);
+  ibstart::catalog::Catalog catalog(std::move(document));
+  CHECK(catalog.Databases().size() == 1);
+  CHECK(ibstart::catalog::Catalog::IsWebConnection(catalog.Databases().front()->ValueOr(L"Connect")));
+  CHECK(catalog.DatabaseFor(L"Web").unknown_fields.size() == 1);
+}
+
+void TestSafeStore() {
+  const auto directory = Temp(L"store"); const auto file = directory / L"ibases.v8i";
+  WriteBytes(file, "[Base]\r\nConnect=File=\"C:\\\\base\"\r\nUnknown=x\r\n");
+  ibstart::v8i::V8iFileStore store(file); auto document = store.Read(); document.Find(L"Base")->entry.Set(L"Locale", L"ru_RU"); store.Save(document);
+  CHECK(std::filesystem::exists(file)); CHECK(store.Backups().size() == 1); CHECK(ReadBytes(file).find("Locale=ru_RU") != std::string::npos);
+  for (int index = 0; index != 6; ++index) { document.Find(L"Base")->entry.Set(L"OrderInList", std::to_wstring(index)); store.Save(document); }
+  CHECK(store.Backups().size() == 5);
+  bool temporaryLeftBehind = false; for (const auto& entry : std::filesystem::directory_iterator(directory)) if (entry.path().filename().wstring().find(L".ibstart.tmp.") != std::wstring::npos) temporaryLeftBehind = true;
+  CHECK(!temporaryLeftBehind);
+  ibstart::v8i::V8iFileStore conflict(file); auto another = conflict.Read(); WriteBytes(file, "[External]\r\nConnect=x\r\nPadding=changed\r\n");
+  bool caught = false; try { conflict.Save(another); } catch (const ibstart::v8i::ExternalModificationError&) { caught = true; }
+  CHECK(caught); CHECK(ReadBytes(file).find("Padding=changed") != std::string::npos);
+  std::error_code error; std::filesystem::remove_all(directory, error);
+}
+
+void TestCommandBuilderAndSelection() {
+  const std::vector<ibstart::domain::PlatformInstallation> platforms = {
+    {L"C:\\Program Files (x86)\\1cv8\\8.3.24\\bin\\1cv8.exe", L"8.3.24", ibstart::domain::ClientBitness::x86, true},
+    {L"C:\\Program Files\\1cv8\\8.3.24\\bin\\1cv8.exe", L"8.3.24", ibstart::domain::ClientBitness::x64, true}};
+  ibstart::domain::LaunchOptions options; options.mode = ibstart::domain::LaunchMode::designer; const auto chosen = ibstart::launcher::SelectPlatform(platforms, options);
+  CHECK(chosen && chosen->bitness == ibstart::domain::ClientBitness::x64);
+  options.bitness = ibstart::domain::ClientBitness::x86; const auto x86 = ibstart::launcher::SelectPlatform(platforms, options); CHECK(x86 && x86->bitness == ibstart::domain::ClientBitness::x86); options.bitness = ibstart::domain::ClientBitness::automatic;
+  ibstart::domain::Database file; file.connect = L"File=\"C:\\Базы 1С\\Тест\""; file.additional_parameters = L"/N \"Иван Иванов\"";
+  const auto fileCommand = ibstart::launcher::BuildCommand(file, *chosen, options);
+  CHECK(fileCommand.arguments[0] == L"DESIGNER"); CHECK(fileCommand.arguments[1] == L"/F"); CHECK(fileCommand.arguments[2] == L"C:\\Базы 1С\\Тест");
+  ibstart::domain::Database server; server.connect = L"Srvr=\"srv\";Ref=\"base\""; options.mode = ibstart::domain::LaunchMode::enterprise;
+  const auto serverCommand = ibstart::launcher::BuildCommand(server, *chosen, options); CHECK(serverCommand.arguments[1] == L"/S"); CHECK(serverCommand.arguments[2] == L"srv\\base");
+  CHECK(ibstart::launcher::QuoteWindowsArgument(L"a b\\") == L"\"a b\\\\\"");
+}
+
+void TestSecretMasking() {
+  const auto masked = ibstart::logging::MaskSecrets(L"/N admin /P \"s3cret\" --token=abc password=xyz");
+  CHECK(masked.find(L"s3cret") == std::wstring::npos); CHECK(masked.find(L"abc") == std::wstring::npos); CHECK(masked.find(L"xyz") == std::wstring::npos); CHECK(masked.find(L"admin") != std::wstring::npos);
+}
+
+void TestPortableMode() {
+  const auto directory = Temp(L"portable"); const auto executable = directory / L"IBStart.exe"; WriteBytes(executable, ""); WriteBytes(directory / L"IBStart.portable", "");
+  const auto layout = ibstart::storage::ResolveLayout(executable); CHECK(layout.portable); CHECK(layout.root == directory / L"data"); ibstart::storage::EnsureWritable(layout);
+  std::error_code error; std::filesystem::remove_all(directory, error);
+}
+}
+
+int wmain() {
+  TestV8iRoundTrip(); TestNoBomAndCatalog(); TestSafeStore(); TestCommandBuilderAndSelection(); TestSecretMasking(); TestPortableMode();
+  if (failures) { std::wcerr << failures << L" test(s) failed\n"; return 1; }
+  std::wcout << L"All IBStart unit tests passed\n"; return 0;
+}

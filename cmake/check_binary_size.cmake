@@ -1,0 +1,8 @@
+if(NOT EXISTS "${IBSTART_FILE}")
+  message(FATAL_ERROR "IBStart.exe was not produced: ${IBSTART_FILE}")
+endif()
+file(SIZE "${IBSTART_FILE}" IBSTART_SIZE)
+message(STATUS "IBStart.exe size: ${IBSTART_SIZE} bytes")
+if(IBSTART_SIZE GREATER MAX_SIZE)
+  message(FATAL_ERROR "IBStart.exe is ${IBSTART_SIZE} bytes; the limit is ${MAX_SIZE} bytes.")
+endif()

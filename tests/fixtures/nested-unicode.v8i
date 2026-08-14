@@ -1,0 +1,27 @@
+﻿; Проверочная fixture: UTF-8 с BOM, комментарии и неизвестные поля сохраняются.
+
+[Разработка]
+OrderInList=1
+CustomGroupSetting=сохранить
+
+[Подгруппа]
+Folder=Разработка
+OrderInList=1
+
+[База с пробелом]
+Connect=File="C:\Рабочие базы\Моя база"
+ID=45c5a2d1
+Folder=Подгруппа
+OrderInList=1
+Version=8.3.24.1667
+Locale=ru_RU
+AdditionalParameters=/N "Иван" /P "секрет"
+UnknownVendorKey=не менять
+
+[Серверная база]
+Connect=Srvr="srv-01";Ref="Accounting"
+ID=server-id
+Folder=Разработка
+OrderInList=2
+ClientConnectionSpeed=Normal
+External=0

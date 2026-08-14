@@ -1,0 +1,4 @@
+[Web]
+Connect=https://example.test/ib
+WA=1
+StrangeKey=значение

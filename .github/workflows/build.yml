@@ -1,0 +1,45 @@
+name: build
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure MSVC environment
+        uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Configure CMake
+        run: cmake -S . -B out/build/ci -G "Visual Studio 17 2022" -A x64 -DBUILD_TESTING=ON
+      - name: Build Release
+        run: cmake --build out/build/ci --config Release --parallel
+      - name: Run CTest
+        run: ctest --test-dir out/build/ci -C Release --output-on-failure
+      - name: Verify binary size
+        shell: pwsh
+        run: |
+          $file = Get-Item out/build/ci/Release/IBStart.exe
+          if ($file.Length -gt 8388608) { throw "IBStart.exe exceeds the 8 MiB limit: $($file.Length)" }
+          "IBStart.exe: $($file.Length) bytes" | Out-File -Encoding ascii out/build/ci/checksums.txt
+          (Get-FileHash $file -Algorithm SHA256).Hash + "  IBStart.exe" | Add-Content -Encoding ascii out/build/ci/checksums.txt
+      - name: Package
+        shell: pwsh
+        run: Compress-Archive -Path out/build/ci/Release/IBStart.exe,README.md,LICENSE,CHANGELOG.md -DestinationPath out/build/ci/IBStart-windows-x64.zip
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: IBStart-windows-x64
+          path: |
+            out/build/ci/Release/IBStart.exe
+            out/build/ci/IBStart-windows-x64.zip
+            out/build/ci/checksums.txt
