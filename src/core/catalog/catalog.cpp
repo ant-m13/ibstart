@@ -138,6 +138,11 @@ const domain::Entry* Catalog::Find(std::wstring_view name) const {
   return section == nullptr ? nullptr : &section->entry;
 }
 
+std::wstring Catalog::ParentOf(std::wstring_view name) const {
+  const auto* entry = Find(name);
+  return entry == nullptr ? std::wstring() : ParentName(entry->ValueOr(L"Folder"));
+}
+
 domain::Database Catalog::DatabaseFor(std::wstring_view name) const {
   const auto* entry = Find(name);
   if (entry == nullptr || !entry->IsDatabase()) throw std::invalid_argument("The requested catalog entry is not a database.");
@@ -289,6 +294,19 @@ bool Catalog::Move(std::wstring_view name, std::wstring parent, size_t position)
   for (size_t index = 0; index < siblings.size(); ++index) const_cast<domain::Entry*>(siblings[index])->Set(L"OrderInList", std::to_wstring(index + 1));
   if (!EqualNoCase(oldParent, parent)) Renumber(oldParent);
   return true;
+}
+
+bool Catalog::MoveBy(std::wstring_view name, int offset) {
+  const auto* entry = Find(name);
+  if (entry == nullptr || offset == 0) return false;
+  const std::wstring parent = ParentName(entry->ValueOr(L"Folder"));
+  const auto siblings = ChildrenOf(parent);
+  const auto current = std::find(siblings.begin(), siblings.end(), entry);
+  if (current == siblings.end()) return false;
+  const auto currentIndex = static_cast<long long>(std::distance(siblings.begin(), current));
+  const auto targetIndex = currentIndex + offset;
+  if (targetIndex < 0 || targetIndex >= static_cast<long long>(siblings.size())) return false;
+  return Move(name, parent, static_cast<size_t>(targetIndex));
 }
 
 void Catalog::Renumber(std::wstring_view parent) {
