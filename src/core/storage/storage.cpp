@@ -17,7 +17,7 @@ std::wstring Env(std::wstring_view name) {
   const DWORD size = GetEnvironmentVariableW(std::wstring(name).c_str(), nullptr, 0);
   if (!size) return {};
   std::wstring result(size, L'\0');
-  GetEnvironmentVariableW(std::wstring(name).c_str(), result.data(), size);
+  if (GetEnvironmentVariableW(std::wstring(name).c_str(), result.data(), size) == 0) return {};
   result.resize(size - 1);
   return result;
 }
@@ -26,38 +26,109 @@ std::filesystem::path PathFor(const StorageLayout& layout, std::wstring_view nam
 
 std::string Escape(std::wstring_view value) {
   std::string result;
-  for (const wchar_t unit : value) {
-    if (unit == L'\\') result += "\\\\";
-    else if (unit == L'"') result += "\\\"";
-    else if (unit == L'\n') result += "\\n";
-    else if (unit == L'\r') result += "\\r";
-    else result += utf::ToUtf8(std::wstring_view(&unit, 1));
+  const auto utf8 = utf::ToUtf8(value);
+  constexpr char hex[] = "0123456789abcdef";
+  for (const unsigned char unit : utf8) {
+    if (unit == '\\') result += "\\\\";
+    else if (unit == '"') result += "\\\"";
+    else if (unit == '\n') result += "\\n";
+    else if (unit == '\r') result += "\\r";
+    else if (unit == '\t') result += "\\t";
+    else if (unit == '\b') result += "\\b";
+    else if (unit == '\f') result += "\\f";
+    else if (unit < 0x20) { result += "\\u00"; result.push_back(hex[unit >> 4]); result.push_back(hex[unit & 0x0F]); }
+    else result.push_back(static_cast<char>(unit));
   }
   return result;
 }
 
 std::wstring Unescape(std::string_view value) {
+  std::wstring result;
   std::string raw;
+  const auto flushRaw = [&] {
+    if (!raw.empty()) { result += utf::FromUtf8(raw); raw.clear(); }
+  };
+  const auto hexDigit = [](char character) -> int {
+    if (character >= '0' && character <= '9') return character - '0';
+    if (character >= 'a' && character <= 'f') return character - 'a' + 10;
+    if (character >= 'A' && character <= 'F') return character - 'A' + 10;
+    return -1;
+  };
+  const auto unicodeUnit = [&](size_t offset) -> wchar_t {
+    if (offset + 4 > value.size()) throw std::invalid_argument("Truncated JSON Unicode escape.");
+    unsigned unit = 0;
+    for (size_t digit = 0; digit < 4; ++digit) {
+      const int parsed = hexDigit(value[offset + digit]);
+      if (parsed < 0) throw std::invalid_argument("Invalid JSON Unicode escape.");
+      unit = unit * 16 + static_cast<unsigned>(parsed);
+    }
+    return static_cast<wchar_t>(unit);
+  };
   for (size_t index = 0; index < value.size(); ++index) {
     if (value[index] == '\\' && index + 1 < value.size()) {
+      flushRaw();
       const char next = value[++index];
-      raw.push_back(next == 'n' ? '\n' : next == 'r' ? '\r' : next);
+      if (next == 'n') result.push_back(L'\n');
+      else if (next == 'r') result.push_back(L'\r');
+      else if (next == 't') result.push_back(L'\t');
+      else if (next == 'b') result.push_back(L'\b');
+      else if (next == 'f') result.push_back(L'\f');
+      else if (next == '"' || next == '\\' || next == '/') result.push_back(static_cast<wchar_t>(next));
+      else if (next == 'u') {
+        const wchar_t high = unicodeUnit(index + 1);
+        index += 4;
+        if (high >= 0xD800 && high <= 0xDBFF) {
+          if (index + 6 >= value.size() || value[index + 1] != '\\' || value[index + 2] != 'u') throw std::invalid_argument("Unpaired JSON high surrogate.");
+          const wchar_t low = unicodeUnit(index + 3);
+          if (low < 0xDC00 || low > 0xDFFF) throw std::invalid_argument("Invalid JSON surrogate pair.");
+          result.push_back(high);
+          result.push_back(low);
+          index += 6;
+        } else if (high >= 0xDC00 && high <= 0xDFFF) {
+          throw std::invalid_argument("Unpaired JSON low surrogate.");
+        } else {
+          result.push_back(high);
+        }
+      } else {
+        throw std::invalid_argument("Invalid JSON escape.");
+      }
     } else raw.push_back(value[index]);
   }
-  return utf::FromUtf8(raw);
+  flushRaw();
+  return result;
 }
 
 void WriteAtomically(const std::filesystem::path& path, std::string_view contents) {
-  const auto temporary = path.wstring() + L".tmp";
-  {
-    std::ofstream output(std::filesystem::path(temporary), std::ios::binary | std::ios::trunc);
-    if (!output) throw std::runtime_error("Cannot write application data.");
-    output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
-    if (!output) throw std::runtime_error("Cannot write application data.");
+  std::error_code error;
+  if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path(), error);
+  if (error) throw std::runtime_error("Cannot create application data directory: " + error.message());
+  const auto temporaryBase = path.wstring() + L".tmp." + std::to_wstring(GetCurrentProcessId());
+  std::filesystem::path temporary;
+  bool allocated = false;
+  for (unsigned suffix = 0; suffix != 1000; ++suffix) {
+    auto candidate = temporaryBase;
+    if (suffix != 0) candidate += L"." + std::to_wstring(suffix);
+    temporary = std::filesystem::path(std::move(candidate));
+    error.clear();
+    const bool exists = std::filesystem::exists(temporary, error);
+    if (error) throw std::runtime_error("Cannot inspect temporary application data path: " + error.message());
+    if (!exists) { allocated = true; break; }
   }
-  if (!MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-    std::filesystem::remove(temporary);
-    throw std::runtime_error("Cannot save application data: " + utf::ToUtf8(utf::LastErrorMessage()));
+  if (!allocated) throw std::runtime_error("Cannot allocate a temporary application data file.");
+  try {
+    {
+      std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
+      if (!output) throw std::runtime_error("Cannot write application data.");
+      output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+      output.flush();
+      if (!output) throw std::runtime_error("Cannot write application data.");
+    }
+    if (!MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+      throw std::runtime_error("Cannot save application data: " + utf::ToUtf8(utf::LastErrorMessage()));
+    }
+  } catch (...) {
+    std::filesystem::remove(temporary, error);
+    throw;
   }
 }
 
@@ -79,7 +150,7 @@ std::optional<int> JsonInteger(std::string_view json, std::string_view key) {
   std::smatch match;
   const std::string body(json);
   if (!std::regex_search(body, match, expression)) return std::nullopt;
-  return std::stoi(match[1].str());
+  try { return std::stoi(match[1].str()); } catch (...) { return std::nullopt; }
 }
 
 }  // namespace
@@ -112,7 +183,7 @@ void EnsureWritable(const StorageLayout& layout) {
   std::error_code error;
   std::filesystem::create_directories(layout.root / L"logs", error);
   if (error) throw std::runtime_error("IBStart data directory cannot be created: " + error.message());
-  const auto probe = layout.root / L".write_probe";
+  const auto probe = layout.root / (L".write_probe." + std::to_wstring(GetCurrentProcessId()));
   std::ofstream output(probe, std::ios::binary | std::ios::trunc);
   if (!output) throw std::runtime_error("IBStart data directory is not writable: " + utf::ToUtf8(layout.root.wstring()));
   output.close();
@@ -122,14 +193,18 @@ void EnsureWritable(const StorageLayout& layout) {
 Settings LoadSettings(const StorageLayout& layout) {
   Settings result;
   const auto json = ReadFile(PathFor(layout, L"settings.json"));
-  if (const auto active = JsonString(json, "active_ibases")) result.active_ibases = *active;
-  if (const auto simple = JsonInteger(json, "simple_mode")) result.simple_mode = *simple != 0;
-  if (const auto x = JsonInteger(json, "window_x")) result.window_x = *x;
-  if (const auto y = JsonInteger(json, "window_y")) result.window_y = *y;
-  if (const auto width = JsonInteger(json, "window_width")) result.window_width = std::max(*width, 480);
-  if (const auto height = JsonInteger(json, "window_height")) result.window_height = std::max(*height, 320);
-  const std::regex pathExpression("\\\"platform_path\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"");
-  for (std::sregex_iterator it(json.begin(), json.end(), pathExpression), end; it != end; ++it) result.platform_search_paths.emplace_back(Unescape((*it)[1].str()));
+  try {
+    if (const auto active = JsonString(json, "active_ibases")) result.active_ibases = *active;
+    if (const auto simple = JsonInteger(json, "simple_mode")) result.simple_mode = *simple != 0;
+    if (const auto x = JsonInteger(json, "window_x")) result.window_x = *x;
+    if (const auto y = JsonInteger(json, "window_y")) result.window_y = *y;
+    if (const auto width = JsonInteger(json, "window_width")) result.window_width = std::clamp(*width, 480, 10000);
+    if (const auto height = JsonInteger(json, "window_height")) result.window_height = std::clamp(*height, 320, 10000);
+    const std::regex pathExpression("\\\"platform_path\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"");
+    for (std::sregex_iterator it(json.begin(), json.end(), pathExpression), end; it != end; ++it) result.platform_search_paths.emplace_back(Unescape((*it)[1].str()));
+  } catch (...) {
+    return Settings{};
+  }
   return result;
 }
 
@@ -151,7 +226,11 @@ std::vector<domain::HistoryItem> LoadHistory(const StorageLayout& layout) {
   const std::regex item("\\{\\s*\\\"id\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"time\\\"\\s*:\\s*([0-9]+)\\s*,\\s*\\\"mode\\\"\\s*:\\s*([0-9]+)\\s*\\}");
   const auto json = ReadFile(PathFor(layout, L"history.json"));
   for (std::sregex_iterator it(json.begin(), json.end(), item), end; it != end; ++it) {
-    result.push_back({Unescape((*it)[1].str()), std::chrono::system_clock::from_time_t(std::stoll((*it)[2].str())), static_cast<domain::LaunchMode>(std::stoi((*it)[3].str()))});
+    try {
+      const int mode = std::stoi((*it)[3].str());
+      if (mode < static_cast<int>(domain::LaunchMode::enterprise) || mode > static_cast<int>(domain::LaunchMode::web_client)) continue;
+      result.push_back({Unescape((*it)[1].str()), std::chrono::system_clock::from_time_t(std::stoll((*it)[2].str())), static_cast<domain::LaunchMode>(mode)});
+    } catch (...) {}
   }
   return result;
 }
@@ -175,7 +254,9 @@ std::vector<std::wstring> LoadFavorites(const StorageLayout& layout) {
   std::vector<std::wstring> result;
   const std::regex item("\\\"((?:\\\\.|[^\\\"])*)\\\"");
   const auto json = ReadFile(PathFor(layout, L"favorites.json"));
-  for (std::sregex_iterator it(json.begin(), json.end(), item), end; it != end; ++it) result.push_back(Unescape((*it)[1].str()));
+  for (std::sregex_iterator it(json.begin(), json.end(), item), end; it != end; ++it) {
+    try { result.push_back(Unescape((*it)[1].str())); } catch (...) {}
+  }
   return result;
 }
 

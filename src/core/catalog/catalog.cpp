@@ -1,7 +1,11 @@
 #include "core/catalog/catalog.hpp"
 
 #include <algorithm>
+#include <cerrno>
 #include <cwchar>
+#include <cwctype>
+#include <optional>
+#include <set>
 #include <stdexcept>
 #include <utility>
 
@@ -40,11 +44,36 @@ namespace {
 bool EqualNoCase(std::wstring_view left, std::wstring_view right) {
   return left.size() == right.size() && _wcsnicmp(left.data(), right.data(), left.size()) == 0;
 }
+std::optional<long long> NumericOrder(std::wstring_view value) {
+  if (value.empty()) return std::nullopt;
+  const std::wstring text(value);
+  wchar_t* end = nullptr;
+  errno = 0;
+  const long long order = std::wcstoll(text.c_str(), &end, 10);
+  if (errno != 0 || end != text.c_str() + text.size()) return std::nullopt;
+  return order;
+}
 bool LessEntry(const domain::Entry* left, const domain::Entry* right) {
   const auto leftOrder = left->ValueOr(L"OrderInList");
   const auto rightOrder = right->ValueOr(L"OrderInList");
+  const auto leftNumeric = NumericOrder(leftOrder);
+  const auto rightNumeric = NumericOrder(rightOrder);
+  if (leftNumeric && rightNumeric && *leftNumeric != *rightNumeric) return *leftNumeric < *rightNumeric;
+  if (leftNumeric.has_value() != rightNumeric.has_value()) return leftNumeric.has_value();
   if (!leftOrder.empty() && !rightOrder.empty() && leftOrder != rightOrder) return leftOrder < rightOrder;
   return _wcsicmp(left->name.c_str(), right->name.c_str()) < 0;
+}
+std::wstring Trim(std::wstring_view value) {
+  size_t first = 0;
+  while (first < value.size() && std::iswspace(value[first])) ++first;
+  size_t last = value.size();
+  while (last > first && std::iswspace(value[last - 1])) --last;
+  return std::wstring(value.substr(first, last - first));
+}
+bool ValidParent(const v8i::V8iDocument& document, std::wstring_view parent) {
+  if (parent.empty()) return true;
+  const auto* section = document.Find(parent);
+  return section != nullptr && section->entry.IsGroup();
 }
 }  // namespace
 
@@ -94,18 +123,20 @@ std::vector<const domain::Entry*> Catalog::ChildrenOf(std::wstring_view parent) 
   std::vector<const domain::Entry*> result;
   for (const auto& section : document_.sections) {
     const auto& entry = section.entry;
-    if (entry.ValueOr(L"Folder") == parent) result.push_back(&entry);
+    if (EqualNoCase(entry.ValueOr(L"Folder"), parent)) result.push_back(&entry);
   }
   std::sort(result.begin(), result.end(), LessEntry);
   return result;
 }
 
 std::vector<TreeItem> Catalog::Tree() const {
+  std::vector<std::wstring> ancestors;
   const auto build = [&](auto&& self, std::wstring_view parent) -> std::vector<TreeItem> {
     std::vector<TreeItem> result;
     for (const auto* entry : ChildrenOf(parent)) {
       TreeItem item{entry->name, entry->IsDatabase(), std::wstring(parent), {}};
-      if (entry->IsGroup()) item.children = self(self, entry->name);
+      const bool cycle = std::any_of(ancestors.begin(), ancestors.end(), [&](const auto& ancestor) { return EqualNoCase(ancestor, entry->name); });
+      if (entry->IsGroup() && !cycle) { ancestors.push_back(entry->name); item.children = self(self, entry->name); ancestors.pop_back(); }
       result.push_back(std::move(item));
     }
     return result;
@@ -114,7 +145,7 @@ std::vector<TreeItem> Catalog::Tree() const {
 }
 
 bool Catalog::AddGroup(std::wstring name, std::wstring parent) {
-  if (name.empty() || Find(name) != nullptr) return false;
+  if (name.empty() || Find(name) != nullptr || !ValidParent(document_, parent)) return false;
   auto& entry = document_.Add(std::move(name)).entry;
   if (!parent.empty()) entry.Set(L"Folder", std::move(parent));
   Renumber(entry.ValueOr(L"Folder"));
@@ -128,7 +159,9 @@ std::wstring Catalog::QuoteConnectionPath(const std::filesystem::path& path) {
 }
 
 bool Catalog::AddFileDatabase(std::wstring name, const std::filesystem::path& directory, std::wstring parent) {
-  if (name.empty() || Find(name) != nullptr || !std::filesystem::exists(directory / L"1Cv8.1CD")) return false;
+  std::error_code error;
+  if (name.empty() || Find(name) != nullptr || !ValidParent(document_, parent) ||
+      !std::filesystem::is_regular_file(directory / L"1Cv8.1CD", error)) return false;
   auto& entry = document_.Add(std::move(name)).entry;
   entry.Set(L"Connect", QuoteConnectionPath(directory));
   entry.Set(L"ID", entry.name);
@@ -138,7 +171,7 @@ bool Catalog::AddFileDatabase(std::wstring name, const std::filesystem::path& di
 }
 
 bool Catalog::AddServerDatabase(std::wstring name, std::wstring connect, std::wstring parent) {
-  if (name.empty() || connect.empty() || Find(name) != nullptr) return false;
+  if (name.empty() || connect.empty() || Find(name) != nullptr || !ValidParent(document_, parent)) return false;
   auto& entry = document_.Add(std::move(name)).entry;
   entry.Set(L"Connect", std::move(connect));
   entry.Set(L"ID", entry.name);
@@ -163,7 +196,20 @@ bool Catalog::Remove(std::wstring_view name) {
 bool Catalog::Move(std::wstring_view name, std::wstring parent, size_t position) {
   auto* entry = Find(name);
   if (entry == nullptr || (entry->IsGroup() && EqualNoCase(entry->name, parent))) return false;
-  if (!parent.empty() && (Find(parent) == nullptr || Find(parent)->IsDatabase())) return false;
+  const auto* parentEntry = parent.empty() ? nullptr : Find(parent);
+  if (!parent.empty() && (parentEntry == nullptr || parentEntry->IsDatabase())) return false;
+  if (entry->IsGroup()) {
+    const domain::Entry* current = parentEntry;
+    std::set<std::wstring> visited;
+    while (current) {
+      if (EqualNoCase(current->name, entry->name)) return false;
+      std::wstring key = current->name;
+      std::transform(key.begin(), key.end(), key.begin(), [](wchar_t character) { return static_cast<wchar_t>(std::towlower(character)); });
+      if (!visited.insert(std::move(key)).second) return false;
+      const auto next = current->ValueOr(L"Folder");
+      current = next.empty() ? nullptr : Find(next);
+    }
+  }
   const std::wstring oldParent = entry->ValueOr(L"Folder");
   entry->Set(L"Folder", std::move(parent));
   auto siblings = ChildrenOf(entry->ValueOr(L"Folder"));
@@ -179,8 +225,31 @@ void Catalog::Renumber(std::wstring_view parent) {
   for (size_t index = 0; index < children.size(); ++index) const_cast<domain::Entry*>(children[index])->Set(L"OrderInList", std::to_wstring(index + 1));
 }
 
-bool Catalog::IsWebConnection(std::wstring_view connect) {
-  return connect.starts_with(L"http://") || connect.starts_with(L"https://") || connect.find(L"ws=") != std::wstring_view::npos;
+std::optional<std::wstring> Catalog::WebUrl(std::wstring_view connect) {
+  auto direct = Trim(connect);
+  if (direct.size() >= 7 && (_wcsnicmp(direct.c_str(), L"http://", 7) == 0 ||
+      (direct.size() >= 8 && _wcsnicmp(direct.c_str(), L"https://", 8) == 0))) return direct;
+
+  size_t start = 0;
+  bool quoted = false;
+  for (size_t index = 0; index <= connect.size(); ++index) {
+    const wchar_t character = index < connect.size() ? connect[index] : L';';
+    if (character == L'"') quoted = !quoted;
+    if (character != L';' || quoted) continue;
+    const auto field = connect.substr(start, index - start);
+    const size_t separator = field.find(L'=');
+    if (separator != std::wstring_view::npos && EqualNoCase(Trim(field.substr(0, separator)), L"ws")) {
+      auto value = Trim(field.substr(separator + 1));
+      if (value.size() >= 2 && value.front() == L'"' && value.back() == L'"') value = value.substr(1, value.size() - 2);
+      if (value.size() >= 7 && (_wcsnicmp(value.c_str(), L"http://", 7) == 0 ||
+          (value.size() >= 8 && _wcsnicmp(value.c_str(), L"https://", 8) == 0))) return value;
+      return std::nullopt;
+    }
+    start = index + 1;
+  }
+  return std::nullopt;
 }
+
+bool Catalog::IsWebConnection(std::wstring_view connect) { return WebUrl(connect).has_value(); }
 
 }  // namespace ibstart::catalog

@@ -5,6 +5,7 @@ project(IBStart VERSION 0.1.0 LANGUAGES CXX)
 if(NOT WIN32)
   message(FATAL_ERROR "IBStart is a native Windows application and must be built on Windows.")
 endif()
+enable_language(RC)
 if(NOT MSVC)
   message(FATAL_ERROR "IBStart is supported with MSVC only.")
 endif()
@@ -14,6 +15,7 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(CMAKE_MSVC_RUNTIME_LIBRARY "MultiThreaded$<$<CONFIG:Debug>:Debug>")
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
+string(REPLACE "/O2" "/O1" CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE}")
 
 add_library(ibstart_core STATIC
   src/core/catalog/catalog.cpp
@@ -28,8 +30,8 @@ add_library(ibstart_core STATIC
   src/core/shell/shortcut.cpp
 )
 target_include_directories(ibstart_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src")
-target_compile_definitions(ibstart_core PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_compile_options(ibstart_core PRIVATE /W4 /permissive- /EHsc /Zc:__cplusplus)
+target_compile_definitions(ibstart_core PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+target_compile_options(ibstart_core PRIVATE /W4 /permissive- /EHsc /Zc:__cplusplus /utf-8)
 target_link_libraries(ibstart_core PUBLIC Advapi32 Shell32 Ole32)
 
 add_executable(IBStart WIN32
@@ -37,13 +39,14 @@ add_executable(IBStart WIN32
   src/ui/main_window.cpp
   src/app/IBStart.rc
 )
+target_include_directories(IBStart PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/src/app")
 target_link_libraries(IBStart PRIVATE ibstart_core Comctl32)
-target_compile_definitions(IBStart PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-target_compile_options(IBStart PRIVATE /W4 /permissive- /EHsc /Zc:__cplusplus)
+target_compile_definitions(IBStart PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+target_compile_options(IBStart PRIVATE /W4 /permissive- /EHsc /Zc:__cplusplus /utf-8)
 
 if(CMAKE_BUILD_TYPE STREQUAL "Release" OR CMAKE_CONFIGURATION_TYPES)
-  target_compile_options(ibstart_core PRIVATE $<$<CONFIG:Release>:/O1 /Gy>)
-  target_compile_options(IBStart PRIVATE $<$<CONFIG:Release>:/O1 /Gy>)
+  target_compile_options(ibstart_core PRIVATE $<$<CONFIG:Release>:/Gy>)
+  target_compile_options(IBStart PRIVATE $<$<CONFIG:Release>:/Gy>)
   target_link_options(IBStart PRIVATE $<$<CONFIG:Release>:/OPT:REF /OPT:ICF /INCREMENTAL:NO>)
 endif()
 
@@ -58,8 +61,8 @@ if(BUILD_TESTING)
   add_executable(ibstart_tests tests/unit/test_main.cpp)
   target_link_libraries(ibstart_tests PRIVATE ibstart_core)
   target_compile_definitions(ibstart_tests PRIVATE
-    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX)
-  target_compile_options(ibstart_tests PRIVATE /W4 /permissive- /EHsc /Zc:__cplusplus)
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+  target_compile_options(ibstart_tests PRIVATE /W4 /permissive- /EHsc /Zc:__cplusplus /utf-8)
   add_test(NAME ibstart.unit COMMAND ibstart_tests)
   set_tests_properties(ibstart.unit PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()

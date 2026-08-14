@@ -16,7 +16,7 @@ bool EqualNoCase(std::wstring_view left, std::wstring_view right) {
 std::vector<std::wstring> SplitLines(std::wstring_view text) {
   std::vector<std::wstring> lines;
   size_t start = 0;
-  while (start <= text.size()) {
+  while (start < text.size()) {
     const size_t end = text.find(L'\n', start);
     std::wstring line(text.substr(start, end == std::wstring_view::npos ? text.size() - start : end - start));
     if (!line.empty() && line.back() == L'\r') line.pop_back();
@@ -42,6 +42,7 @@ V8iDocument V8iDocument::ParseUtf8(std::string_view bytes) {
   } else {
     document.encoding = Utf8Encoding::utf8;
   }
+  document.trailing_newline = bytes.ends_with("\n");
   if (bytes.find("\r\n") == std::string_view::npos) document.newline = L"\n";
 
   const auto lines = SplitLines(utf::FromUtf8(bytes));
@@ -71,9 +72,11 @@ V8iDocument V8iDocument::ParseUtf8(std::string_view bytes) {
 
 std::string V8iDocument::SerializeUtf8() const {
   std::wstring output;
+  bool hasLine = false;
   const auto append_line = [&](std::wstring_view line) {
+    if (hasLine) output.append(newline);
     output.append(line);
-    output.append(newline);
+    hasLine = true;
   };
   for (const auto& line : preamble) append_line(line);
   for (const auto& section : sections) {
@@ -82,6 +85,7 @@ std::string V8iDocument::SerializeUtf8() const {
     for (const auto& field : section.entry.fields) append_line(field.key + L"=" + field.value);
     for (const auto& line : section.opaque_lines) append_line(line);
   }
+  if (hasLine && trailing_newline) output.append(newline);
   std::string bytes = utf::ToUtf8(output);
   if (encoding == Utf8Encoding::utf8_bom) bytes.insert(0, "\xEF\xBB\xBF");
   return bytes;

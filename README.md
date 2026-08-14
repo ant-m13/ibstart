@@ -34,15 +34,15 @@ IBStart написан на C++20 и Win32 API, не требует .NET, бра
 
 ## Сборка из исходников
 
-Требуются Visual Studio 2022 с компонентом **Desktop development with C++**, CMake 3.24+ и Windows SDK. Откройте «x64 Native Tools Command Prompt for VS 2022» в корне репозитория:
+Требуются Visual Studio Build Tools 2022 или новее с компонентом **Desktop development with C++**, CMake 3.24+, Ninja и Windows SDK. Откройте x64 Native Tools Command Prompt в корне репозитория:
 
 ```powershell
-cmake --preset vs2022-x64-release
-cmake --build --preset vs2022-x64-release
-ctest --preset vs2022-x64-release
+cmake --preset msvc-x64-release
+cmake --build --preset msvc-x64-release
+ctest --preset msvc-x64-release
 ```
 
-Готовый файл: `out\build\vs2022-x64-release\Release\IBStart.exe`. После каждой Release-сборки CMake останавливает сборку, если размер EXE превышает 8 МиБ. Целевой размер — до 5 МиБ; упаковщики исполняемых файлов не применяются.
+Готовый файл: `out\build\msvc-x64-release\IBStart.exe`. После каждой Release-сборки CMake останавливает сборку, если размер EXE превышает 8 МиБ. Целевой размер — до 5 МиБ; упаковщики исполняемых файлов не применяются. Дополнительный preset `vs2022-x64-release` сохранён для Visual Studio 2022.
 
 ## Portable mode
 
