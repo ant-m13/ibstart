@@ -44,6 +44,9 @@ namespace {
 bool EqualNoCase(std::wstring_view left, std::wstring_view right) {
   return left.size() == right.size() && _wcsnicmp(left.data(), right.data(), left.size()) == 0;
 }
+bool StartsWithNoCase(std::wstring_view value, std::wstring_view prefix) {
+  return value.size() >= prefix.size() && _wcsnicmp(value.data(), prefix.data(), prefix.size()) == 0;
+}
 std::optional<long long> NumericOrder(std::wstring_view value) {
   if (value.empty()) return std::nullopt;
   const std::wstring text(value);
@@ -69,6 +72,46 @@ std::wstring Trim(std::wstring_view value) {
   size_t last = value.size();
   while (last > first && std::iswspace(value[last - 1])) --last;
   return std::wstring(value.substr(first, last - first));
+}
+std::wstring ParentName(std::wstring_view folder) {
+  // Native 1C lists use "/" for the root and absolute paths such as "/Group/Subgroup".
+  while (folder.size() > 1 && folder.back() == L'/') folder.remove_suffix(1);
+  if (folder.empty() || folder == L"/") return {};
+  const size_t separator = folder.find_last_of(L'/');
+  return std::wstring(separator == std::wstring_view::npos ? folder : folder.substr(separator + 1));
+}
+std::wstring AppendFolder(std::wstring_view folder, std::wstring_view name) {
+  if (folder.empty() || folder == L"/") return L"/" + std::wstring(name);
+  return std::wstring(folder) + L"/" + std::wstring(name);
+}
+std::wstring FolderForParent(const v8i::V8iDocument& document, std::wstring_view parent) {
+  if (parent.empty()) return L"/";
+  std::vector<std::wstring> names;
+  std::wstring current(parent);
+  while (!current.empty()) {
+    if (std::any_of(names.begin(), names.end(), [&](const auto& name) { return EqualNoCase(name, current); })) {
+      throw std::logic_error("A folder cycle prevents creation of an absolute 1C folder path.");
+    }
+    const auto* section = document.Find(current);
+    if (section == nullptr || section->entry.IsDatabase()) {
+      throw std::invalid_argument("The requested parent folder does not exist.");
+    }
+    names.push_back(section->entry.name);
+    current = ParentName(section->entry.ValueOr(L"Folder"));
+  }
+  std::wstring result = L"/";
+  for (auto it = names.rbegin(); it != names.rend(); ++it) result = AppendFolder(result, *it);
+  return result;
+}
+void RewriteFolderPrefix(v8i::V8iDocument& document, std::wstring_view old_prefix, std::wstring_view new_prefix) {
+  for (auto& section : document.sections) {
+    const auto folder = section.entry.ValueOr(L"Folder");
+    if (EqualNoCase(folder, old_prefix)) {
+      section.entry.Set(L"Folder", std::wstring(new_prefix));
+    } else if (folder.size() > old_prefix.size() && folder[old_prefix.size()] == L'/' && StartsWithNoCase(folder, old_prefix)) {
+      section.entry.Set(L"Folder", std::wstring(new_prefix) + folder.substr(old_prefix.size()));
+    }
+  }
 }
 bool ValidParent(const v8i::V8iDocument& document, std::wstring_view parent) {
   if (parent.empty()) return true;
@@ -123,7 +166,7 @@ std::vector<const domain::Entry*> Catalog::ChildrenOf(std::wstring_view parent) 
   std::vector<const domain::Entry*> result;
   for (const auto& section : document_.sections) {
     const auto& entry = section.entry;
-    if (EqualNoCase(entry.ValueOr(L"Folder"), parent)) result.push_back(&entry);
+    if (EqualNoCase(ParentName(entry.ValueOr(L"Folder")), parent)) result.push_back(&entry);
   }
   std::sort(result.begin(), result.end(), LessEntry);
   return result;
@@ -147,8 +190,8 @@ std::vector<TreeItem> Catalog::Tree() const {
 bool Catalog::AddGroup(std::wstring name, std::wstring parent) {
   if (name.empty() || Find(name) != nullptr || !ValidParent(document_, parent)) return false;
   auto& entry = document_.Add(std::move(name)).entry;
-  if (!parent.empty()) entry.Set(L"Folder", std::move(parent));
-  Renumber(entry.ValueOr(L"Folder"));
+  entry.Set(L"Folder", FolderForParent(document_, parent));
+  Renumber(parent);
   return true;
 }
 
@@ -165,8 +208,8 @@ bool Catalog::AddFileDatabase(std::wstring name, const std::filesystem::path& di
   auto& entry = document_.Add(std::move(name)).entry;
   entry.Set(L"Connect", QuoteConnectionPath(directory));
   entry.Set(L"ID", entry.name);
-  if (!parent.empty()) entry.Set(L"Folder", std::move(parent));
-  Renumber(entry.ValueOr(L"Folder"));
+  entry.Set(L"Folder", FolderForParent(document_, parent));
+  Renumber(parent);
   return true;
 }
 
@@ -175,18 +218,42 @@ bool Catalog::AddServerDatabase(std::wstring name, std::wstring connect, std::ws
   auto& entry = document_.Add(std::move(name)).entry;
   entry.Set(L"Connect", std::move(connect));
   entry.Set(L"ID", entry.name);
-  if (!parent.empty()) entry.Set(L"Folder", std::move(parent));
-  Renumber(entry.ValueOr(L"Folder"));
+  entry.Set(L"Folder", FolderForParent(document_, parent));
+  Renumber(parent);
+  return true;
+}
+
+bool Catalog::RenameGroup(std::wstring_view name, std::wstring new_name) {
+  auto* entry = Find(name);
+  if (entry == nullptr || entry->IsDatabase() || new_name.empty()) return false;
+  if (const auto* existing = Find(new_name); existing != nullptr && existing != entry) return false;
+  const std::wstring old_name = entry->name;
+  const std::wstring old_path = FolderForParent(document_, old_name);
+  const std::wstring parent = ParentName(entry->ValueOr(L"Folder"));
+  const std::wstring new_path = AppendFolder(FolderForParent(document_, parent), new_name);
+  RewriteFolderPrefix(document_, old_path, new_path);
+  for (auto& section : document_.sections) {
+    if (EqualNoCase(section.entry.ValueOr(L"Folder"), old_name)) section.entry.Set(L"Folder", new_name);
+  }
+  entry->name = std::move(new_name);
   return true;
 }
 
 bool Catalog::Remove(std::wstring_view name) {
   const auto* entry = Find(name);
   if (entry == nullptr) return false;
-  const std::wstring parent = entry->ValueOr(L"Folder");
+  const std::wstring parent = ParentName(entry->ValueOr(L"Folder"));
   if (entry->IsGroup()) {
+    const std::wstring replacement_folder = FolderForParent(document_, parent);
     const auto children = ChildrenOf(entry->name);
-    for (const auto* child : children) Find(child->name)->Set(L"Folder", parent);
+    for (const auto* child : children) {
+      if (child->IsGroup()) {
+        const std::wstring old_path = FolderForParent(document_, child->name);
+        const std::wstring new_path = AppendFolder(replacement_folder, child->name);
+        RewriteFolderPrefix(document_, old_path, new_path);
+      }
+      Find(child->name)->Set(L"Folder", replacement_folder);
+    }
   }
   const bool removed = document_.Remove(name);
   if (removed) Renumber(parent);
@@ -206,17 +273,21 @@ bool Catalog::Move(std::wstring_view name, std::wstring parent, size_t position)
       std::wstring key = current->name;
       std::transform(key.begin(), key.end(), key.begin(), [](wchar_t character) { return static_cast<wchar_t>(std::towlower(character)); });
       if (!visited.insert(std::move(key)).second) return false;
-      const auto next = current->ValueOr(L"Folder");
+      const auto next = ParentName(current->ValueOr(L"Folder"));
       current = next.empty() ? nullptr : Find(next);
     }
   }
-  const std::wstring oldParent = entry->ValueOr(L"Folder");
-  entry->Set(L"Folder", std::move(parent));
-  auto siblings = ChildrenOf(entry->ValueOr(L"Folder"));
+  const std::wstring oldParent = ParentName(entry->ValueOr(L"Folder"));
+  const std::wstring oldGroupPath = entry->IsGroup() ? FolderForParent(document_, entry->name) : std::wstring();
+  const std::wstring newFolder = FolderForParent(document_, parent);
+  const std::wstring newGroupPath = entry->IsGroup() ? AppendFolder(newFolder, entry->name) : std::wstring();
+  entry->Set(L"Folder", newFolder);
+  if (entry->IsGroup()) RewriteFolderPrefix(document_, oldGroupPath, newGroupPath);
+  auto siblings = ChildrenOf(parent);
   siblings.erase(std::remove_if(siblings.begin(), siblings.end(), [&](const domain::Entry* candidate) { return candidate == entry; }), siblings.end());
   siblings.insert(siblings.begin() + std::min(position, siblings.size()), entry);
   for (size_t index = 0; index < siblings.size(); ++index) const_cast<domain::Entry*>(siblings[index])->Set(L"OrderInList", std::to_wstring(index + 1));
-  if (!EqualNoCase(oldParent, entry->ValueOr(L"Folder"))) Renumber(oldParent);
+  if (!EqualNoCase(oldParent, parent)) Renumber(oldParent);
   return true;
 }
 

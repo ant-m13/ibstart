@@ -7,6 +7,7 @@
 
 #include <Windows.h>
 
+#include <algorithm>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -109,6 +110,43 @@ void TestCatalogOrderingAndCycles() {
   CHECK(url && *url == L"https://example.test/base"); CHECK(!ibstart::catalog::Catalog::IsWebConnection(L"WS=not-a-url"));
 }
 
+void TestStandardFolderPaths() {
+  auto document = ibstart::v8i::V8iDocument::ParseUtf8(
+      "[Root database]\nConnect=File=\"C:\\\\root\"\nFolder=/\n"
+      "[Top]\nFolder=/\n"
+      "[Child database]\nConnect=Srvr=\"server\";Ref=\"child\"\nFolder=/Top\n"
+      "[Nested]\nFolder=/Top\n"
+      "[Deep database]\nConnect=File=\"C:\\\\deep\"\nFolder=/Top/Nested\n");
+  ibstart::catalog::Catalog catalog(std::move(document));
+  CHECK(catalog.Databases().size() == 3);
+  const auto tree = catalog.Tree();
+  const auto top = std::find_if(tree.begin(), tree.end(), [](const auto& item) { return item.name == L"Top"; });
+  CHECK(tree.size() == 2); CHECK(top != tree.end());
+  const auto nested = top == tree.end() ? std::vector<ibstart::catalog::TreeItem>::const_iterator{} :
+      std::find_if(top->children.begin(), top->children.end(), [](const auto& item) { return item.name == L"Nested"; });
+  CHECK(top != tree.end() && top->children.size() == 2); CHECK(top != tree.end() && nested != top->children.end());
+  CHECK(top != tree.end() && nested != top->children.end() && nested->children.size() == 1);
+
+  CHECK(catalog.RenameGroup(L"Top", L"Renamed"));
+  const auto* nestedEntry = catalog.Find(L"Nested");
+  const auto* deepEntry = catalog.Find(L"Deep database");
+  CHECK(nestedEntry && nestedEntry->ValueOr(L"Folder") == L"/Renamed");
+  CHECK(deepEntry && deepEntry->ValueOr(L"Folder") == L"/Renamed/Nested");
+  CHECK(catalog.Move(L"Nested", L"", 0));
+  nestedEntry = catalog.Find(L"Nested"); deepEntry = catalog.Find(L"Deep database");
+  CHECK(nestedEntry && nestedEntry->ValueOr(L"Folder") == L"/");
+  CHECK(deepEntry && deepEntry->ValueOr(L"Folder") == L"/Nested");
+  CHECK(catalog.Remove(L"Nested"));
+  deepEntry = catalog.Find(L"Deep database");
+  CHECK(deepEntry && deepEntry->ValueOr(L"Folder") == L"/");
+  CHECK(catalog.AddGroup(L"Added", L"Renamed"));
+  const auto* addedEntry = catalog.Find(L"Added");
+  CHECK(addedEntry && addedEntry->ValueOr(L"Folder") == L"/Renamed");
+  CHECK(catalog.AddServerDatabase(L"Added database", L"Srvr=\"server\";Ref=\"added\"", L"Added"));
+  const auto* addedDatabase = catalog.Find(L"Added database");
+  CHECK(addedDatabase && addedDatabase->ValueOr(L"Folder") == L"/Renamed/Added");
+}
+
 void TestSecretMasking() {
   const auto masked = ibstart::logging::MaskSecrets(L"/N admin /P \"s3cret\" --token=abc password=xyz /Password hunter2");
   CHECK(masked.find(L"s3cret") == std::wstring::npos); CHECK(masked.find(L"abc") == std::wstring::npos); CHECK(masked.find(L"xyz") == std::wstring::npos); CHECK(masked.find(L"hunter2") == std::wstring::npos); CHECK(masked.find(L"admin") != std::wstring::npos);
@@ -139,6 +177,7 @@ int wmain() {
   run(L"SafeStore", TestSafeStore);
   run(L"CommandBuilderAndSelection", TestCommandBuilderAndSelection);
   run(L"CatalogOrderingAndCycles", TestCatalogOrderingAndCycles);
+  run(L"StandardFolderPaths", TestStandardFolderPaths);
   run(L"SecretMasking", TestSecretMasking);
   run(L"PortableMode", TestPortableMode);
   if (failures) { std::wcerr << failures << L" test(s) failed\n"; return 1; }

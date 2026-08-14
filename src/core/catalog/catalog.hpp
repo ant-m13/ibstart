@@ -31,6 +31,7 @@ class Catalog {
   bool AddGroup(std::wstring name, std::wstring parent = {});
   bool AddFileDatabase(std::wstring name, const std::filesystem::path& directory, std::wstring parent = {});
   bool AddServerDatabase(std::wstring name, std::wstring connect, std::wstring parent = {});
+  bool RenameGroup(std::wstring_view name, std::wstring new_name);
   bool Remove(std::wstring_view name);
   bool Move(std::wstring_view name, std::wstring parent, size_t position);
   void Renumber(std::wstring_view parent);
