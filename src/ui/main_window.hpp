@@ -25,6 +25,12 @@ class MainWindow {
   void Activate();
 
  private:
+  struct ContextMenuItem {
+    UINT command{};
+    HICON icon{};
+    std::wstring text;
+  };
+
   static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
   LRESULT Handle(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
   void CreateControls();
@@ -36,6 +42,9 @@ class MainWindow {
   [[nodiscard]] bool ItemMatches(const catalog::TreeItem& item, std::wstring_view filter) const;
   LRESULT DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const;
   LRESULT DrawDetailsList(NMLVCUSTOMDRAW* draw) const;
+  bool MeasureContextMenuItem(MEASUREITEMSTRUCT* measure) const;
+  bool DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const;
+  void ClearContextMenuItems() noexcept;
   [[nodiscard]] std::wstring SelectedName() const;
   bool SelectTreeItem(std::wstring_view name);
   void ShowTreeContextMenu(POINT screen);
@@ -78,6 +87,7 @@ class MainWindow {
   HFONT details_key_font_{};
   HIMAGELIST tree_images_{};
   std::vector<HIMAGELIST> button_images_;
+  std::vector<ContextMenuItem> context_menu_items_;
   std::filesystem::path executable_;
   storage::StorageLayout layout_;
   storage::Settings settings_;
