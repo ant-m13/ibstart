@@ -16,6 +16,11 @@ struct TreeItem {
   std::vector<TreeItem> children;
 };
 
+// A direct http(s) URL is a legacy but supported form of Connect.  It has no
+// connection key such as WS= and must not be preserved as an unknown field
+// when an editor rewrites it into the keyed form.
+[[nodiscard]] bool IsBareWebConnection(std::wstring_view connect);
+
 class Catalog {
  public:
   explicit Catalog(v8i::V8iDocument document = {});
