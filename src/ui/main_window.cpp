@@ -15,7 +15,6 @@
 
 #include <algorithm>
 #include <chrono>
-#include <cwctype>
 #include <functional>
 #include <memory>
 #include <sstream>
@@ -30,7 +29,6 @@ constexpr UINT kActivateMessage = WM_APP + 23;
 constexpr ULONG_PTR kLaunchCopyData = 0x49425354;
 enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kAbout, kFavorite1 = 200 };
 
-std::wstring Lower(std::wstring value) { for (auto& character : value) character = static_cast<wchar_t>(std::towlower(character)); return value; }
 void Message(HWND owner, std::wstring_view text, std::wstring_view title = L"ИБ Старт", UINT type = MB_OK | MB_ICONINFORMATION) { MessageBoxW(owner, std::wstring(text).c_str(), std::wstring(title).c_str(), type); }
 
 struct InputState { HWND edit{}; std::optional<std::wstring> result; bool done{false}; };
@@ -147,6 +145,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
     case WM_NOTIFY:
       if (lparam && reinterpret_cast<NMHDR*>(lparam)->hwndFrom == tree_) {
         const auto* notification = reinterpret_cast<NMHDR*>(lparam);
+        if (notification->code == NM_CUSTOMDRAW) return DrawTreeSearchMatches(reinterpret_cast<NMTVCUSTOMDRAW*>(lparam));
         if (notification->code == TVN_SELCHANGEDW) { DisplaySelected(); return 0; }
         if (notification->code == TVN_BEGINDRAGW) { const auto* drag = reinterpret_cast<NMTREEVIEWW*>(lparam); TreeView_SelectItem(tree_, drag->itemNew.hItem); dragging_name_ = SelectedName(); SetCapture(window_); return 0; }
       } break;
@@ -186,6 +185,7 @@ void MainWindow::CreateControls() {
   CreateWindowW(L"STATIC", L"Поиск:", WS_CHILD | WS_VISIBLE, 8, 10, 50, 20, window_, nullptr, instance_, nullptr);
   search_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 58, 7, 600, 25, window_, nullptr, instance_, nullptr);
   tree_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS, 8, 42, 360, 420, window_, nullptr, instance_, nullptr);
+  TreeView_SetExtendedStyle(tree_, TVS_EX_DOUBLEBUFFER, TVS_EX_DOUBLEBUFFER);
   details_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | ES_MULTILINE | ES_READONLY | ES_AUTOVSCROLL | WS_VSCROLL, 380, 42, 480, 240, window_, nullptr, instance_, nullptr);
   enterprise_ = CreateWindowW(L"BUTTON", L"Предприятие (F3)", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 380, 292, 145, 28, window_, reinterpret_cast<HMENU>(kEnterprise), instance_, nullptr);
   designer_ = CreateWindowW(L"BUTTON", L"Конфигуратор (F4)", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 534, 292, 145, 28, window_, reinterpret_cast<HMENU>(kDesigner), instance_, nullptr);
@@ -249,13 +249,13 @@ void MainWindow::SaveCatalog() {
   catch (const std::exception& error) { logger_.Error(L"Ошибка записи: " + ibstart::utf::FromUtf8(error.what())); Message(window_, L"Не удалось сохранить ibases.v8i. Исходный файл не изменён.", L"ИБ Старт", MB_OK | MB_ICONERROR); }
 }
 
-bool MainWindow::ItemMatches(const catalog::TreeItem& item, std::wstring_view filter) const { if (filter.empty() || Lower(item.name).find(filter) != std::wstring::npos) return true; return std::any_of(item.children.begin(), item.children.end(), [&](const auto& child) { return ItemMatches(child, filter); }); }
+bool MainWindow::ItemMatches(const catalog::TreeItem& item, std::wstring_view filter) const { if (filter.empty() || utf::FindNoCaseOrdinal(item.name, filter) != std::wstring_view::npos) return true; return std::any_of(item.children.begin(), item.children.end(), [&](const auto& child) { return ItemMatches(child, filter); }); }
 void MainWindow::AddTreeItems(const std::vector<catalog::TreeItem>& items, HTREEITEM parent, std::wstring_view filter) {
   for (const auto& item : items) { if (!ItemMatches(item, filter)) continue; TVINSERTSTRUCTW row{}; row.hParent = parent; row.hInsertAfter = TVI_LAST; row.item.mask = TVIF_TEXT; row.item.pszText = const_cast<wchar_t*>(item.name.c_str()); const HTREEITEM handle = TreeView_InsertItem(tree_, &row); if (!item.database) { AddTreeItems(item.children, handle, filter); if (!filter.empty()) TreeView_Expand(tree_, handle, TVE_EXPAND); } }
 }
 void MainWindow::PopulateTree() {
   if (!tree_) return;
-  wchar_t text[512]{}; GetWindowTextW(search_, text, 512); const auto filter = Lower(text); TreeView_DeleteAllItems(tree_);
+  wchar_t text[512]{}; GetWindowTextW(search_, text, 512); search_filter_ = text; const std::wstring_view filter = search_filter_; TreeView_DeleteAllItems(tree_);
   if (catalog_) {
     AddTreeItems(catalog_->Tree(), TVI_ROOT, filter);
     const auto addSpecialRoot = [&](std::wstring_view rootName, const std::vector<std::wstring>& names) {
@@ -263,7 +263,7 @@ void MainWindow::PopulateTree() {
       const HTREEITEM rootHandle = TreeView_InsertItem(tree_, &root);
       bool any = false;
       for (const auto& name : names) {
-        const auto* entry = catalog_->Find(name); if (!entry || !entry->IsDatabase() || (!filter.empty() && Lower(entry->name).find(filter) == std::wstring::npos)) continue;
+        const auto* entry = catalog_->Find(name); if (!entry || !entry->IsDatabase() || (!filter.empty() && utf::FindNoCaseOrdinal(entry->name, filter) == std::wstring_view::npos)) continue;
         TVINSERTSTRUCTW row{}; row.hParent = rootHandle; row.hInsertAfter = TVI_LAST; row.item.mask = TVIF_TEXT; row.item.pszText = const_cast<wchar_t*>(entry->name.c_str()); TreeView_InsertItem(tree_, &row); any = true;
       }
       if (any) TreeView_Expand(tree_, rootHandle, TVE_EXPAND); else TreeView_DeleteItem(tree_, rootHandle);
@@ -275,6 +275,44 @@ void MainWindow::PopulateTree() {
   }
   if (initial_launch_id_) { auto wanted = *initial_launch_id_; initial_launch_id_.reset(); if (catalog_) for (const auto* entry : catalog_->Databases()) if (entry->ValueOr(L"ID", entry->name) == wanted) { wanted = entry->name; break; } std::function<HTREEITEM(HTREEITEM)> find = [&](HTREEITEM item) { for (; item; item = TreeView_GetNextSibling(tree_, item)) { wchar_t name[512]{}; TVITEMW row{}; row.mask = TVIF_TEXT; row.hItem = item; row.pszText = name; row.cchTextMax = 512; TreeView_GetItem(tree_, &row); if (wanted == name) return item; if (const auto child = find(TreeView_GetChild(tree_, item))) return child; } return static_cast<HTREEITEM>(nullptr); }; if (const auto target = find(TreeView_GetRoot(tree_))) TreeView_SelectItem(tree_, target); }
 }
+LRESULT MainWindow::DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const {
+  if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
+  if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) return search_filter_.empty() ? CDRF_DODEFAULT : CDRF_NOTIFYPOSTPAINT;
+  if (draw->nmcd.dwDrawStage != CDDS_ITEMPOSTPAINT || search_filter_.empty()) return CDRF_DODEFAULT;
+
+  const auto item = reinterpret_cast<HTREEITEM>(draw->nmcd.dwItemSpec);
+  wchar_t text[512]{};
+  TVITEMW treeItem{}; treeItem.mask = TVIF_TEXT; treeItem.hItem = item; treeItem.pszText = text; treeItem.cchTextMax = 512;
+  if (!TreeView_GetItem(tree_, &treeItem)) return CDRF_DODEFAULT;
+  const std::wstring_view label(text);
+  if (utf::FindNoCaseOrdinal(label, search_filter_) == std::wstring_view::npos) return CDRF_DODEFAULT;
+
+  RECT labelRect{};
+  if (!TreeView_GetItemRect(tree_, item, &labelRect, TRUE)) return CDRF_DODEFAULT;
+  const int saved = SaveDC(draw->nmcd.hdc);
+  if (const auto font = reinterpret_cast<HFONT>(SendMessageW(tree_, WM_GETFONT, 0, 0))) SelectObject(draw->nmcd.hdc, font);
+  SetBkMode(draw->nmcd.hdc, TRANSPARENT);
+  SetTextColor(draw->nmcd.hdc, RGB(0, 97, 0));
+  const HBRUSH matchBrush = CreateSolidBrush(RGB(198, 239, 206));
+  if (!matchBrush) { RestoreDC(draw->nmcd.hdc, saved); return CDRF_DODEFAULT; }
+
+  size_t start = 0;
+  size_t match = utf::FindNoCaseOrdinal(label, search_filter_, start);
+  while (match != std::wstring_view::npos) {
+    SIZE prefixSize{}, matchSize{};
+    GetTextExtentPoint32W(draw->nmcd.hdc, label.data(), static_cast<int>(match), &prefixSize);
+    GetTextExtentPoint32W(draw->nmcd.hdc, label.data() + match, static_cast<int>(search_filter_.size()), &matchSize);
+    RECT matchRect{labelRect.left + prefixSize.cx, labelRect.top + 1, labelRect.left + prefixSize.cx + matchSize.cx, labelRect.bottom - 1};
+    FillRect(draw->nmcd.hdc, &matchRect, matchBrush);
+    RECT textRect{matchRect.left, labelRect.top, matchRect.right, labelRect.bottom};
+    DrawTextW(draw->nmcd.hdc, label.data() + match, static_cast<int>(search_filter_.size()), &textRect, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+    start = match + search_filter_.size();
+    match = utf::FindNoCaseOrdinal(label, search_filter_, start);
+  }
+  DeleteObject(matchBrush);
+  RestoreDC(draw->nmcd.hdc, saved);
+  return CDRF_DODEFAULT;
+}
 std::wstring MainWindow::SelectedName() const { const auto item = TreeView_GetSelection(tree_); if (!item) return {}; wchar_t text[512]{}; TVITEMW data{}; data.mask = TVIF_TEXT; data.hItem = item; data.pszText = text; data.cchTextMax = 512; return TreeView_GetItem(tree_, &data) ? text : L""; }
 void MainWindow::DisplaySelected() { if (!catalog_) return; const auto name = SelectedName(); const auto* entry = catalog_->Find(name); if (!entry) { SetWindowTextW(details_, L""); EnableWindow(enterprise_, FALSE); EnableWindow(designer_, FALSE); EnableWindow(cache_, FALSE); EnableWindow(shortcut_, FALSE); return; } std::wstring text = L"Имя: " + entry->name + L"\r\n"; for (const auto& field : entry->fields) text += field.key + L" = " + field.value + L"\r\n"; SetWindowTextW(details_, text.c_str()); const bool database = entry->IsDatabase(); EnableWindow(enterprise_, database); EnableWindow(designer_, database); EnableWindow(cache_, database); EnableWindow(shortcut_, database); }
 
@@ -283,7 +321,7 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
   try { const auto database = catalog_->DatabaseFor(name); if (const auto webUrl = catalog::Catalog::WebUrl(database.connect)) { const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", webUrl->c_str(), nullptr, nullptr, SW_SHOWNORMAL)); if (result <= 32) throw std::runtime_error("Unable to open the web database URL."); return; }
     domain::LaunchOptions options; options.mode = mode; if (database.version != L"" && database.version != L"Авто") options.version = database.version;
     const auto selected = launcher::SelectPlatform(platforms_, options); if (!selected) { Message(window_, L"Подходящая платформа 1С не найдена. Проверьте установку и настройки поиска.", L"ИБ Старт", MB_OK | MB_ICONERROR); return; }
-    const auto parameters = database.additional_parameters; if (Lower(parameters).find(L"/p") != std::wstring::npos && MessageBoxW(window_, L"В дополнительных параметрах обнаружен /P. Пароль может храниться в открытом виде в ibases.v8i. Продолжить?", L"Предупреждение", MB_YESNO | MB_ICONWARNING) != IDYES) return;
+    const auto parameters = database.additional_parameters; if (utf::FindNoCaseOrdinal(parameters, L"/p") != std::wstring_view::npos && MessageBoxW(window_, L"В дополнительных параметрах обнаружен /P. Пароль может храниться в открытом виде в ibases.v8i. Продолжить?", L"Предупреждение", MB_YESNO | MB_ICONWARNING) != IDYES) return;
     const auto command = launcher::BuildCommand(database, *selected, options); logger_.Info(L"Запуск: " + command.CommandLine()); launcher::Launch(command); storage::AppendHistory(layout_, {database.id, std::chrono::system_clock::now(), mode}); SetStatus(L"Запущена база: " + database.name);
   } catch (const std::exception& error) { logger_.Error(L"Ошибка запуска: " + ibstart::utf::FromUtf8(error.what())); Message(window_, L"Не удалось запустить базу. Подробности — в последнем логе.", L"ИБ Старт", MB_OK | MB_ICONERROR); }
 }

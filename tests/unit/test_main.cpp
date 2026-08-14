@@ -1,5 +1,6 @@
 #include "core/catalog/catalog.hpp"
 #include "core/domain/version.hpp"
+#include "core/domain/utf.hpp"
 #include "core/launcher/command_builder.hpp"
 #include "core/logging/logging.hpp"
 #include "core/storage/storage.hpp"
@@ -51,6 +52,14 @@ void TestProductVersion() {
   const auto file = core + L"." + std::to_wstring(ibstart::version::revision);
   CHECK(ibstart::version::value.starts_with(core));
   CHECK(ibstart::version::file_value == file);
+}
+
+void TestUnicodeCaseInsensitiveSearch() {
+  CHECK(ibstart::utf::FindNoCaseOrdinal(L"КД2", L"кд") == 0);
+  CHECK(ibstart::utf::FindNoCaseOrdinal(L"Рабочая КД3", L"кд") == 8);
+  CHECK(ibstart::utf::FindNoCaseOrdinal(L"Alpha BETA", L"beta") == 6);
+  CHECK(ibstart::utf::FindNoCaseOrdinal(L"КД2", L"д3") == std::wstring_view::npos);
+  CHECK(ibstart::utf::FindNoCaseOrdinal(L"КДКД", L"кд", 2) == 2);
 }
 
 void TestNoBomAndCatalog() {
@@ -173,6 +182,7 @@ int wmain() {
   };
   run(L"V8iRoundTrip", TestV8iRoundTrip);
   run(L"ProductVersion", TestProductVersion);
+  run(L"UnicodeCaseInsensitiveSearch", TestUnicodeCaseInsensitiveSearch);
   run(L"NoBomAndCatalog", TestNoBomAndCatalog);
   run(L"SafeStore", TestSafeStore);
   run(L"CommandBuilderAndSelection", TestCommandBuilderAndSelection);
