@@ -14,11 +14,10 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Configure MSVC environment
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
+        shell: pwsh
+        run: ./.github/scripts/setup-msvc.ps1
       - name: Configure CMake
         run: cmake -S . -B out/build/ci -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
       - name: Build Release
@@ -36,7 +35,7 @@ jobs:
         shell: pwsh
         run: Compress-Archive -Path out/build/ci/IBStart.exe,README.md,LICENSE,CHANGELOG.md -DestinationPath out/build/ci/IBStart-windows-x64.zip
       - name: Upload artifact
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: IBStart-windows-x64
           path: |
