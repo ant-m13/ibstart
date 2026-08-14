@@ -46,6 +46,12 @@ HFONT CreateUiFont(HWND window, int points, LONG weight) {
       DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 }
 int ScaleForDpi(int logicalPixels, UINT dpi) { return MulDiv(logicalPixels, static_cast<int>(dpi == 0 ? 96 : dpi), 96); }
+SIZE DialogOuterSize(HWND owner, int clientWidth, int clientHeight, DWORD style, DWORD extendedStyle) {
+  const UINT dpi = owner ? GetDpiForWindow(owner) : GetDpiForSystem();
+  RECT bounds{0, 0, ScaleForDpi(clientWidth, dpi), ScaleForDpi(clientHeight, dpi)};
+  if (!AdjustWindowRectExForDpi(&bounds, style, FALSE, extendedStyle, dpi)) return {bounds.right, bounds.bottom};
+  return {bounds.right - bounds.left, bounds.bottom - bounds.top};
+}
 void AttachButtonIcon(HWND button, HINSTANCE instance, int resource, std::vector<HIMAGELIST>& storage) {
   HIMAGELIST images = ImageList_Create(20, 20, ILC_COLOR32 | ILC_MASK, 1, 1);
   HICON icon = LoadResourceIcon(instance, resource, 20);
@@ -137,6 +143,14 @@ void PositionDialogNearOwner(HWND dialog, HWND owner) {
   x = std::clamp(x, minimumX, maximumX);
   y = std::clamp(y, minimumY, maximumY);
   SetWindowPos(dialog, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
+}
+LRESULT DialogControlColor(UINT message, WPARAM wparam, LPARAM lparam) {
+  if (message != WM_CTLCOLORSTATIC && message != WM_CTLCOLORBTN) return 0;
+  const HDC context = reinterpret_cast<HDC>(wparam);
+  const HWND control = reinterpret_cast<HWND>(lparam);
+  SetBkColor(context, GetSysColor(COLOR_WINDOW));
+  SetTextColor(context, IsWindowEnabled(control) ? GetSysColor(COLOR_WINDOWTEXT) : GetSysColor(COLOR_GRAYTEXT));
+  return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
 }
 
 enum class DatabaseConnectionKind { file, web, server };
@@ -356,8 +370,8 @@ void CreateDatabaseEditorControls(HWND dialog, DatabaseEditorState& state, const
   create(0, L"BUTTON", L"Расположение информационной базы", BS_GROUPBOX, 14, 74, 632, 260, 0, textFont);
   state.file_radio = create(0, L"BUTTON", L"Файловая база", WS_GROUP | WS_TABSTOP | BS_AUTORADIOBUTTON, 28, 98, 180, 20, kConnectionFile, textFont);
   state.file_label = create(0, L"STATIC", L"Каталог файловой базы:", 0, 48, 122, 190, 20, 0, textFont);
-  state.file = create(WS_EX_CLIENTEDGE, L"EDIT", ConnectionValue(state.initial.connect, L"File"), WS_TABSTOP | ES_AUTOHSCROLL, 48, 142, 528, 25, kFilePath, textFont);
-  state.file_browse = create(0, L"BUTTON", L"Обзор…", WS_TABSTOP, 584, 142, 50, 25, kBrowseFilePath, buttonFont);
+  state.file = create(WS_EX_CLIENTEDGE, L"EDIT", ConnectionValue(state.initial.connect, L"File"), WS_TABSTOP | ES_AUTOHSCROLL, 48, 142, 506, 25, kFilePath, textFont);
+  state.file_browse = create(0, L"BUTTON", L"Обзор…", WS_TABSTOP, 564, 142, 70, 25, kBrowseFilePath, buttonFont);
   state.web_radio = create(0, L"BUTTON", L"Веб-база", WS_TABSTOP | BS_AUTORADIOBUTTON, 28, 178, 180, 20, kConnectionWeb, textFont);
   state.web_label = create(0, L"STATIC", L"Адрес веб-сервера:", 0, 48, 202, 190, 20, 0, textFont);
   const auto web = catalog::Catalog::WebUrl(state.initial.connect);
@@ -407,6 +421,7 @@ LRESULT CALLBACK DatabaseEditorProc(HWND wnd, UINT message, WPARAM wparam, LPARA
     SetWindowLongPtrW(wnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(reinterpret_cast<CREATESTRUCTW*>(lparam)->lpCreateParams));
     return TRUE;
   }
+  if (message == WM_CTLCOLORSTATIC || message == WM_CTLCOLORBTN) return DialogControlColor(message, wparam, lparam);
   if (message == WM_COMMAND && state) {
     const int command = LOWORD(wparam);
     if (command == kConnectionFile || command == kConnectionWeb || command == kConnectionServer) {
@@ -441,9 +456,11 @@ std::optional<DatabaseEditorData> EditDatabase(HWND owner, std::wstring_view tit
   }();
   (void)atom;
   if (owner) EnableWindow(owner, FALSE);
-  const UINT dpi = owner ? GetDpiForWindow(owner) : GetDpiForSystem();
+  constexpr DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP;
+  constexpr DWORD extendedStyle = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
+  const SIZE outerSize = DialogOuterSize(owner, 660, 620, style, extendedStyle);
   HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT, kDatabaseEditorClass, std::wstring(title).c_str(),
-      WS_CAPTION | WS_SYSMENU | WS_POPUP, CW_USEDEFAULT, CW_USEDEFAULT, ScaleForDpi(660, dpi), ScaleForDpi(635, dpi),
+      style, CW_USEDEFAULT, CW_USEDEFAULT, outerSize.cx, outerSize.cy,
       owner, nullptr, GetModuleHandleW(nullptr), &state);
   if (!dialog) {
     if (owner) EnableWindow(owner, TRUE);
@@ -498,6 +515,7 @@ struct InputState { HWND edit{}; HFONT font{}; HFONT button_font{}; std::optiona
 LRESULT CALLBACK InputWindowProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
   auto* state = reinterpret_cast<InputState*>(GetWindowLongPtrW(wnd, GWLP_USERDATA));
   if (msg == WM_NCCREATE) { SetWindowLongPtrW(wnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(reinterpret_cast<CREATESTRUCTW*>(lp)->lpCreateParams)); return TRUE; }
+  if (msg == WM_CTLCOLORSTATIC || msg == WM_CTLCOLORBTN) return DialogControlColor(msg, wp, lp);
   if (msg == WM_COMMAND && state) {
     if (LOWORD(wp) == IDOK) { const int length = GetWindowTextLengthW(state->edit); std::wstring text(length + 1, L'\0'); GetWindowTextW(state->edit, text.data(), length + 1); text.resize(length); state->result = std::move(text); state->done = true; DestroyWindow(wnd); return 0; }
     if (LOWORD(wp) == IDCANCEL) { state->done = true; DestroyWindow(wnd); return 0; }
@@ -515,8 +533,11 @@ std::optional<std::wstring> InputBox(HWND owner, std::wstring_view title, std::w
   (void)atom;
   EnableWindow(owner, FALSE);
   const UINT dpi = owner ? GetDpiForWindow(owner) : GetDpiForSystem();
-  HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT, kInputBoxClass, std::wstring(title).c_str(), WS_CAPTION | WS_SYSMENU | WS_POPUP,
-      CW_USEDEFAULT, CW_USEDEFAULT, ScaleForDpi(470, dpi), ScaleForDpi(150, dpi), owner, nullptr, GetModuleHandleW(nullptr), &state);
+  constexpr DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP;
+  constexpr DWORD extendedStyle = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
+  const SIZE outerSize = DialogOuterSize(owner, 470, 125, style, extendedStyle);
+  HWND dialog = CreateWindowExW(extendedStyle, kInputBoxClass, std::wstring(title).c_str(), style,
+      CW_USEDEFAULT, CW_USEDEFAULT, outerSize.cx, outerSize.cy, owner, nullptr, GetModuleHandleW(nullptr), &state);
   if (!dialog) {
     EnableWindow(owner, TRUE);
     return std::nullopt;
