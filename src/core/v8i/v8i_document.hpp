@@ -28,6 +28,7 @@ class V8iDocument {
 
   Utf8Encoding encoding{Utf8Encoding::utf8_bom};
   std::wstring newline{L"\r\n"};
+  bool trailing_newline{true};
   std::vector<std::wstring> preamble;
   std::vector<Section> sections;
 };

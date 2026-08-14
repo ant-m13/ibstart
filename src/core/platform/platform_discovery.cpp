@@ -3,7 +3,11 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <cwchar>
+#include <cwctype>
+#include <optional>
 #include <set>
+#include <vector>
 
 namespace ibstart::platform {
 namespace {
@@ -12,37 +16,97 @@ std::wstring Environment(std::wstring_view name) {
   const DWORD required = GetEnvironmentVariableW(std::wstring(name).c_str(), nullptr, 0);
   if (required == 0) return {};
   std::wstring value(required, L'\0');
-  GetEnvironmentVariableW(std::wstring(name).c_str(), value.data(), required);
+  if (GetEnvironmentVariableW(std::wstring(name).c_str(), value.data(), required) == 0) return {};
   value.resize(required - 1);
   return value;
 }
 
-void AddExe(const std::filesystem::path& executable, std::vector<domain::PlatformInstallation>& output, std::set<std::wstring>& known) {
+std::vector<unsigned long long> VersionParts(std::wstring_view version) {
+  std::vector<unsigned long long> result;
+  size_t start = 0;
+  while (start < version.size()) {
+    while (start < version.size() && !std::iswdigit(version[start])) ++start;
+    if (start == version.size()) break;
+    size_t end = start;
+    while (end < version.size() && std::iswdigit(version[end])) ++end;
+    const std::wstring part(version.substr(start, end - start));
+    result.push_back(std::wcstoull(part.c_str(), nullptr, 10));
+    start = end;
+  }
+  return result;
+}
+
+bool NewerVersion(std::wstring_view left, std::wstring_view right) {
+  const auto leftParts = VersionParts(left);
+  const auto rightParts = VersionParts(right);
+  const size_t count = std::max(leftParts.size(), rightParts.size());
+  for (size_t index = 0; index < count; ++index) {
+    const auto leftPart = index < leftParts.size() ? leftParts[index] : 0;
+    const auto rightPart = index < rightParts.size() ? rightParts[index] : 0;
+    if (leftPart != rightPart) return leftPart > rightPart;
+  }
+  return left > right;
+}
+
+void AddExe(const std::filesystem::path& executable, std::vector<domain::PlatformInstallation>& output,
+    std::set<std::wstring>& known, std::optional<domain::ClientBitness> bitness = std::nullopt) {
   std::error_code error;
   if (!std::filesystem::is_regular_file(executable, error)) return;
   const auto canonical = std::filesystem::weakly_canonical(executable, error);
-  const auto key = (error ? executable : canonical).wstring();
+  auto key = (error ? executable : canonical).wstring();
+  std::transform(key.begin(), key.end(), key.begin(), [](wchar_t character) { return static_cast<wchar_t>(std::towlower(character)); });
   if (!known.insert(key).second) return;
   const auto bin = executable.parent_path();
   const auto install = bin.parent_path();
   const auto version = install.filename().wstring();
-  const bool x86 = install.wstring().find(L"(x86)") != std::wstring::npos || executable.wstring().find(L"(x86)") != std::wstring::npos;
-  output.push_back({executable, version, x86 ? domain::ClientBitness::x86 : domain::ClientBitness::x64,
+  auto normalizedPath = executable.wstring();
+  std::transform(normalizedPath.begin(), normalizedPath.end(), normalizedPath.begin(), [](wchar_t character) { return static_cast<wchar_t>(std::towlower(character)); });
+  const bool x86Path = normalizedPath.find(L"(x86)") != std::wstring::npos;
+  const auto detectedBitness = bitness.value_or(x86Path ? domain::ClientBitness::x86 : domain::ClientBitness::x64);
+  error.clear();
+  output.push_back({executable, version, detectedBitness,
       std::filesystem::exists(bin / L"1cv8c.exe", error)});
 }
 
 void ScanRoot(const std::filesystem::path& root, std::vector<domain::PlatformInstallation>& output, std::set<std::wstring>& known) {
   std::error_code error;
   if (!std::filesystem::exists(root, error)) return;
-  if (root.filename() == L"bin") AddExe(root / L"1cv8.exe", output, known);
-  for (const auto& first : std::filesystem::directory_iterator(root, std::filesystem::directory_options::skip_permission_denied, error)) {
-    if (error || !first.is_directory(error)) continue;
+  AddExe(root / L"1cv8.exe", output, known);
+  AddExe(root / L"bin" / L"1cv8.exe", output, known);
+  error.clear();
+  for (std::filesystem::directory_iterator firstIt(root, std::filesystem::directory_options::skip_permission_denied, error), end; firstIt != end; firstIt.increment(error)) {
+    if (error) { error.clear(); continue; }
+    const auto& first = *firstIt;
+    if (!first.is_directory(error)) { error.clear(); continue; }
     AddExe(first.path() / L"bin" / L"1cv8.exe", output, known);
-    for (const auto& second : std::filesystem::directory_iterator(first.path(), std::filesystem::directory_options::skip_permission_denied, error)) {
-      if (error || !second.is_directory(error)) continue;
+    error.clear();
+    for (std::filesystem::directory_iterator secondIt(first.path(), std::filesystem::directory_options::skip_permission_denied, error), secondEnd; secondIt != secondEnd; secondIt.increment(error)) {
+      if (error) { error.clear(); continue; }
+      const auto& second = *secondIt;
+      if (!second.is_directory(error)) { error.clear(); continue; }
       AddExe(second.path() / L"bin" / L"1cv8.exe", output, known);
     }
+    error.clear();
   }
+}
+
+std::optional<std::filesystem::path> RegistryInstallLocation(HKEY key) {
+  DWORD type{};
+  DWORD bytes{};
+  if (RegQueryValueExW(key, L"InstallLocation", nullptr, &type, nullptr, &bytes) != ERROR_SUCCESS ||
+      (type != REG_SZ && type != REG_EXPAND_SZ) || bytes < sizeof(wchar_t)) return std::nullopt;
+  std::vector<wchar_t> buffer(bytes / sizeof(wchar_t) + 1, L'\0');
+  if (RegQueryValueExW(key, L"InstallLocation", nullptr, &type, reinterpret_cast<BYTE*>(buffer.data()), &bytes) != ERROR_SUCCESS) return std::nullopt;
+  std::wstring value(buffer.data());
+  if (type == REG_EXPAND_SZ) {
+    const DWORD required = ExpandEnvironmentStringsW(value.c_str(), nullptr, 0);
+    if (required == 0) return std::nullopt;
+    std::wstring expanded(required, L'\0');
+    if (ExpandEnvironmentStringsW(value.c_str(), expanded.data(), required) == 0) return std::nullopt;
+    expanded.resize(required - 1);
+    value = std::move(expanded);
+  }
+  return std::filesystem::path(value);
 }
 
 void ScanRegistry(HKEY hive, REGSAM view, std::vector<domain::PlatformInstallation>& output, std::set<std::wstring>& known) {
@@ -53,16 +117,14 @@ void ScanRegistry(HKEY hive, REGSAM view, std::vector<domain::PlatformInstallati
     if (RegEnumKeyExW(root, firstIndex, firstName, &firstLength, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS) break;
     HKEY version{};
     if (RegOpenKeyExW(root, firstName, 0, KEY_READ | view, &version) != ERROR_SUCCESS) continue;
+    const auto bitness = view == KEY_WOW64_32KEY ? domain::ClientBitness::x86 : domain::ClientBitness::x64;
+    if (const auto location = RegistryInstallLocation(version)) { AddExe(*location / L"1cv8.exe", output, known, bitness); AddExe(*location / L"bin" / L"1cv8.exe", output, known, bitness); }
     for (DWORD secondIndex = 0;; ++secondIndex) {
       wchar_t secondName[256]; DWORD secondLength = 256;
       if (RegEnumKeyExW(version, secondIndex, secondName, &secondLength, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS) break;
       HKEY install{};
       if (RegOpenKeyExW(version, secondName, 0, KEY_READ | view, &install) != ERROR_SUCCESS) continue;
-      wchar_t location[MAX_PATH * 4]; DWORD bytes = sizeof(location); DWORD type{};
-      if (RegQueryValueExW(install, L"InstallLocation", nullptr, &type, reinterpret_cast<BYTE*>(location), &bytes) == ERROR_SUCCESS &&
-          (type == REG_SZ || type == REG_EXPAND_SZ)) {
-        AddExe(std::filesystem::path(location) / L"bin" / L"1cv8.exe", output, known);
-      }
+      if (const auto location = RegistryInstallLocation(install)) { AddExe(*location / L"1cv8.exe", output, known, bitness); AddExe(*location / L"bin" / L"1cv8.exe", output, known, bitness); }
       RegCloseKey(install);
     }
     RegCloseKey(version);
@@ -92,7 +154,8 @@ std::vector<domain::PlatformInstallation> Discover(const std::vector<std::filesy
   ScanRegistry(HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY, result, known);
   ScanRegistry(HKEY_LOCAL_MACHINE, KEY_WOW64_32KEY, result, known);
   ScanRegistry(HKEY_CURRENT_USER, KEY_WOW64_64KEY, result, known);
-  std::sort(result.begin(), result.end(), [](const auto& left, const auto& right) { return left.version > right.version; });
+  ScanRegistry(HKEY_CURRENT_USER, KEY_WOW64_32KEY, result, known);
+  std::sort(result.begin(), result.end(), [](const auto& left, const auto& right) { return NewerVersion(left.version, right.version); });
   return result;
 }
 

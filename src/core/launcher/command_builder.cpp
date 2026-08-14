@@ -5,6 +5,7 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <cwchar>
 #include <cwctype>
 #include <stdexcept>
 
@@ -31,14 +32,56 @@ std::wstring Unquote(std::wstring value) {
   return value;
 }
 
+std::wstring Trim(std::wstring_view value) {
+  size_t first = 0;
+  while (first < value.size() && std::iswspace(value[first])) ++first;
+  size_t last = value.size();
+  while (last > first && std::iswspace(value[last - 1])) --last;
+  return std::wstring(value.substr(first, last - first));
+}
+
 std::wstring ConnectionValue(std::wstring_view connect, std::wstring_view key) {
-  const std::wstring search = std::wstring(key) + L"=";
-  const size_t start = connect.find(search);
-  if (start == std::wstring_view::npos) return {};
-  size_t valueStart = start + search.size();
-  size_t valueEnd = connect.find(L';', valueStart);
-  if (valueEnd == std::wstring_view::npos) valueEnd = connect.size();
-  return Unquote(std::wstring(connect.substr(valueStart, valueEnd - valueStart)));
+  size_t start = 0;
+  bool quoted = false;
+  for (size_t index = 0; index <= connect.size(); ++index) {
+    const wchar_t character = index < connect.size() ? connect[index] : L';';
+    if (character == L'"') quoted = !quoted;
+    if (character != L';' || quoted) continue;
+    const auto field = connect.substr(start, index - start);
+    const size_t separator = field.find(L'=');
+    if (separator != std::wstring_view::npos && EqualNoCase(Trim(field.substr(0, separator)), key)) {
+      return Unquote(Trim(field.substr(separator + 1)));
+    }
+    start = index + 1;
+  }
+  return {};
+}
+
+std::vector<unsigned long long> VersionParts(std::wstring_view version) {
+  std::vector<unsigned long long> result;
+  size_t start = 0;
+  while (start < version.size()) {
+    while (start < version.size() && !std::iswdigit(version[start])) ++start;
+    if (start == version.size()) break;
+    size_t end = start;
+    while (end < version.size() && std::iswdigit(version[end])) ++end;
+    const std::wstring part(version.substr(start, end - start));
+    result.push_back(std::wcstoull(part.c_str(), nullptr, 10));
+    start = end;
+  }
+  return result;
+}
+
+bool NewerVersion(std::wstring_view left, std::wstring_view right) {
+  const auto leftParts = VersionParts(left);
+  const auto rightParts = VersionParts(right);
+  const size_t count = std::max(leftParts.size(), rightParts.size());
+  for (size_t index = 0; index < count; ++index) {
+    const auto leftPart = index < leftParts.size() ? leftParts[index] : 0;
+    const auto rightPart = index < rightParts.size() ? rightParts[index] : 0;
+    if (leftPart != rightPart) return leftPart > rightPart;
+  }
+  return left > right;
 }
 
 }  // namespace
@@ -70,11 +113,13 @@ std::vector<std::wstring> SplitCommandArguments(std::wstring_view text) {
   std::vector<std::wstring> result;
   std::wstring current;
   bool quoted = false;
+  bool tokenStarted = false;
   size_t slashes = 0;
-  const auto flush = [&] { if (!current.empty()) { result.push_back(std::move(current)); current.clear(); } };
+  const auto flush = [&] { if (tokenStarted) { result.push_back(std::move(current)); current.clear(); tokenStarted = false; } };
   for (const wchar_t character : text) {
-    if (character == L'\\') { ++slashes; continue; }
+    if (character == L'\\') { ++slashes; tokenStarted = true; continue; }
     if (character == L'"') {
+      tokenStarted = true;
       current.append(slashes / 2, L'\\');
       if (slashes % 2 == 0) quoted = !quoted;
       else current.push_back(L'"');
@@ -84,7 +129,7 @@ std::vector<std::wstring> SplitCommandArguments(std::wstring_view text) {
     current.append(slashes, L'\\');
     slashes = 0;
     if (std::iswspace(character) && !quoted) flush();
-    else current.push_back(character);
+    else { current.push_back(character); tokenStarted = true; }
   }
   current.append(slashes, L'\\');
   if (quoted) throw std::invalid_argument("Unclosed quote in additional launch parameters.");
@@ -105,7 +150,7 @@ std::optional<domain::PlatformInstallation> SelectPlatform(
     const int leftRank = left.bitness == domain::ClientBitness::x64 ? 0 : 1;
     const int rightRank = right.bitness == domain::ClientBitness::x64 ? 0 : 1;
     if (leftRank != rightRank) return leftRank < rightRank;
-    return left.version > right.version;
+    return NewerVersion(left.version, right.version);
   });
   if (filtered.empty()) return std::nullopt;
   return filtered.front();
@@ -117,6 +162,7 @@ domain::LaunchCommand BuildCommand(const domain::Database& database,
   domain::LaunchCommand command;
   command.executable = platform.executable;
   if (options.client_type == domain::ClientType::thin) {
+    if (options.mode == domain::LaunchMode::designer) throw std::invalid_argument("Designer cannot be launched with the thin client.");
     const auto thin = platform.executable.parent_path() / L"1cv8c.exe";
     if (!std::filesystem::exists(thin)) throw std::runtime_error("The selected platform has no thin client (1cv8c.exe).");
     command.executable = thin;
@@ -131,7 +177,9 @@ domain::LaunchCommand BuildCommand(const domain::Database& database,
     command.arguments.insert(command.arguments.end(), {L"/F", file});
   } else if (!server.empty() && !reference.empty()) {
     command.arguments.insert(command.arguments.end(), {L"/S", server + L"\\" + reference});
-  } else if (database.connect.starts_with(L"http://") || database.connect.starts_with(L"https://")) {
+  } else if (database.connect.size() >= 7 &&
+      (_wcsnicmp(database.connect.c_str(), L"http://", 7) == 0 ||
+       (database.connect.size() >= 8 && _wcsnicmp(database.connect.c_str(), L"https://", 8) == 0))) {
     if (options.mode != domain::LaunchMode::web_client) throw std::invalid_argument("A web database can only be opened with the web-client action.");
     command.arguments.insert(command.arguments.end(), {L"/WS", database.connect});
   } else {

@@ -3,6 +3,7 @@
 #include "core/v8i/v8i_document.hpp"
 
 #include <filesystem>
+#include <cstdint>
 #include <optional>
 #include <stdexcept>
 
@@ -26,6 +27,7 @@ class V8iFileStore {
   struct Fingerprint {
     uintmax_t size{};
     std::filesystem::file_time_type write_time{};
+    std::uint64_t content_hash{};
     bool operator==(const Fingerprint&) const = default;
   };
 

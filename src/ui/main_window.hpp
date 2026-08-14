@@ -6,10 +6,12 @@
 #include "core/v8i/v8i_file_store.hpp"
 
 #include <Windows.h>
+#include <CommCtrl.h>
 
 #include <memory>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <vector>
 
 namespace ibstart::ui {
@@ -24,7 +26,7 @@ class MainWindow {
 
  private:
   static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
-  LRESULT Handle(UINT message, WPARAM wparam, LPARAM lparam);
+  LRESULT Handle(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
   void CreateControls();
   void Layout(int width, int height);
   void LoadCatalog(bool report_error = true);
@@ -48,6 +50,7 @@ class MainWindow {
   void ToggleFavorite();
   void LaunchFavorite(size_t slot);
   [[nodiscard]] std::wstring NextName(std::wstring_view stem) const;
+  void ReportUnhandledError(std::string_view message) noexcept;
 
   HINSTANCE instance_{};
   HWND window_{};

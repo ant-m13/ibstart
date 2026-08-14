@@ -1,12 +1,12 @@
 # Выпуск IBStart
 
 1. Обновите номер версии в `CMakeLists.txt`, `CHANGELOG.md` и ресурсах, если это необходимо.
-2. Откройте x64 Native Tools Command Prompt for VS 2022 и выполните:
+2. Откройте x64 Native Tools Command Prompt для установленной версии MSVC и выполните:
 
    ```powershell
-   cmake --preset vs2022-x64-release
-   cmake --build --preset vs2022-x64-release
-   ctest --preset vs2022-x64-release
+   cmake --preset msvc-x64-release
+   cmake --build --preset msvc-x64-release
+   ctest --preset msvc-x64-release
    ```
 
 3. Убедитесь, что post-build проверка прошла: `IBStart.exe` не больше 8 МиБ. Проверьте запуск на чистой Windows 10/11 с 32- и 64-разрядной 1С.

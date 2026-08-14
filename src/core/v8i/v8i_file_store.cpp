@@ -38,20 +38,34 @@ V8iFileStore::V8iFileStore(std::filesystem::path path) : path_(std::move(path)) 
 
 std::optional<V8iFileStore::Fingerprint> V8iFileStore::FingerprintOf(const std::filesystem::path& path) {
   std::error_code error;
-  if (!std::filesystem::exists(path, error)) return std::nullopt;
+  const bool exists = std::filesystem::exists(path, error);
+  if (error) throw std::runtime_error("Cannot inspect ibases.v8i: " + error.message());
+  if (!exists) return std::nullopt;
   const auto size = std::filesystem::file_size(path, error);
   if (error) throw std::runtime_error("Cannot inspect ibases.v8i: " + error.message());
   const auto time = std::filesystem::last_write_time(path, error);
   if (error) throw std::runtime_error("Cannot inspect ibases.v8i: " + error.message());
-  return Fingerprint{size, time};
+  std::ifstream input(path, std::ios::binary);
+  if (!input) throw std::runtime_error("Cannot inspect ibases.v8i contents.");
+  std::uint64_t hash = 1469598103934665603ULL;
+  char buffer[8192];
+  while (input.read(buffer, sizeof(buffer)) || input.gcount() > 0) {
+    for (std::streamsize index = 0; index < input.gcount(); ++index) { hash ^= static_cast<unsigned char>(buffer[index]); hash *= 1099511628211ULL; }
+  }
+  if (!input.eof()) throw std::runtime_error("Cannot inspect ibases.v8i contents completely.");
+  return Fingerprint{size, time, hash};
 }
 
 V8iDocument V8iFileStore::Read() {
+  const auto before = FingerprintOf(path_);
+  if (!before) throw std::runtime_error("Cannot open ibases.v8i for reading: " + utf::ToUtf8(path_.wstring()));
   std::ifstream input(path_, std::ios::binary);
   if (!input) throw std::runtime_error("Cannot open ibases.v8i for reading: " + utf::ToUtf8(path_.wstring()));
   const std::string bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
   if (!input.good() && !input.eof()) throw std::runtime_error("Cannot read ibases.v8i completely.");
-  loaded_fingerprint_ = FingerprintOf(path_);
+  const auto after = FingerprintOf(path_);
+  if (before != after) throw ExternalModificationError("ibases.v8i changed while it was being read. Reload it.");
+  loaded_fingerprint_ = after;
   return V8iDocument::ParseUtf8(bytes);
 }
 
@@ -66,17 +80,22 @@ void V8iFileStore::CreateBackup() const {
 }
 
 std::vector<std::filesystem::path> V8iFileStore::Backups() const {
-  std::vector<std::filesystem::path> result;
+  std::vector<std::pair<std::filesystem::file_time_type, std::filesystem::path>> dated;
   std::error_code error;
-  if (!std::filesystem::exists(path_.parent_path(), error)) return result;
+  if (!std::filesystem::exists(path_.parent_path(), error)) return {};
   const auto prefix = path_.filename().wstring() + L".bak_";
-  for (const auto& item : std::filesystem::directory_iterator(path_.parent_path(), error)) {
-    if (error) break;
-    if (item.is_regular_file() && item.path().filename().wstring().starts_with(prefix)) result.push_back(item.path());
+  for (std::filesystem::directory_iterator it(path_.parent_path(), std::filesystem::directory_options::skip_permission_denied, error), end;
+       it != end; it.increment(error)) {
+    if (error) { error.clear(); continue; }
+    if (!it->is_regular_file(error) || error || !it->path().filename().wstring().starts_with(prefix)) { error.clear(); continue; }
+    const auto time = it->last_write_time(error);
+    if (!error) dated.emplace_back(time, it->path());
+    error.clear();
   }
-  std::sort(result.begin(), result.end(), [](const auto& a, const auto& b) {
-    return std::filesystem::last_write_time(a) > std::filesystem::last_write_time(b);
-  });
+  std::sort(dated.begin(), dated.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
+  std::vector<std::filesystem::path> result;
+  result.reserve(dated.size());
+  for (auto& item : dated) result.push_back(std::move(item.second));
   return result;
 }
 
@@ -89,7 +108,7 @@ void V8iFileStore::PruneBackups() const {
 }
 
 void V8iFileStore::Save(const V8iDocument& document) {
-  if (loaded_fingerprint_ && FingerprintOf(path_) != loaded_fingerprint_) {
+  if (FingerprintOf(path_) != loaded_fingerprint_) {
     throw ExternalModificationError("ibases.v8i was changed by another program. Reload it before saving.");
   }
   std::error_code error;
@@ -105,6 +124,9 @@ void V8iFileStore::Save(const V8iDocument& document) {
       output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
       output.flush();
       if (!output) throw std::runtime_error("Cannot write temporary ibases.v8i file.");
+    }
+    if (FingerprintOf(path_) != loaded_fingerprint_) {
+      throw ExternalModificationError("ibases.v8i was changed by another program. Reload it before saving.");
     }
     CreateBackup();
     if (!MoveFileExW(temporary.c_str(), path_.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {

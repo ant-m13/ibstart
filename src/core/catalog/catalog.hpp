@@ -34,6 +34,7 @@ class Catalog {
   bool Remove(std::wstring_view name);
   bool Move(std::wstring_view name, std::wstring parent, size_t position);
   void Renumber(std::wstring_view parent);
+  [[nodiscard]] static std::optional<std::wstring> WebUrl(std::wstring_view connect);
   [[nodiscard]] static bool IsWebConnection(std::wstring_view connect);
 
  private:
