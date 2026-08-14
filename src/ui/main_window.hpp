@@ -82,6 +82,8 @@ class MainWindow {
   HWND cache_{};
   HWND shortcut_{};
   HWND remove_{};
+  HFONT controls_font_{};
+  HFONT button_font_{};
   HFONT details_title_font_{};
   HFONT details_subtitle_font_{};
   HFONT details_key_font_{};
