@@ -17,6 +17,7 @@
 #include <algorithm>
 #include <chrono>
 #include <functional>
+#include <initializer_list>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -133,6 +134,8 @@ MainWindow::~MainWindow() {
   ClearContextMenuItems();
   for (const auto images : button_images_) if (images) ImageList_Destroy(images);
   if (tree_images_) ImageList_Destroy(tree_images_);
+  if (controls_font_) DeleteObject(controls_font_);
+  if (button_font_) DeleteObject(button_font_);
   if (details_title_font_) DeleteObject(details_title_font_);
   if (details_subtitle_font_) DeleteObject(details_subtitle_font_);
   if (details_key_font_) DeleteObject(details_key_font_);
@@ -280,7 +283,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
 }
 
 void MainWindow::CreateControls() {
-  CreateWindowW(L"STATIC", L"Поиск:", WS_CHILD | WS_VISIBLE, 8, 10, 50, 20, window_, nullptr, instance_, nullptr);
+  HWND searchLabel = CreateWindowW(L"STATIC", L"Поиск:", WS_CHILD | WS_VISIBLE, 8, 10, 50, 20, window_, nullptr, instance_, nullptr);
   search_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 58, 7, 600, 25, window_, nullptr, instance_, nullptr);
   tree_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS, 8, 42, 360, 420, window_, nullptr, instance_, nullptr);
   TreeView_SetExtendedStyle(tree_, TVS_EX_DOUBLEBUFFER, TVS_EX_DOUBLEBUFFER);
@@ -290,6 +293,13 @@ void MainWindow::CreateControls() {
       390, 76, 460, 20, window_, nullptr, instance_, nullptr);
   details_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP |
       LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL, 380, 100, 480, 182, window_, nullptr, instance_, nullptr);
+  controls_font_ = CreateUiFont(window_, 9, FW_NORMAL);
+  button_font_ = CreateUiFont(window_, 9, FW_SEMIBOLD);
+  if (controls_font_) {
+    for (const HWND control : {searchLabel, search_, tree_, details_}) {
+      if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(controls_font_), TRUE);
+    }
+  }
   ListView_SetExtendedListViewStyle(details_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP);
   ListView_SetBkColor(details_, RGB(248, 250, 252));
   ListView_SetTextBkColor(details_, RGB(248, 250, 252));
@@ -320,6 +330,11 @@ void MainWindow::CreateControls() {
   cache_ = CreateWindowW(L"BUTTON", L"Очистить кэш", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 380, 328, 115, 30, window_, reinterpret_cast<HMENU>(kCache), instance_, nullptr);
   shortcut_ = CreateWindowW(L"BUTTON", L"Создать ярлык", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 504, 328, 130, 30, window_, reinterpret_cast<HMENU>(kShortcut), instance_, nullptr);
   remove_ = CreateWindowW(L"BUTTON", L"Удалить", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 643, 328, 100, 30, window_, reinterpret_cast<HMENU>(kDelete), instance_, nullptr);
+  if (button_font_) {
+    for (const HWND button : {enterprise_, designer_, edit_, cache_, shortcut_, remove_}) {
+      SendMessageW(button, WM_SETFONT, reinterpret_cast<WPARAM>(button_font_), TRUE);
+    }
+  }
   AttachButtonIcon(enterprise_, instance_, IDI_ACTION_ENTERPRISE, button_images_);
   AttachButtonIcon(designer_, instance_, IDI_ACTION_DESIGNER, button_images_);
   AttachButtonIcon(edit_, instance_, IDI_ACTION_EDIT, button_images_);
