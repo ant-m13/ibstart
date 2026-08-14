@@ -2,51 +2,116 @@ name: release
 
 on:
   push:
-    tags: ["v*"]
+    branches: [main]
 
 permissions:
   contents: write
+  pull-requests: read
+
+concurrency:
+  group: release-${{ github.sha }}
+  cancel-in-progress: false
 
 jobs:
   release:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+      - name: Verify accepted pull request
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          $pullRequests = gh api "repos/$env:GITHUB_REPOSITORY/commits/$env:GITHUB_SHA/pulls" | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "Unable to inspect pull requests associated with commit $env:GITHUB_SHA." }
+          $accepted = @($pullRequests | Where-Object { $_.base.ref -eq "main" -and $_.merged_at })
+          if ($accepted.Count -eq 0) { throw "Commit $env:GITHUB_SHA was not introduced by an accepted pull request into main; no release will be created." }
+          "Accepted PR: #$($accepted[0].number)" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
+      - name: Read product version
+        id: version
+        shell: pwsh
+        run: |
+          $version = (./.github/scripts/read-version.ps1).Trim()
+          $releaseNotes = ./.github/scripts/read-changelog-section.ps1 -Version $version
+          Set-Content -LiteralPath release-notes.md -Value $releaseNotes -Encoding utf8
+          "version=$version" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+          "tag=v$version" | Add-Content -LiteralPath $env:GITHUB_OUTPUT -Encoding utf8
+          "### Releasing IBStart $version" | Add-Content -LiteralPath $env:GITHUB_STEP_SUMMARY -Encoding utf8
       - name: Configure MSVC environment
         shell: pwsh
         run: ./.github/scripts/setup-msvc.ps1
-      - name: Configure and build
+      - name: Configure CMake
+        run: cmake -S . -B out/build/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
+      - name: Build Release
+        run: cmake --build out/build/release --parallel
+      - name: Run CTest
+        run: ctest --test-dir out/build/release --output-on-failure
+      - name: Verify binary version and size
+        shell: pwsh
+        env:
+          IBSTART_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          cmake -S . -B out/build/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
-          cmake --build out/build/release --parallel
-          ctest --test-dir out/build/release --output-on-failure
+          $configuredVersion = (Get-Content -Raw out/build/release/ibstart-version.txt).Trim()
+          if ($configuredVersion -ne $env:IBSTART_VERSION) { throw "Configured version '$configuredVersion' does not match '$env:IBSTART_VERSION'." }
+          $exe = Get-Item out/build/release/IBStart.exe
+          if ($exe.Length -gt 8388608) { throw "IBStart.exe exceeds the 8 MiB limit: $($exe.Length)" }
+          if ($exe.VersionInfo.ProductVersion -ne $env:IBSTART_VERSION) { throw "IBStart.exe ProductVersion '$($exe.VersionInfo.ProductVersion)' does not match '$env:IBSTART_VERSION'." }
       - name: Package and checksum
         shell: pwsh
+        env:
+          IBSTART_VERSION: ${{ steps.version.outputs.version }}
         run: |
           $exe = Get-Item out/build/release/IBStart.exe
-          if ($exe.Length -gt 8388608) { throw "IBStart.exe exceeds 8 MiB" }
-          Compress-Archive -Path $exe.FullName,README.md,LICENSE,CHANGELOG.md -DestinationPath out/build/release/IBStart-windows-x64.zip
+          $archive = "out/build/release/IBStart-$env:IBSTART_VERSION-windows-x64.zip"
+          Compress-Archive -Path $exe.FullName,README.md,LICENSE,CHANGELOG.md -DestinationPath $archive
           (Get-FileHash $exe -Algorithm SHA256).Hash + "  IBStart.exe" | Out-File -Encoding ascii out/build/release/checksums.txt
-          (Get-FileHash out/build/release/IBStart-windows-x64.zip -Algorithm SHA256).Hash + "  IBStart-windows-x64.zip" | Add-Content -Encoding ascii out/build/release/checksums.txt
+          (Get-FileHash $archive -Algorithm SHA256).Hash + "  $(Split-Path $archive -Leaf)" | Add-Content -Encoding ascii out/build/release/checksums.txt
+      - name: Create version tag
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          $commit = (git rev-parse HEAD).Trim()
+          $remote = git ls-remote --tags origin "refs/tags/$env:RELEASE_TAG"
+          if ($LASTEXITCODE -ne 0) { throw "Unable to inspect remote tag $env:RELEASE_TAG." }
+          if ($remote) {
+            git fetch origin "refs/tags/$env:RELEASE_TAG:refs/tags/$env:RELEASE_TAG" --force
+            if ($LASTEXITCODE -ne 0) { throw "Unable to fetch existing tag $env:RELEASE_TAG." }
+            $tagCommit = (git rev-list -n 1 $env:RELEASE_TAG).Trim()
+            if ($tagCommit -ne $commit) { throw "Tag $env:RELEASE_TAG already points to $tagCommit, not merged commit $commit. Increment the product version." }
+          } else {
+            git config user.name "github-actions[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git tag --annotate $env:RELEASE_TAG --message "IBStart $env:RELEASE_VERSION" $commit
+            git push origin "refs/tags/$env:RELEASE_TAG"
+            if ($LASTEXITCODE -ne 0) { throw "Unable to push tag $env:RELEASE_TAG." }
+          }
       - name: Publish GitHub Release
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-          TAG_NAME: ${{ github.ref_name }}
+          RELEASE_TAG: ${{ steps.version.outputs.tag }}
+          RELEASE_VERSION: ${{ steps.version.outputs.version }}
         run: |
-          $tag = $env:TAG_NAME
           $files = @(
             "out/build/release/IBStart.exe",
-            "out/build/release/IBStart-windows-x64.zip",
+            "out/build/release/IBStart-$env:RELEASE_VERSION-windows-x64.zip",
             "out/build/release/checksums.txt"
           )
-          gh release view $tag *> $null
-          if ($LASTEXITCODE -eq 0) {
-            gh release upload $tag $files --clobber
-            if ($LASTEXITCODE -ne 0) { throw "Failed to update release assets for $tag." }
-            gh release edit $tag --title $tag --notes-file CHANGELOG.md
-            if ($LASTEXITCODE -ne 0) { throw "Failed to update release notes for $tag." }
+          $releases = gh release list --limit 1000 --json tagName | ConvertFrom-Json
+          if ($LASTEXITCODE -ne 0) { throw "Failed to inspect existing GitHub Releases." }
+          if ($releases.tagName -contains $env:RELEASE_TAG) {
+            gh release upload $env:RELEASE_TAG $files --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Failed to update release assets for $env:RELEASE_TAG." }
+            gh release edit $env:RELEASE_TAG --title "IBStart $env:RELEASE_VERSION" --notes-file release-notes.md
+            if ($LASTEXITCODE -ne 0) { throw "Failed to update release notes for $env:RELEASE_TAG." }
           } else {
-            gh release create $tag $files --verify-tag --title $tag --notes-file CHANGELOG.md
-            if ($LASTEXITCODE -ne 0) { throw "Failed to create release $tag." }
+            $arguments = @("release", "create", $env:RELEASE_TAG) + $files + @("--verify-tag", "--title", "IBStart $env:RELEASE_VERSION", "--notes-file", "release-notes.md")
+            if ($env:RELEASE_VERSION.Contains("-")) { $arguments += "--prerelease" }
+            gh @arguments
+            if ($LASTEXITCODE -ne 0) { throw "Failed to create release $env:RELEASE_TAG." }
           }

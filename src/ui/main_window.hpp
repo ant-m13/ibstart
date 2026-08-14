@@ -49,6 +49,7 @@ class MainWindow {
   void SetSimpleMode(bool enabled);
   void ToggleFavorite();
   void LaunchFavorite(size_t slot);
+  void ShowAbout() const;
   [[nodiscard]] std::wstring NextName(std::wstring_view stem) const;
   void ReportUnhandledError(std::string_view message) noexcept;
 

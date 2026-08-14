@@ -19,6 +19,8 @@ src/ui (тонкий Win32-слой)
 
 `storage` использует `%LOCALAPPDATA%\IBStart` или `data` возле EXE в portable mode. Активный `ibases.v8i` не дублируется. `logging` маскирует секреты до записи. `cache` намеренно принимает только список разрешённых cache-подкаталогов, никогда не путь из `Connect`.
 
+Версия продукта задаётся только в `cmake/IBStartVersion.cmake`. На этапе конфигурации CMake из неё генерируются C++ header, Windows VERSIONINFO, manifest и `ibstart-version.txt` для CI. Благодаря этому окно «О программе», свойства PE-файла и release workflow используют одно значение.
+
 ## Тестируемость
 
 `tests/unit/test_main.cpp` — самостоятельный CTest-исполняемый файл без фреймворка. Он использует fixtures, не открывает окна и проверяет round trip, сохранение/backup/conflict, команды запуска, выбор x64, маскирование `/P` и portable mode.

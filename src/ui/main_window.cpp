@@ -1,6 +1,7 @@
 #include "ui/main_window.hpp"
 
 #include "core/cache/cache_service.hpp"
+#include "core/domain/version.hpp"
 #include "core/domain/utf.hpp"
 #include "core/launcher/command_builder.hpp"
 #include "core/platform/platform_discovery.hpp"
@@ -27,7 +28,7 @@ constexpr wchar_t kClassName[] = L"IBStart.MainWindow";
 constexpr wchar_t kInputBoxClass[] = L"IBStart.InputBox";
 constexpr UINT kActivateMessage = WM_APP + 23;
 constexpr ULONG_PTR kLaunchCopyData = 0x49425354;
-enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kFavorite1 = 200 };
+enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kAbout, kFavorite1 = 200 };
 
 std::wstring Lower(std::wstring value) { for (auto& character : value) character = static_cast<wchar_t>(std::towlower(character)); return value; }
 void Message(HWND owner, std::wstring_view text, std::wstring_view title = L"ИБ Старт", UINT type = MB_OK | MB_ICONINFORMATION) { MessageBoxW(owner, std::wstring(text).c_str(), std::wstring(title).c_str(), type); }
@@ -140,7 +141,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
         case kEnterprise: LaunchSelected(domain::LaunchMode::enterprise); break; case kDesigner: LaunchSelected(domain::LaunchMode::designer); break;
         case kAddFile: AddFileDatabase(); break; case kAddServer: AddServerDatabase(); break; case kAddGroup: AddGroup(); break; case kOpenList: OpenList(); break; case kRefresh: LoadCatalog(); break;
         case kEdit: EditSelected(); break; case kCache: ClearSelectedCache(); break; case kShortcut: CreateShortcut(); break; case kDelete: DeleteSelected(); break;
-        case kSimpleMode: SetSimpleMode(!settings_.simple_mode); break; case kToggleFavorite: ToggleFavorite(); break; case kFocusSearch: SetFocus(search_); break;
+        case kSimpleMode: SetSimpleMode(!settings_.simple_mode); break; case kToggleFavorite: ToggleFavorite(); break; case kFocusSearch: SetFocus(search_); break; case kAbout: ShowAbout(); break;
         default: if (LOWORD(wparam) >= kFavorite1 && LOWORD(wparam) < kFavorite1 + 9) LaunchFavorite(LOWORD(wparam) - kFavorite1); break;
       } return 0;
     case WM_NOTIFY:
@@ -193,10 +194,10 @@ void MainWindow::CreateControls() {
   shortcut_ = CreateWindowW(L"BUTTON", L"Создать ярлык", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 494, 328, 110, 28, window_, reinterpret_cast<HMENU>(kShortcut), instance_, nullptr);
   remove_ = CreateWindowW(L"BUTTON", L"Удалить", WS_CHILD | WS_VISIBLE | WS_TABSTOP, 613, 328, 85, 28, window_, reinterpret_cast<HMENU>(kDelete), instance_, nullptr);
   status_ = CreateWindowW(STATUSCLASSNAMEW, L"", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window_, nullptr, instance_, nullptr);
-  HMENU menu = CreateMenu(), file = CreatePopupMenu(), view = CreatePopupMenu();
+  HMENU menu = CreateMenu(), file = CreatePopupMenu(), view = CreatePopupMenu(), help = CreatePopupMenu();
   AppendMenuW(file, MF_STRING, kOpenList, L"Открыть список баз…"); AppendMenuW(file, MF_STRING, kAddFile, L"Добавить файловую базу…"); AppendMenuW(file, MF_STRING, kAddServer, L"Добавить серверную базу…"); AppendMenuW(file, MF_STRING, kAddGroup, L"Добавить группу…"); AppendMenuW(file, MF_STRING, kRefresh, L"Обновить список");
   AppendMenuW(view, MF_STRING, kToggleFavorite, L"Добавить/убрать из избранного\tAlt+1…Alt+9");
-  AppendMenuW(view, MF_STRING, kSimpleMode, L"Простой режим"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(file), L"Файл"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(view), L"Вид"); SetMenu(window_, menu);
+  AppendMenuW(view, MF_STRING, kSimpleMode, L"Простой режим"); AppendMenuW(help, MF_STRING, kAbout, L"О программе…"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(file), L"Файл"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(view), L"Вид"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(help), L"Справка"); SetMenu(window_, menu);
   SetSimpleMode(settings_.simple_mode);
 }
 
@@ -300,6 +301,7 @@ void MainWindow::SetStatus(std::wstring text) { if (status_) SendMessageW(status
 void MainWindow::SetSimpleMode(bool enabled) { settings_.simple_mode = enabled; const int visible = enabled ? SW_HIDE : SW_SHOW; if (edit_) ShowWindow(edit_, visible); if (cache_) ShowWindow(cache_, visible); if (shortcut_) ShowWindow(shortcut_, visible); if (remove_) ShowWindow(remove_, visible); HMENU menu = GetMenu(window_); if (menu) CheckMenuItem(menu, kSimpleMode, MF_BYCOMMAND | (enabled ? MF_CHECKED : MF_UNCHECKED)); }
 void MainWindow::ToggleFavorite() { if (!catalog_) return; const auto name = SelectedName(); const auto* entry = catalog_->Find(name); if (!entry || !entry->IsDatabase()) { Message(window_, L"Выберите базу для добавления в избранное."); return; } auto favorites = storage::LoadFavorites(layout_); const auto found = std::find(favorites.begin(), favorites.end(), name); if (found == favorites.end()) { favorites.insert(favorites.begin(), name); if (favorites.size() > 9) favorites.resize(9); SetStatus(L"Добавлено в избранное: " + name); } else { favorites.erase(found); SetStatus(L"Удалено из избранного: " + name); } storage::SaveFavorites(layout_, favorites); PopulateTree(); }
 void MainWindow::LaunchFavorite(size_t slot) { auto favorites = storage::LoadFavorites(layout_); if (slot >= favorites.size()) { Message(window_, L"Этот слот избранного пока не назначен."); return; } SetWindowTextW(search_, L""); PopulateTree(); const auto wanted = favorites[slot]; std::function<HTREEITEM(HTREEITEM)> find = [&](HTREEITEM item) { for (; item; item = TreeView_GetNextSibling(tree_, item)) { wchar_t name[512]{}; TVITEMW row{}; row.mask = TVIF_TEXT; row.hItem = item; row.pszText = name; row.cchTextMax = 512; TreeView_GetItem(tree_, &row); if (wanted == name) return item; if (const auto child = find(TreeView_GetChild(tree_, item))) return child; } return static_cast<HTREEITEM>(nullptr); }; if (const auto target = find(TreeView_GetRoot(tree_))) { TreeView_SelectItem(tree_, target); LaunchSelected(domain::LaunchMode::enterprise); } }
+void MainWindow::ShowAbout() const { const std::wstring text = L"ИБ Старт (IBStart)\nВерсия " + std::wstring(version::value) + L"\n\nЛёгкий менеджер запусков информационных баз 1С:Предприятие.\n\nЛицензия MIT. IBStart не является официальным продуктом фирмы «1С»."; MessageBoxW(window_, text.c_str(), L"О программе — ИБ Старт", MB_OK | MB_ICONINFORMATION); }
 void MainWindow::ReportUnhandledError(std::string_view message) noexcept { try { const auto wide = utf::FromUtf8(message); logger_.Error(L"Необработанная ошибка UI: " + wide); const auto text = L"Произошла непредвиденная ошибка. Подробности записаны в:\n" + logger_.path().wstring(); MessageBoxW(window_, text.c_str(), L"ИБ Старт", MB_OK | MB_ICONERROR); } catch (...) { MessageBoxW(window_, L"Произошла непредвиденная ошибка.", L"ИБ Старт", MB_OK | MB_ICONERROR); } }
 
 }  // namespace ibstart::ui

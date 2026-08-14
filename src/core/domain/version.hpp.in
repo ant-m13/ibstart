@@ -1,0 +1,16 @@
+#pragma once
+
+#include <string_view>
+
+namespace ibstart::version {
+
+inline constexpr std::wstring_view product_name = L"IBStart";
+inline constexpr std::wstring_view display_name = L"ИБ Старт";
+inline constexpr std::wstring_view value = L"@IBSTART_VERSION@";
+inline constexpr std::wstring_view file_value = L"@IBSTART_FILE_VERSION@";
+inline constexpr unsigned major = @IBSTART_VERSION_MAJOR@;
+inline constexpr unsigned minor = @IBSTART_VERSION_MINOR@;
+inline constexpr unsigned patch = @IBSTART_VERSION_PATCH@;
+inline constexpr unsigned revision = @IBSTART_VERSION_REVISION@;
+
+}  // namespace ibstart::version
