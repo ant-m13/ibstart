@@ -118,7 +118,19 @@ void TestPortableMode() {
 }
 
 int wmain() {
-  TestV8iRoundTrip(); TestNoBomAndCatalog(); TestSafeStore(); TestCommandBuilderAndSelection(); TestCatalogOrderingAndCycles(); TestSecretMasking(); TestPortableMode();
+  const auto run = [](const wchar_t* name, const auto& test) {
+    std::wcout << L"Running " << name << L"..." << std::endl;
+    try { test(); }
+    catch (const std::exception& error) { std::cerr << "UNCAUGHT " << error.what() << "\n"; ++failures; }
+    catch (...) { std::wcerr << L"UNCAUGHT unknown exception\n"; ++failures; }
+  };
+  run(L"V8iRoundTrip", TestV8iRoundTrip);
+  run(L"NoBomAndCatalog", TestNoBomAndCatalog);
+  run(L"SafeStore", TestSafeStore);
+  run(L"CommandBuilderAndSelection", TestCommandBuilderAndSelection);
+  run(L"CatalogOrderingAndCycles", TestCatalogOrderingAndCycles);
+  run(L"SecretMasking", TestSecretMasking);
+  run(L"PortableMode", TestPortableMode);
   if (failures) { std::wcerr << failures << L" test(s) failed\n"; return 1; }
   std::wcout << L"All IBStart unit tests passed\n"; return 0;
 }
