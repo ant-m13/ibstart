@@ -2,6 +2,7 @@
 
 #include <Windows.h>
 
+#include <climits>
 #include <stdexcept>
 #include <string>
 #include <string_view>
@@ -24,6 +25,17 @@ inline std::string ToUtf8(std::wstring_view input) {
   std::string output(size, '\0');
   WideCharToMultiByte(CP_UTF8, WC_ERR_INVALID_CHARS, input.data(), static_cast<int>(input.size()), output.data(), size, nullptr, nullptr);
   return output;
+}
+
+inline size_t FindNoCaseOrdinal(std::wstring_view text, std::wstring_view search, size_t start = 0) noexcept {
+  if (start > text.size()) return std::wstring_view::npos;
+  if (search.empty()) return start;
+  if (search.size() > text.size() - start || search.size() > static_cast<size_t>(INT_MAX)) return std::wstring_view::npos;
+  const int searchLength = static_cast<int>(search.size());
+  for (size_t position = start; position <= text.size() - search.size(); ++position) {
+    if (CompareStringOrdinal(text.data() + position, searchLength, search.data(), searchLength, TRUE) == CSTR_EQUAL) return position;
+  }
+  return std::wstring_view::npos;
 }
 
 inline std::wstring LastErrorMessage(DWORD error = GetLastError()) {

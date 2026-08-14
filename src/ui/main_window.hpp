@@ -34,6 +34,7 @@ class MainWindow {
   void PopulateTree();
   void AddTreeItems(const std::vector<catalog::TreeItem>& items, HTREEITEM parent, std::wstring_view filter);
   [[nodiscard]] bool ItemMatches(const catalog::TreeItem& item, std::wstring_view filter) const;
+  LRESULT DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const;
   [[nodiscard]] std::wstring SelectedName() const;
   void DisplaySelected();
   void LaunchSelected(domain::LaunchMode mode);
@@ -74,6 +75,7 @@ class MainWindow {
   std::optional<catalog::Catalog> catalog_;
   std::vector<domain::PlatformInstallation> platforms_;
   std::optional<std::wstring> initial_launch_id_;
+  std::wstring search_filter_;
   std::wstring dragging_name_;
 };
 
