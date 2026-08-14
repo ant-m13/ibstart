@@ -11,11 +11,10 @@ jobs:
   release:
     runs-on: windows-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - name: Configure MSVC environment
-        uses: ilammy/msvc-dev-cmd@v1
-        with:
-          arch: x64
+        shell: pwsh
+        run: ./.github/scripts/setup-msvc.ps1
       - name: Configure and build
         run: |
           cmake -S . -B out/build/release -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=ON
@@ -30,10 +29,24 @@ jobs:
           (Get-FileHash $exe -Algorithm SHA256).Hash + "  IBStart.exe" | Out-File -Encoding ascii out/build/release/checksums.txt
           (Get-FileHash out/build/release/IBStart-windows-x64.zip -Algorithm SHA256).Hash + "  IBStart-windows-x64.zip" | Add-Content -Encoding ascii out/build/release/checksums.txt
       - name: Publish GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          body_path: CHANGELOG.md
-          files: |
-            out/build/release/IBStart.exe
-            out/build/release/IBStart-windows-x64.zip
-            out/build/release/checksums.txt
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG_NAME: ${{ github.ref_name }}
+        run: |
+          $tag = $env:TAG_NAME
+          $files = @(
+            "out/build/release/IBStart.exe",
+            "out/build/release/IBStart-windows-x64.zip",
+            "out/build/release/checksums.txt"
+          )
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -eq 0) {
+            gh release upload $tag $files --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Failed to update release assets for $tag." }
+            gh release edit $tag --title $tag --notes-file CHANGELOG.md
+            if ($LASTEXITCODE -ne 0) { throw "Failed to update release notes for $tag." }
+          } else {
+            gh release create $tag $files --verify-tag --title $tag --notes-file CHANGELOG.md
+            if ($LASTEXITCODE -ne 0) { throw "Failed to create release $tag." }
+          }
