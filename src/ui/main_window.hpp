@@ -59,6 +59,7 @@ class MainWindow {
   void MoveSelected(int offset);
   void ClearSelectedCache();
   void CreateShortcut();
+  void OpenSelectedFolder();
   void OpenList();
   void SetStatus(std::wstring text);
   [[nodiscard]] std::wstring CatalogStatistics() const;
