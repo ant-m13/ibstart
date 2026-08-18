@@ -17,7 +17,7 @@ src/ui (тонкий Win32-слой)
 
 `launcher` содержит чистые функции выбора платформы, разбора дополнительных параметров и построения аргументов. Единственный Win32 вызов `CreateProcessW` изолирован в `Launch`. Тесты покрывают чистую часть без создания окон.
 
-`storage` использует `%LOCALAPPDATA%\IBStart` или `data` возле EXE в portable mode. Активный `ibases.v8i` не дублируется. `logging` маскирует секреты до записи. `cache` намеренно принимает только список разрешённых cache-подкаталогов, никогда не путь из `Connect`.
+`storage` использует `%LOCALAPPDATA%\IBStart` или `data` возле EXE в portable mode. Активный `ibases.v8i` не дублируется. `logging` маскирует секреты до записи. `cache` намеренно принимает только список разрешённых cache-подкаталогов (`%APPDATA%\1C\1Cv8`, `%LOCALAPPDATA%\1C\1Cv8`, `%LOCALAPPDATA%\IBStart\cache`), никогда не путь из `Connect`, и отказывается очищать подкаталоги лицензий.
 
 Версия продукта задаётся только в `cmake/IBStartVersion.cmake`. На этапе конфигурации CMake из неё генерируются C++ header, Windows VERSIONINFO, manifest и `ibstart-version.txt` для CI. Благодаря этому окно «О программе», свойства PE-файла и release workflow используют одно значение.
 
