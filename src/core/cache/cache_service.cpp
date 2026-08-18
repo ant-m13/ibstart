@@ -45,14 +45,29 @@ std::wstring NormalizedLower(const std::filesystem::path& path) {
   return normalized;
 }
 
-bool IsSafeCachePath(const std::filesystem::path& path) {
+std::vector<std::filesystem::path> AllowedCacheRoots() {
+  std::vector<std::filesystem::path> roots;
+  const auto roaming = Env(L"APPDATA");
   const auto local = Env(L"LOCALAPPDATA");
-  if (local.empty()) return false;
-  auto candidate = NormalizedLower(path);
-  const std::vector<std::filesystem::path> allowedRoots = {
-      std::filesystem::path(local) / L"1C" / L"1Cv8" / L"cache",
-      std::filesystem::path(local) / L"IBStart" / L"cache"};
-  for (const auto& rootPath : allowedRoots) {
+  if (!roaming.empty()) roots.push_back(std::filesystem::path(roaming) / L"1C" / L"1Cv8");
+  if (!local.empty()) {
+    roots.push_back(std::filesystem::path(local) / L"1C" / L"1Cv8");
+    roots.push_back(std::filesystem::path(local) / L"IBStart" / L"cache");
+  }
+  return roots;
+}
+
+// The <id> folder under the 1C roots may shadow licence storage; IBStart never clears these.
+bool IsReservedCacheFolder(const std::filesystem::path& path) {
+  std::wstring name = path.filename().wstring();
+  std::transform(name.begin(), name.end(), name.begin(), [](wchar_t character) { return static_cast<wchar_t>(std::towlower(character)); });
+  return name == L"licenses" || name == L"license" || name == L"lic";
+}
+
+bool IsSafeCachePath(const std::filesystem::path& path) {
+  if (IsReservedCacheFolder(path)) return false;
+  const auto candidate = NormalizedLower(path);
+  for (const auto& rootPath : AllowedCacheRoots()) {
     auto root = NormalizedLower(rootPath);
     if (!root.ends_with(L'\\')) root.push_back(L'\\');
     if (candidate.starts_with(root) && candidate.size() > root.size()) return true;
@@ -63,13 +78,16 @@ bool IsSafeCachePath(const std::filesystem::path& path) {
 
 std::vector<CacheItem> CandidatesFor(const domain::Database& database) {
   std::vector<CacheItem> result;
-  const auto local = Env(L"LOCALAPPDATA");
-  if (local.empty()) return result;
   const auto identifier = SafeId(database.id.empty() ? database.name : database.id);
   // IBStart only targets explicit cache subdirectories; it never derives a path from Connect and therefore cannot remove a file base.
-  const std::vector<std::filesystem::path> paths = {
-      std::filesystem::path(local) / L"1C" / L"1Cv8" / L"cache" / identifier,
-      std::filesystem::path(local) / L"IBStart" / L"cache" / identifier};
+  std::vector<std::filesystem::path> paths;
+  const auto roaming = Env(L"APPDATA");
+  const auto local = Env(L"LOCALAPPDATA");
+  if (!roaming.empty()) paths.push_back(std::filesystem::path(roaming) / L"1C" / L"1Cv8" / identifier);
+  if (!local.empty()) {
+    paths.push_back(std::filesystem::path(local) / L"1C" / L"1Cv8" / identifier);
+    paths.push_back(std::filesystem::path(local) / L"IBStart" / L"cache" / identifier);
+  }
   for (const auto& path : paths) {
     std::error_code error;
     if (std::filesystem::is_directory(path, error)) result.push_back({path, SizeOf(path)});
