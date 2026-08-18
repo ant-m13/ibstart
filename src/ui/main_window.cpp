@@ -35,7 +35,7 @@ constexpr UINT kActivateMessage = WM_APP + 23;
 constexpr ULONG_PTR kLaunchCopyData = 0x49425354;
 constexpr int kMinimumWindowWidth = 940;
 constexpr int kMinimumWindowHeight = 460;
-enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kAbout, kMoveUp, kMoveDown, kFavorite1 = 200 };
+enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kAbout, kMoveUp, kMoveDown, kOpenFolder, kFavorite1 = 200 };
 enum TreeImage : int { kFileDatabaseImage, kServerDatabaseImage, kFolderImage, kFavoriteImage, kRecentImage };
 
 void Message(HWND owner, std::wstring_view text, std::wstring_view title = L"ИБ Старт", UINT type = MB_OK | MB_ICONINFORMATION) { MessageBoxW(owner, std::wstring(text).c_str(), std::wstring(title).c_str(), type); }
@@ -860,7 +860,7 @@ int MainWindow::Show(int show_command) {
   constexpr BYTE altShift = FVIRTKEY | FALT | FSHIFT;
   ACCEL accelerators[] = {{FVIRTKEY, VK_F1, kAbout}, {FVIRTKEY, VK_F2, kEdit}, {FVIRTKEY, VK_F3, kEnterprise}, {FVIRTKEY, VK_F4, kDesigner}, {FVIRTKEY, VK_F5, kRefresh},
       {control, 'F', kFocusSearch}, {control, 'O', kOpenList}, {controlAlt, 'F', kAddFile}, {controlAlt, 'S', kAddServer}, {controlAlt, 'G', kAddGroup},
-      {controlAlt, 'I', kToggleFavorite}, {controlAlt, 'M', kSimpleMode}, {controlShift, VK_DELETE, kCache}, {controlShift, 'S', kShortcut},
+      {controlAlt, 'I', kToggleFavorite}, {controlAlt, 'M', kSimpleMode}, {controlShift, VK_DELETE, kCache}, {controlShift, 'S', kShortcut}, {controlShift, 'O', kOpenFolder},
       {controlShift, VK_UP, kMoveUp}, {controlShift, VK_DOWN, kMoveDown}, {altShift, VK_DELETE, kDelete},
       {static_cast<BYTE>(FVIRTKEY | FALT), '1', kFavorite1}, {static_cast<BYTE>(FVIRTKEY | FALT), '2', kFavorite1 + 1}, {static_cast<BYTE>(FVIRTKEY | FALT), '3', kFavorite1 + 2},
       {static_cast<BYTE>(FVIRTKEY | FALT), '4', kFavorite1 + 3}, {static_cast<BYTE>(FVIRTKEY | FALT), '5', kFavorite1 + 4}, {static_cast<BYTE>(FVIRTKEY | FALT), '6', kFavorite1 + 5},
@@ -916,7 +916,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       switch (LOWORD(wparam)) {
         case kEnterprise: LaunchSelected(domain::LaunchMode::enterprise); break; case kDesigner: LaunchSelected(domain::LaunchMode::designer); break;
         case kAddFile: AddFileDatabase(); break; case kAddServer: AddServerDatabase(); break; case kAddGroup: AddGroup(); break; case kOpenList: OpenList(); break; case kRefresh: LoadCatalog(); break;
-        case kEdit: EditSelected(); break; case kCache: ClearSelectedCache(); break; case kShortcut: CreateShortcut(); break; case kDelete: DeleteSelected(); break;
+        case kEdit: EditSelected(); break; case kCache: ClearSelectedCache(); break; case kShortcut: CreateShortcut(); break; case kOpenFolder: OpenSelectedFolder(); break; case kDelete: DeleteSelected(); break;
         case kSimpleMode: SetSimpleMode(!settings_.simple_mode); break; case kToggleFavorite: ToggleFavorite(); break; case kFocusSearch: SetFocus(search_); break; case kAbout: ShowAbout(); break;
         case kMoveUp: MoveSelected(-1); break; case kMoveDown: MoveSelected(1); break;
         default: if (LOWORD(wparam) >= kFavorite1 && LOWORD(wparam) < kFavorite1 + 9) LaunchFavorite(LOWORD(wparam) - kFavorite1); break;
@@ -1405,6 +1405,7 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   const bool database = entry && entry->IsDatabase();
   const bool group = entry && entry->IsGroup();
   const bool editable = entry && !settings_.simple_mode;
+  const bool file = database && !ConnectionValue(entry->ValueOr(L"Connect"), L"File").empty();
   const std::wstring addParent = group ? entry->name : entry ? catalog_->ParentOf(entry->name) : std::wstring();
   const auto favorites = storage::LoadFavorites(layout_);
   const bool favorite = std::find(favorites.begin(), favorites.end(), name) != favorites.end();
@@ -1432,6 +1433,7 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   append(editable, false, kEdit, IDI_ACTION_EDIT, L"Изменить…", L"F2");
   append(database && !settings_.simple_mode, false, kCache, IDI_ACTION_CACHE, L"Очистить кэш…", L"Ctrl+Shift+Del");
   append(database && !settings_.simple_mode, false, kShortcut, IDI_ACTION_SHORTCUT, L"Создать ярлык", L"Ctrl+Shift+S");
+  append(file, false, kOpenFolder, IDI_TREE_FOLDER, L"Открыть папку", L"Ctrl+Shift+O");
   separator();
   append(editable, false, kMoveUp, 0, L"Переместить вверх", L"Ctrl+Shift+Up");
   append(editable, false, kMoveDown, 0, L"Переместить вниз", L"Ctrl+Shift+Down");
@@ -1509,6 +1511,15 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
 }
 
 std::wstring MainWindow::NextName(std::wstring_view stem) const { for (unsigned number = 1;; ++number) { const auto candidate = std::wstring(stem) + L" " + std::to_wstring(number); if (!catalog_ || !catalog_->Find(candidate)) return candidate; } }
+void MainWindow::OpenSelectedFolder() {
+  if (!catalog_) return; const auto name = SelectedName(); const auto* entry = catalog_->Find(name); if (!entry || !entry->IsDatabase()) return;
+  const auto folder = ConnectionValue(entry->ValueOr(L"Connect"), L"File");
+  if (folder.empty()) return;
+  std::error_code error;
+  if (!std::filesystem::is_directory(folder, error) || error) { Message(window_, L"Каталог файловой базы не найден.", L"ИБ Старт", MB_OK | MB_ICONWARNING); return; }
+  const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+  if (result <= 32) Message(window_, L"Не удалось открыть каталог базы.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
+}
 void MainWindow::AddFileDatabase(std::wstring parent) {
   if (settings_.simple_mode || !catalog_) return;
   DatabaseEditorData initial;
