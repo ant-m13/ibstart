@@ -40,9 +40,15 @@ class MainWindow {
   void SaveCatalog();
   void PopulateTree();
   void AddTreeItems(const std::vector<catalog::TreeItem>& items, HTREEITEM parent, std::wstring_view filter);
+  [[nodiscard]] std::vector<catalog::TreeItem> SortedTree() const;
+  void SortTreeItems(std::vector<catalog::TreeItem>& items, std::wstring_view parent) const;
+  [[nodiscard]] storage::SortMode SortModeForFolder(std::wstring_view folder) const;
+  void SetDefaultSortMode(storage::SortMode mode);
+  void SetFolderSortMode(std::wstring_view folder, std::optional<storage::SortMode> mode);
   [[nodiscard]] bool ItemMatches(const catalog::TreeItem& item, std::wstring_view filter) const;
   [[nodiscard]] bool ItemMatchesTagFilter(const catalog::TreeItem& item) const;
   void RefreshTagFilter();
+  void RefreshSortControl();
   LRESULT DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const;
   LRESULT DrawDetailsList(NMLVCUSTOMDRAW* draw) const;
   bool MeasureContextMenuItem(MEASUREITEMSTRUCT* measure) const;
@@ -81,6 +87,7 @@ class MainWindow {
   HWND window_{};
   HWND search_{};
   HWND tag_filter_{};
+  HWND sort_mode_{};
   HWND tree_{};
   HWND details_title_{};
   HWND details_subtitle_{};
@@ -107,6 +114,8 @@ class MainWindow {
   std::optional<v8i::V8iFileStore> store_;
   std::optional<catalog::Catalog> catalog_;
   storage::DatabaseTags tags_;
+  storage::SortSettings sort_settings_;
+  storage::LastLaunchTimes last_launches_;
   std::vector<domain::PlatformInstallation> platforms_;
   std::vector<std::wstring> filter_tags_;
   std::vector<std::wstring> filter_favorites_;

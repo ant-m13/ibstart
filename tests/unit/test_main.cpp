@@ -258,8 +258,16 @@ void TestPortableMode() {
   const std::vector<std::wstring> favorites = {L"База 😀", L"Строка\nс переводом"}; ibstart::storage::SaveFavorites(layout, favorites); CHECK(ibstart::storage::LoadFavorites(layout) == favorites);
   const ibstart::storage::DatabaseTags tags = {{L"id-😀", {L"Продуктив", L"Клиент А"}}, {L"id-2", {L"Тест"}}};
   ibstart::storage::SaveTags(layout, tags); CHECK(ibstart::storage::LoadTags(layout) == tags);
-  ibstart::storage::AppendHistory(layout, {L"id-😀", std::chrono::system_clock::now(), ibstart::domain::LaunchMode::designer}); const auto history = ibstart::storage::LoadHistory(layout); CHECK(history.size() == 1); CHECK(!history.empty() && history[0].database_id == L"id-😀");
-  ibstart::storage::ClearHistory(layout); CHECK(ibstart::storage::LoadHistory(layout).empty()); CHECK(ibstart::storage::LoadFavorites(layout) == favorites);
+  ibstart::storage::SortSettings sorting;
+  sorting.default_mode = ibstart::storage::SortMode::name;
+  sorting.folder_modes = {{L"Группа А", ibstart::storage::SortMode::last_launch}};
+  ibstart::storage::SaveSortSettings(layout, sorting);
+  const auto loadedSorting = ibstart::storage::LoadSortSettings(layout);
+  CHECK(loadedSorting.default_mode == sorting.default_mode); CHECK(loadedSorting.folder_modes == sorting.folder_modes);
+  const auto launchTime = std::chrono::system_clock::from_time_t(123456789);
+  ibstart::storage::AppendHistory(layout, {L"id-😀", launchTime, ibstart::domain::LaunchMode::designer}); const auto history = ibstart::storage::LoadHistory(layout); CHECK(history.size() == 1); CHECK(!history.empty() && history[0].database_id == L"id-😀");
+  const auto launches = ibstart::storage::LoadLastLaunchTimes(layout); CHECK(launches.contains(L"id-😀") && launches.at(L"id-😀") == launchTime);
+  ibstart::storage::ClearHistory(layout); CHECK(ibstart::storage::LoadHistory(layout).empty()); CHECK(ibstart::storage::LoadLastLaunchTimes(layout) == launches); CHECK(ibstart::storage::LoadFavorites(layout) == favorites);
   std::error_code error; std::filesystem::remove_all(directory, error);
 }
 }
