@@ -43,6 +43,7 @@ constexpr int kMinimumWindowHeight = 460;
 enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kCopyDetailValue, kCopyDetailPair, kEditTags, kConfigureTagColors, kFolderSortDefault, kFolderSortCatalog, kFolderSortName, kFolderSortLastLaunch, kMoveToFolder, kOpenStandardList, kShowTagsInList, kNewTagForSelected, kFavorite1 = 200 };
 constexpr UINT kRecentList1 = 300;
 constexpr UINT kQuickTag1 = 400;
+constexpr UINT kTagsContextMenu = 250;
 enum TreeImage : int { kFileDatabaseImage, kServerDatabaseImage, kFolderImage, kFavoriteImage, kRecentImage };
 constexpr LPARAM kRecentRootItemData = 1;
 constexpr LPARAM kFavoritesRootItemData = 2;
@@ -53,7 +54,7 @@ HICON LoadResourceIcon(HINSTANCE instance, int resource, int size) {
 }
 HFONT CreateUiFont(HWND window, int points, LONG weight) {
   return CreateFontW(-MulDiv(points, static_cast<int>(GetDpiForWindow(window)), 72), 0, 0, 0, weight, FALSE, FALSE, FALSE,
-      DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+      DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
 }
 int ScaleForDpi(int logicalPixels, UINT dpi) { return MulDiv(logicalPixels, static_cast<int>(dpi == 0 ? 96 : dpi), 96); }
 SIZE DialogOuterSize(HWND owner, int clientWidth, int clientHeight, DWORD style, DWORD extendedStyle) {
@@ -675,8 +676,8 @@ void CreateAdvancedDatabaseOptionsControls(HWND dialog, AdvancedDatabaseOptionsS
   create(0, L"STATIC", L"Параметры командной строки:", 0, 28, 404, 184, 20, 0, textFont);
   state.parameters = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.additional_parameters, WS_TABSTOP | ES_AUTOHSCROLL, 220, 400, 352, 25, kAdvancedParameters, textFont);
   help(400, kAdvancedHelpParameters);
-  create(0, L"BUTTON", L"Сохранить", WS_TABSTOP | BS_DEFPUSHBUTTON, 450, 462, 90, 28, IDOK, buttonFont);
-  create(0, L"BUTTON", L"Отмена", WS_TABSTOP, 550, 462, 84, 28, IDCANCEL, buttonFont);
+  create(0, L"BUTTON", L"Сохранить", WS_TABSTOP | BS_DEFPUSHBUTTON, 430, 462, 110, 28, IDOK, buttonFont);
+  create(0, L"BUTTON", L"Отмена", WS_TABSTOP, 550, 462, 96, 28, IDCANCEL, buttonFont);
 }
 std::optional<std::wstring> CollectAdvancedDatabaseOptions(AdvancedDatabaseOptionsState& state) {
   DatabaseEditorData result = state.initial;
@@ -738,7 +739,7 @@ std::optional<DatabaseEditorData> EditAdvancedDatabaseOptions(HWND owner, Databa
     return std::nullopt;
   }
   state.font = CreateUiFont(dialog, 9, FW_NORMAL);
-  state.button_font = CreateUiFont(dialog, 9, FW_SEMIBOLD);
+  state.button_font = CreateUiFont(dialog, 9, FW_NORMAL);
   CreateAdvancedDatabaseOptionsControls(dialog, state);
   PositionDialogNearOwner(dialog, owner);
   ShowWindow(dialog, SW_SHOW);
@@ -793,8 +794,8 @@ void CreateDatabaseEditorControls(HWND dialog, DatabaseEditorState& state, const
   create(0, L"BUTTON", L"Расположение информационной базы", BS_GROUPBOX, 14, 74, 632, 260, 0, textFont);
   state.file_radio = create(0, L"BUTTON", L"Файловая база", WS_GROUP | WS_TABSTOP | BS_AUTORADIOBUTTON, 28, 98, 180, 20, kConnectionFile, textFont);
   state.file_label = create(0, L"STATIC", L"Каталог файловой базы:", 0, 48, 122, 190, 20, 0, textFont);
-  state.file = create(WS_EX_CLIENTEDGE, L"EDIT", ConnectionValue(state.initial.connect, L"File"), WS_TABSTOP | ES_AUTOHSCROLL, 48, 142, 506, 25, kFilePath, textFont);
-  state.file_browse = create(0, L"BUTTON", L"Обзор…", WS_TABSTOP, 564, 142, 70, 25, kBrowseFilePath, buttonFont);
+  state.file = create(WS_EX_CLIENTEDGE, L"EDIT", ConnectionValue(state.initial.connect, L"File"), WS_TABSTOP | ES_AUTOHSCROLL, 48, 142, 498, 25, kFilePath, textFont);
+  state.file_browse = create(0, L"BUTTON", L"Обзор…", WS_TABSTOP, 556, 142, 78, 25, kBrowseFilePath, buttonFont);
   state.web_radio = create(0, L"BUTTON", L"Веб-база", WS_TABSTOP | BS_AUTORADIOBUTTON, 28, 178, 180, 20, kConnectionWeb, textFont);
   state.web_label = create(0, L"STATIC", L"Адрес веб-сервера:", 0, 48, 202, 190, 20, 0, textFont);
   const auto web = catalog::Catalog::WebUrl(state.initial.connect);
@@ -832,8 +833,8 @@ void CreateDatabaseEditorControls(HWND dialog, DatabaseEditorState& state, const
   state.windows_auth = create(0, L"BUTTON", L"Использовать аутентификацию ОС", WS_TABSTOP | BS_AUTOCHECKBOX, 28, 434, 290, 20, kLaunchWindowsAuth, textFont);
   SendMessageW(state.windows_auth, BM_SETCHECK, IsEnabledFlag(state.initial.wa) ? BST_CHECKED : BST_UNCHECKED, 0);
   create(0, L"BUTTON", L"Дополнительные настройки…", WS_TABSTOP, 28, 468, 230, 28, kOpenAdvancedDatabaseOptions, buttonFont);
-  create(0, L"BUTTON", L"Сохранить", WS_TABSTOP | BS_DEFPUSHBUTTON, 450, 532, 90, 28, IDOK, buttonFont);
-  create(0, L"BUTTON", L"Отмена", WS_TABSTOP, 550, 532, 84, 28, IDCANCEL, buttonFont);
+  create(0, L"BUTTON", L"Сохранить", WS_TABSTOP | BS_DEFPUSHBUTTON, 430, 532, 110, 28, IDOK, buttonFont);
+  create(0, L"BUTTON", L"Отмена", WS_TABSTOP, 550, 532, 96, 28, IDCANCEL, buttonFont);
   state.kind = state.initial.kind;
   UpdateConnectionControls(state);
 }
@@ -893,7 +894,7 @@ std::optional<DatabaseEditorData> EditDatabase(HWND owner, std::wstring_view tit
     return std::nullopt;
   }
   state.font = CreateUiFont(dialog, 9, FW_NORMAL);
-  state.button_font = CreateUiFont(dialog, 9, FW_SEMIBOLD);
+  state.button_font = CreateUiFont(dialog, 9, FW_NORMAL);
   CreateDatabaseEditorControls(dialog, state, platforms);
   PositionDialogNearOwner(dialog, owner);
   ShowWindow(dialog, SW_SHOW);
@@ -979,12 +980,12 @@ std::optional<std::wstring> InputBox(HWND owner, std::wstring_view title, std::w
     return std::nullopt;
   }
   state.font = CreateUiFont(dialog, 9, FW_NORMAL);
-  state.button_font = CreateUiFont(dialog, 9, FW_SEMIBOLD);
+  state.button_font = CreateUiFont(dialog, 9, FW_NORMAL);
   const auto px = [dpi](int logical) { return ScaleForDpi(logical, dpi); };
   const HWND captionControl = CreateWindowW(L"STATIC", std::wstring(caption).c_str(), WS_CHILD | WS_VISIBLE, px(14), px(14), px(430), px(20), dialog, nullptr, nullptr, nullptr);
   state.edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", std::wstring(initial).c_str(), WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, px(14), px(38), px(430), px(24), dialog, nullptr, nullptr, nullptr);
-  const HWND accept = CreateWindowW(L"BUTTON", L"ОК", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, px(275), px(78), px(80), px(25), dialog, reinterpret_cast<HMENU>(IDOK), nullptr, nullptr);
-  const HWND cancel = CreateWindowW(L"BUTTON", L"Отмена", WS_CHILD | WS_VISIBLE | WS_TABSTOP, px(364), px(78), px(80), px(25), dialog, reinterpret_cast<HMENU>(IDCANCEL), nullptr, nullptr);
+  const HWND accept = CreateWindowW(L"BUTTON", L"ОК", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, px(258), px(78), px(96), px(25), dialog, reinterpret_cast<HMENU>(IDOK), nullptr, nullptr);
+  const HWND cancel = CreateWindowW(L"BUTTON", L"Отмена", WS_CHILD | WS_VISIBLE | WS_TABSTOP, px(364), px(78), px(96), px(25), dialog, reinterpret_cast<HMENU>(IDCANCEL), nullptr, nullptr);
   SetControlFont(captionControl, state.font);
   SetControlFont(state.edit, state.font);
   SetControlFont(accept, state.button_font ? state.button_font : state.font);
@@ -1266,7 +1267,7 @@ std::optional<TagManagerResult> EditTagManager(HWND owner, const storage::Databa
     return std::nullopt;
   }
   state.font = CreateUiFont(dialog, 9, FW_NORMAL);
-  state.button_font = CreateUiFont(dialog, 9, FW_SEMIBOLD);
+  state.button_font = CreateUiFont(dialog, 9, FW_NORMAL);
   const auto px = [dpi](int logical) { return ScaleForDpi(logical, dpi); };
   const auto create = [&](DWORD exStyle, const wchar_t* className, std::wstring_view text, DWORD controlStyle, int x, int y, int width, int height, int id, HFONT font) {
     const HWND control = CreateWindowExW(exStyle, className, std::wstring(text).c_str(), WS_CHILD | WS_VISIBLE | controlStyle,
@@ -1289,9 +1290,9 @@ std::optional<TagManagerResult> EditTagManager(HWND owner, const storage::Databa
   state.preview = create(WS_EX_CLIENTEDGE, L"STATIC", L"", SS_OWNERDRAW, 270, 218, 370, 47, kTagManagerPreview, state.font);
   create(0, L"BUTTON", L"Новый", WS_TABSTOP, 10, 278, 108, 28, kTagManagerNew, state.button_font ? state.button_font : state.font);
   create(0, L"BUTTON", L"Удалить", WS_TABSTOP, 128, 278, 112, 28, kTagManagerDelete, state.button_font ? state.button_font : state.font);
-  create(0, L"BUTTON", L"Сохранить тег", WS_TABSTOP, 270, 278, 122, 28, kTagManagerSave, state.button_font ? state.button_font : state.font);
-  create(0, L"BUTTON", L"Готово", WS_TABSTOP | BS_DEFPUSHBUTTON, 450, 278, 90, 28, IDOK, state.button_font ? state.button_font : state.font);
-  create(0, L"BUTTON", L"Отмена", WS_TABSTOP, 550, 278, 90, 28, IDCANCEL, state.button_font ? state.button_font : state.font);
+  create(0, L"BUTTON", L"Сохранить тег", WS_TABSTOP, 270, 278, 140, 28, kTagManagerSave, state.button_font ? state.button_font : state.font);
+  create(0, L"BUTTON", L"Готово", WS_TABSTOP | BS_DEFPUSHBUTTON, 448, 278, 92, 28, IDOK, state.button_font ? state.button_font : state.font);
+  create(0, L"BUTTON", L"Отмена", WS_TABSTOP, 548, 278, 92, 28, IDCANCEL, state.button_font ? state.button_font : state.font);
   RefreshTagManagerList(state);
   PositionDialogNearOwner(dialog, owner);
   ShowWindow(dialog, SW_SHOW);
@@ -1437,7 +1438,7 @@ std::optional<std::vector<std::wstring>> EditTagAssignment(HWND owner, const std
   const UINT dpi = owner ? GetDpiForWindow(owner) : GetDpiForSystem();
   constexpr DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP;
   constexpr DWORD extendedStyle = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
-  const SIZE outerSize = DialogOuterSize(owner, 500, 358, style, extendedStyle);
+  const SIZE outerSize = DialogOuterSize(owner, 570, 358, style, extendedStyle);
   HWND dialog = CreateWindowExW(extendedStyle, kTagAssignmentClass, L"Теги базы", style,
       CW_USEDEFAULT, CW_USEDEFAULT, outerSize.cx, outerSize.cy, owner, nullptr, GetModuleHandleW(nullptr), &state);
   if (!dialog) {
@@ -1445,22 +1446,22 @@ std::optional<std::vector<std::wstring>> EditTagAssignment(HWND owner, const std
     return std::nullopt;
   }
   state.font = CreateUiFont(dialog, 9, FW_NORMAL);
-  state.button_font = CreateUiFont(dialog, 9, FW_SEMIBOLD);
+  state.button_font = CreateUiFont(dialog, 9, FW_NORMAL);
   const auto px = [dpi](int logical) { return ScaleForDpi(logical, dpi); };
   const HWND caption = CreateWindowW(L"STATIC", L"Отметьте существующие теги или быстро добавьте новый.", WS_CHILD | WS_VISIBLE,
-      px(10), px(10), px(480), px(18), dialog, nullptr, nullptr, nullptr);
+      px(10), px(10), px(550), px(18), dialog, nullptr, nullptr, nullptr);
   state.list = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
-      px(10), px(31), px(480), px(219), dialog, reinterpret_cast<HMENU>(kTagAssignmentList), nullptr, nullptr);
+      px(10), px(31), px(550), px(219), dialog, reinterpret_cast<HMENU>(kTagAssignmentList), nullptr, nullptr);
   const HWND newCaption = CreateWindowW(L"STATIC", L"Новый тег", WS_CHILD | WS_VISIBLE,
-      px(10), px(261), px(330), px(18), dialog, nullptr, nullptr, nullptr);
+      px(10), px(261), px(370), px(18), dialog, nullptr, nullptr, nullptr);
   state.name = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-      px(10), px(280), px(340), px(25), dialog, reinterpret_cast<HMENU>(kTagAssignmentName), nullptr, nullptr);
+      px(10), px(280), px(370), px(25), dialog, reinterpret_cast<HMENU>(kTagAssignmentName), nullptr, nullptr);
   const HWND add = CreateWindowW(L"BUTTON", L"Добавить и отметить", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-      px(360), px(279), px(130), px(27), dialog, reinterpret_cast<HMENU>(kTagAssignmentAdd), nullptr, nullptr);
+      px(390), px(279), px(170), px(27), dialog, reinterpret_cast<HMENU>(kTagAssignmentAdd), nullptr, nullptr);
   const HWND accept = CreateWindowW(L"BUTTON", L"Готово", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-      px(310), px(320), px(82), px(28), dialog, reinterpret_cast<HMENU>(IDOK), nullptr, nullptr);
+      px(370), px(320), px(90), px(28), dialog, reinterpret_cast<HMENU>(IDOK), nullptr, nullptr);
   const HWND cancel = CreateWindowW(L"BUTTON", L"Отмена", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-      px(402), px(320), px(88), px(28), dialog, reinterpret_cast<HMENU>(IDCANCEL), nullptr, nullptr);
+      px(470), px(320), px(90), px(28), dialog, reinterpret_cast<HMENU>(IDCANCEL), nullptr, nullptr);
   SetControlFont(caption, state.font);
   SetControlFont(newCaption, state.font);
   SetControlFont(state.list, state.font);
@@ -1471,7 +1472,7 @@ std::optional<std::vector<std::wstring>> EditTagAssignment(HWND owner, const std
   ListView_SetExtendedListViewStyle(state.list, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
   LVCOLUMNW column{};
   column.mask = LVCF_WIDTH;
-  column.cx = px(454);
+  column.cx = px(524);
   ListView_InsertColumn(state.list, 0, &column);
   for (const auto& tag : KnownTags(tags, styles)) AddTagAssignmentItem(state, tag, ContainsTag(assigned, tag));
   PositionDialogNearOwner(dialog, owner);
@@ -1568,7 +1569,7 @@ std::optional<std::wstring> SelectCatalogFolder(HWND owner, const std::vector<ca
   const UINT dpi = owner ? GetDpiForWindow(owner) : GetDpiForSystem();
   constexpr DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP;
   constexpr DWORD extendedStyle = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
-  const SIZE outerSize = DialogOuterSize(owner, 440, 400, style, extendedStyle);
+  const SIZE outerSize = DialogOuterSize(owner, 460, 400, style, extendedStyle);
   HWND dialog = CreateWindowExW(extendedStyle, kFolderPickerClass, L"Переместить в папку", style,
       CW_USEDEFAULT, CW_USEDEFAULT, outerSize.cx, outerSize.cy, owner, nullptr, GetModuleHandleW(nullptr), &state);
   if (!dialog) {
@@ -1576,16 +1577,16 @@ std::optional<std::wstring> SelectCatalogFolder(HWND owner, const std::vector<ca
     return std::nullopt;
   }
   state.font = CreateUiFont(dialog, 9, FW_NORMAL);
-  state.button_font = CreateUiFont(dialog, 9, FW_SEMIBOLD);
+  state.button_font = CreateUiFont(dialog, 9, FW_NORMAL);
   const auto px = [dpi](int logical) { return ScaleForDpi(logical, dpi); };
   const HWND caption = CreateWindowW(L"STATIC", L"Выберите папку, в которую нужно переместить базу:", WS_CHILD | WS_VISIBLE,
-      px(10), px(10), px(420), px(18), dialog, nullptr, nullptr, nullptr);
+      px(10), px(10), px(440), px(18), dialog, nullptr, nullptr, nullptr);
   state.tree = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS,
-      px(10), px(32), px(420), px(315), dialog, reinterpret_cast<HMENU>(kFolderPickerTree), nullptr, nullptr);
+      px(10), px(32), px(440), px(315), dialog, reinterpret_cast<HMENU>(kFolderPickerTree), nullptr, nullptr);
   const HWND accept = CreateWindowW(L"BUTTON", L"Переместить", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-      px(236), px(360), px(92), px(28), dialog, reinterpret_cast<HMENU>(IDOK), nullptr, nullptr);
+      px(224), px(360), px(120), px(28), dialog, reinterpret_cast<HMENU>(IDOK), nullptr, nullptr);
   const HWND cancel = CreateWindowW(L"BUTTON", L"Отмена", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-      px(338), px(360), px(92), px(28), dialog, reinterpret_cast<HMENU>(IDCANCEL), nullptr, nullptr);
+      px(354), px(360), px(96), px(28), dialog, reinterpret_cast<HMENU>(IDCANCEL), nullptr, nullptr);
   SetControlFont(caption, state.font);
   SetControlFont(state.tree, state.font);
   SetControlFont(accept, state.button_font ? state.button_font : state.font);
@@ -1853,7 +1854,7 @@ void MainWindow::CreateControls() {
   details_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP |
       LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL, 380, 100, 480, 182, window_, nullptr, instance_, nullptr);
   controls_font_ = CreateUiFont(window_, 9, FW_NORMAL);
-  button_font_ = CreateUiFont(window_, 9, FW_SEMIBOLD);
+  button_font_ = CreateUiFont(window_, 9, FW_NORMAL);
   if (controls_font_) {
     for (const HWND control : {searchLabel, search_, tagFilterLabel, tag_filter_, sortLabel, sort_mode_, tree_, details_}) {
       if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(controls_font_), TRUE);
@@ -1922,6 +1923,8 @@ void MainWindow::CreateControls() {
   AppendMenuW(view_menu_, MF_STRING, kSimpleMode, L"Простой режим\tCtrl+Alt+M"); AppendMenuW(help, MF_STRING, kAbout, L"О программе…\tF1"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(file_menu_), L"Файл"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(view_menu_), L"Вид"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(help), L"Справка"); SetMenu(window_, menu);
   SetSimpleMode(settings_.simple_mode);
   DisplaySelected();
+  RECT client{};
+  if (GetClientRect(window_, &client)) Layout(client.right - client.left, client.bottom - client.top);
 }
 
 void MainWindow::Layout(int width, int height) {
@@ -2444,6 +2447,26 @@ bool MainWindow::DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const {
     SelectObject(draw->hDC, previousPen);
     DeleteObject(brush);
     DeleteObject(pen);
+  } else if (item->command == kTagsContextMenu) {
+    const COLORREF color = disabled ? GetSysColor(COLOR_GRAYTEXT) : selected ? RGB(218, 242, 255) : RGB(0, 144, 162);
+    const HBRUSH brush = CreateSolidBrush(color);
+    const HPEN pen = CreatePen(PS_SOLID, 1, color);
+    const auto previousBrush = SelectObject(draw->hDC, brush);
+    const auto previousPen = SelectObject(draw->hDC, pen);
+    POINT tag[] = {{iconX + 2, iconY + 3}, {iconX + 11, iconY + 3}, {iconX + 18, iconY + 10}, {iconX + 11, iconY + 17}, {iconX + 2, iconY + 17}};
+    Polygon(draw->hDC, tag, 5);
+    SelectObject(draw->hDC, previousBrush);
+    SelectObject(draw->hDC, previousPen);
+    const HBRUSH holeBrush = GetSysColorBrush(selected ? COLOR_HIGHLIGHT : COLOR_MENU);
+    const HPEN holePen = CreatePen(PS_SOLID, 1, selected ? GetSysColor(COLOR_HIGHLIGHT) : GetSysColor(COLOR_MENU));
+    const auto previousHoleBrush = SelectObject(draw->hDC, holeBrush);
+    const auto previousHolePen = SelectObject(draw->hDC, holePen);
+    Ellipse(draw->hDC, iconX + 5, iconY + 6, iconX + 9, iconY + 10);
+    SelectObject(draw->hDC, previousHoleBrush);
+    SelectObject(draw->hDC, previousHolePen);
+    DeleteObject(brush);
+    DeleteObject(pen);
+    DeleteObject(holePen);
   } else if (item->icon) {
     if (disabled) DrawStateW(draw->hDC, nullptr, nullptr, reinterpret_cast<LPARAM>(item->icon), 0, iconX, iconY, 20, 20, DST_ICON | DSS_DISABLED);
     else DrawIconEx(draw->hDC, iconX, iconY, item->icon, 20, 20, 0, nullptr, DI_NORMAL);
@@ -2454,6 +2477,7 @@ bool MainWindow::DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const {
   RECT textRect = draw->rcItem;
   textRect.left += 35;
   textRect.right -= 10;
+  if (item->command == kTagsContextMenu) textRect.right -= 16;
   if (!item->shortcut.empty()) {
     SIZE shortcutSize{};
     GetTextExtentPoint32W(draw->hDC, item->shortcut.c_str(), static_cast<int>(item->shortcut.size()), &shortcutSize);
@@ -2467,6 +2491,17 @@ bool MainWindow::DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const {
   }
   SetTextColor(draw->hDC, GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : (disabled ? COLOR_GRAYTEXT : COLOR_MENUTEXT)));
   DrawTextW(draw->hDC, item->text.c_str(), static_cast<int>(item->text.size()), &textRect, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
+  if (item->command == kTagsContextMenu) {
+    const COLORREF arrowColor = disabled ? GetSysColor(COLOR_GRAYTEXT) : GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_MENUTEXT);
+    const HPEN pen = CreatePen(PS_SOLID, 1, arrowColor);
+    const auto previousPen = SelectObject(draw->hDC, pen);
+    const int centerY = (static_cast<int>(draw->rcItem.top) + static_cast<int>(draw->rcItem.bottom)) / 2;
+    MoveToEx(draw->hDC, draw->rcItem.right - 15, centerY - 4, nullptr);
+    LineTo(draw->hDC, draw->rcItem.right - 10, centerY);
+    LineTo(draw->hDC, draw->rcItem.right - 15, centerY + 4);
+    SelectObject(draw->hDC, previousPen);
+    DeleteObject(pen);
+  }
   if (draw->itemState & ODS_FOCUS) DrawFocusRect(draw->hDC, &draw->rcItem);
   RestoreDC(draw->hDC, saved);
   return true;
@@ -2720,6 +2755,19 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
     item.dwItemData = reinterpret_cast<ULONG_PTR>(&context_menu_items_.back());
     InsertMenuItemW(menu, static_cast<UINT>(GetMenuItemCount(menu)), TRUE, &item);
   };
+  const auto appendPopup = [&](HMENU submenu, UINT identity, std::wstring text) {
+    ContextMenuItem visual{identity, nullptr, std::move(text), {}};
+    context_menu_items_.push_back(std::move(visual));
+    MENUITEMINFOW item{};
+    item.cbSize = sizeof(item);
+    item.fMask = MIIM_FTYPE | MIIM_ID | MIIM_STATE | MIIM_DATA | MIIM_SUBMENU;
+    item.fType = MFT_OWNERDRAW;
+    item.wID = identity;
+    item.fState = MFS_ENABLED;
+    item.hSubMenu = submenu;
+    item.dwItemData = reinterpret_cast<ULONG_PTR>(&context_menu_items_.back());
+    InsertMenuItemW(menu, static_cast<UINT>(GetMenuItemCount(menu)), TRUE, &item);
+  };
   const auto separator = [&] { AppendMenuW(menu, MF_SEPARATOR, 0, nullptr); };
   append(database, false, kEnterprise, IDI_ACTION_ENTERPRISE, L"Предприятие", L"F3");
   append(database, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор", L"F4");
@@ -2743,7 +2791,7 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
       AppendMenuW(tagMenu, MF_SEPARATOR, 0, nullptr);
       AppendMenuW(tagMenu, MF_STRING, kNewTagForSelected, L"Новый тег…");
       AppendMenuW(tagMenu, MF_STRING, kConfigureTagColors, L"Настроить теги…");
-      AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(tagMenu), L"Теги");
+      appendPopup(tagMenu, kTagsContextMenu, L"Теги");
     }
   }
   append(editable, false, kEdit, IDI_ACTION_EDIT, L"Изменить…", L"F2");
