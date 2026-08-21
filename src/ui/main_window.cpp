@@ -35,8 +35,9 @@ constexpr UINT kActivateMessage = WM_APP + 23;
 constexpr ULONG_PTR kLaunchCopyData = 0x49425354;
 constexpr int kMinimumWindowWidth = 940;
 constexpr int kMinimumWindowHeight = 460;
-enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kAbout, kMoveUp, kMoveDown, kOpenFolder, kFavorite1 = 200 };
+enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kFavorite1 = 200 };
 enum TreeImage : int { kFileDatabaseImage, kServerDatabaseImage, kFolderImage, kFavoriteImage, kRecentImage };
+constexpr LPARAM kRecentRootItemData = 1;
 
 void Message(HWND owner, std::wstring_view text, std::wstring_view title = L"ИБ Старт", UINT type = MB_OK | MB_ICONINFORMATION) { MessageBoxW(owner, std::wstring(text).c_str(), std::wstring(title).c_str(), type); }
 HICON LoadResourceIcon(HINSTANCE instance, int resource, int size) {
@@ -921,7 +922,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       switch (LOWORD(wparam)) {
         case kEnterprise: LaunchSelected(domain::LaunchMode::enterprise); break; case kDesigner: LaunchSelected(domain::LaunchMode::designer); break;
         case kAddFile: AddFileDatabase(); break; case kAddServer: AddServerDatabase(); break; case kAddGroup: AddGroup(); break; case kOpenList: OpenList(); break; case kRefresh: LoadCatalog(); break;
-        case kEdit: EditSelected(); break; case kCache: ClearSelectedCache(); break; case kShortcut: CreateShortcut(); break; case kOpenFolder: OpenSelectedFolder(); break; case kDelete: DeleteSelected(); break;
+        case kEdit: EditSelected(); break; case kCache: ClearSelectedCache(); break; case kClearRecent: ClearRecentBases(); break; case kShortcut: CreateShortcut(); break; case kOpenFolder: OpenSelectedFolder(); break; case kDelete: DeleteSelected(); break;
         case kSimpleMode: SetSimpleMode(!settings_.simple_mode); break; case kToggleFavorite: ToggleFavorite(); break; case kFocusSearch: SetFocus(search_); break; case kAbout: ShowAbout(); break;
         case kMoveUp: MoveSelected(-1); break; case kMoveDown: MoveSelected(1); break;
         default: if (LOWORD(wparam) >= kFavorite1 && LOWORD(wparam) < kFavorite1 + 9) LaunchFavorite(LOWORD(wparam) - kFavorite1); break;
@@ -1064,7 +1065,7 @@ void MainWindow::CreateControls() {
   status_ = CreateWindowW(STATUSCLASSNAMEW, L"", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window_, nullptr, instance_, nullptr);
   HMENU menu = CreateMenu(), file = CreatePopupMenu(), view = CreatePopupMenu(), help = CreatePopupMenu();
   AppendMenuW(file, MF_STRING, kOpenList, L"Открыть список баз…\tCtrl+O"); AppendMenuW(file, MF_STRING, kAddFile, L"Добавить файловую базу…\tCtrl+Alt+F"); AppendMenuW(file, MF_STRING, kAddServer, L"Добавить серверную базу…\tCtrl+Alt+S"); AppendMenuW(file, MF_STRING, kAddGroup, L"Добавить группу…\tCtrl+Alt+G"); AppendMenuW(file, MF_STRING, kRefresh, L"Обновить список\tF5");
-  AppendMenuW(view, MF_STRING, kToggleFavorite, L"Добавить/убрать из избранного\tCtrl+Alt+I");
+  AppendMenuW(view, MF_STRING, kToggleFavorite, L"Добавить/убрать из избранного\tCtrl+Alt+I"); AppendMenuW(view, MF_STRING, kClearRecent, L"Очистить недавние базы…");
   AppendMenuW(view, MF_STRING, kSimpleMode, L"Простой режим\tCtrl+Alt+M"); AppendMenuW(help, MF_STRING, kAbout, L"О программе…\tF1"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(file), L"Файл"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(view), L"Вид"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(help), L"Справка"); SetMenu(window_, menu);
   SetSimpleMode(settings_.simple_mode);
   DisplaySelected();
@@ -1199,9 +1200,9 @@ void MainWindow::PopulateTree() {
   wchar_t text[512]{}; GetWindowTextW(search_, text, 512); search_filter_ = text; const std::wstring_view filter = search_filter_; TreeView_DeleteAllItems(tree_);
   if (catalog_) {
     AddTreeItems(catalog_->Tree(), TVI_ROOT, filter);
-    const auto addSpecialRoot = [&](std::wstring_view rootName, const std::vector<std::wstring>& names, int image) {
+    const auto addSpecialRoot = [&](std::wstring_view rootName, const std::vector<std::wstring>& names, int image, LPARAM itemData = 0) {
       TVINSERTSTRUCTW root{}; root.hParent = TVI_ROOT; root.hInsertAfter = TVI_LAST;
-      root.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE; root.item.pszText = const_cast<wchar_t*>(rootName.data());
+      root.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE | TVIF_PARAM; root.item.pszText = const_cast<wchar_t*>(rootName.data()); root.item.lParam = itemData;
       root.item.iImage = root.item.iSelectedImage = image;
       const HTREEITEM rootHandle = TreeView_InsertItem(tree_, &root);
       bool any = false;
@@ -1216,7 +1217,7 @@ void MainWindow::PopulateTree() {
     addSpecialRoot(L"Избранное", storage::LoadFavorites(layout_), kFavoriteImage);
     std::vector<std::wstring> recent;
     for (const auto& history : storage::LoadHistory(layout_)) for (const auto* entry : catalog_->Databases()) if (entry->ValueOr(L"ID", entry->name) == history.database_id) { recent.push_back(entry->name); break; }
-    addSpecialRoot(L"Недавние", recent, kRecentImage);
+    addSpecialRoot(L"Недавние", recent, kRecentImage, kRecentRootItemData);
   }
   if (initial_launch_id_) {
     auto wanted = *initial_launch_id_; initial_launch_id_.reset();
@@ -1367,6 +1368,7 @@ void MainWindow::ClearContextMenuItems() noexcept {
 }
 
 std::wstring MainWindow::SelectedName() const { const auto item = TreeView_GetSelection(tree_); if (!item) return {}; wchar_t text[512]{}; TVITEMW data{}; data.mask = TVIF_TEXT; data.hItem = item; data.pszText = text; data.cchTextMax = 512; return TreeView_GetItem(tree_, &data) ? text : L""; }
+bool MainWindow::SelectedItemIsRecentRoot() const { const auto item = TreeView_GetSelection(tree_); if (!item) return false; TVITEMW data{}; data.mask = TVIF_PARAM; data.hItem = item; return TreeView_GetItem(tree_, &data) && data.lParam == kRecentRootItemData; }
 bool MainWindow::SelectTreeItem(std::wstring_view name) {
   if (!tree_ || name.empty()) return false;
   const auto find = [&](auto&& self, HTREEITEM item) -> HTREEITEM {
@@ -1406,7 +1408,8 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   }
 
   const auto name = SelectedName();
-  const auto* entry = catalog_->Find(name);
+  const bool recentRoot = SelectedItemIsRecentRoot();
+  const auto* entry = recentRoot ? nullptr : catalog_->Find(name);
   const bool database = entry && entry->IsDatabase();
   const bool group = entry && entry->IsGroup();
   const bool editable = entry && !settings_.simple_mode;
@@ -1439,6 +1442,7 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   append(database && !settings_.simple_mode, false, kCache, IDI_ACTION_CACHE, L"Очистить кэш…", L"Ctrl+Shift+Del");
   append(database && !settings_.simple_mode, false, kShortcut, IDI_ACTION_SHORTCUT, L"Создать ярлык", L"Ctrl+Shift+S");
   append(file, false, kOpenFolder, IDI_TREE_FOLDER, L"Открыть папку", L"Ctrl+Shift+O");
+  append(recentRoot, false, kClearRecent, IDI_ACTION_DELETE, L"Очистить недавние базы…");
   separator();
   append(editable, false, kMoveUp, 0, L"Переместить вверх", L"Ctrl+Shift+Up");
   append(editable, false, kMoveDown, 0, L"Переместить вниз", L"Ctrl+Shift+Down");
@@ -1641,6 +1645,19 @@ void MainWindow::MoveSelected(int offset) {
   SaveCatalog(); PopulateTree(); SelectTreeItem(name);
 }
 void MainWindow::ClearSelectedCache() { if (settings_.simple_mode || !catalog_) return; try { const auto database = catalog_->DatabaseFor(SelectedName()); const auto candidates = cache::CandidatesFor(database); if (candidates.empty()) { Message(window_, L"Безопасных каталогов кэша для этой базы не найдено."); return; } std::wstring list = L"Будут очищены только следующие каталоги кэша:\n"; for (const auto& item : candidates) list += item.path.wstring() + L"\n"; if (cache::HasActiveOneCProcess()) list += L"\nОбнаружен активный процесс 1С. Закройте его перед очисткой.\n"; if (MessageBoxW(window_, list.c_str(), L"Очистка кэша", MB_YESNO | MB_ICONWARNING) != IDYES) return; const auto result = cache::Clear(candidates); logger_.Info(L"Очистка кэша: файлов=" + std::to_wstring(result.files) + L", байт=" + std::to_wstring(result.bytes)); Message(window_, L"Очищено файлов: " + std::to_wstring(result.files) + L"\nОсвобождено байт: " + std::to_wstring(result.bytes)); } catch (...) { Message(window_, L"Выберите базу для очистки кэша.", L"ИБ Старт", MB_OK | MB_ICONWARNING); } }
+void MainWindow::ClearRecentBases() {
+  try {
+    if (storage::LoadHistory(layout_).empty()) { SetStatus(L"Список недавних баз уже пуст."); return; }
+    if (MessageBoxW(window_, L"Очистить список недавних баз?\n\nСами базы и избранное не будут затронуты.", L"Очистить недавние базы", MB_YESNO | MB_ICONWARNING) != IDYES) return;
+    storage::ClearHistory(layout_);
+    logger_.Info(L"Очищен список недавних баз.");
+    PopulateTree();
+    SetStatus(L"Список недавних баз очищен.");
+  } catch (const std::exception& error) {
+    logger_.Error(L"Ошибка очистки недавних баз: " + ibstart::utf::FromUtf8(error.what()));
+    Message(window_, L"Не удалось очистить список недавних баз.", L"ИБ Старт", MB_OK | MB_ICONERROR);
+  }
+}
 void MainWindow::CreateShortcut() { if (!catalog_) return; try { const auto database = catalog_->DatabaseFor(SelectedName()); shell::CreateDesktopShortcut(executable_, database.id, database.name); Message(window_, L"Ярлык создан на рабочем столе."); } catch (...) { Message(window_, L"Не удалось создать ярлык.", L"ИБ Старт", MB_OK | MB_ICONERROR); } }
 void MainWindow::OpenList() { if (settings_.simple_mode) return; wchar_t filename[MAX_PATH]{}; OPENFILENAMEW dialog{}; dialog.lStructSize = sizeof(dialog); dialog.hwndOwner = window_; dialog.lpstrFilter = L"ibases.v8i\0ibases.v8i\0Все файлы\0*.*\0"; dialog.lpstrFile = filename; dialog.nMaxFile = MAX_PATH; dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST; if (GetOpenFileNameW(&dialog)) { settings_.active_ibases = filename; storage::SaveSettings(layout_, settings_); LoadCatalog(); } }
 void MainWindow::SetStatus(std::wstring text) { if (status_) SendMessageW(status_, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(text.c_str())); }

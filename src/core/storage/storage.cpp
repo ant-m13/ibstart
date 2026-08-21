@@ -250,6 +250,10 @@ void AppendHistory(const StorageLayout& layout, domain::HistoryItem item) {
   WriteAtomically(PathFor(layout, L"history.json"), json);
 }
 
+void ClearHistory(const StorageLayout& layout) {
+  WriteAtomically(PathFor(layout, L"history.json"), "[]\n");
+}
+
 std::vector<std::wstring> LoadFavorites(const StorageLayout& layout) {
   std::vector<std::wstring> result;
   const std::regex item("\\\"((?:\\\\.|[^\\\"])*)\\\"");
