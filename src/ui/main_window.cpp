@@ -1499,7 +1499,6 @@ void MainWindow::PopulateTree() {
   if (!tree_) return;
   wchar_t text[512]{}; GetWindowTextW(search_, text, 512); search_filter_ = text; const std::wstring_view filter = search_filter_; TreeView_DeleteAllItems(tree_);
   if (catalog_) {
-    AddTreeItems(SortedTree(), TVI_ROOT, filter);
     const auto addSpecialRoot = [&](std::wstring_view rootName, const std::vector<std::wstring>& names, int image, LPARAM itemData = 0) {
       TVINSERTSTRUCTW root{}; root.hParent = TVI_ROOT; root.hInsertAfter = TVI_LAST;
       root.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE | TVIF_PARAM; root.item.pszText = const_cast<wchar_t*>(rootName.data()); root.item.lParam = itemData;
@@ -1520,6 +1519,7 @@ void MainWindow::PopulateTree() {
     std::vector<std::wstring> recent;
     for (const auto& history : storage::LoadHistory(layout_)) for (const auto* entry : catalog_->Databases()) if (entry->ValueOr(L"ID", entry->name) == history.database_id) { recent.push_back(entry->name); break; }
     addSpecialRoot(L"Недавние", recent, kRecentImage, kRecentRootItemData);
+    AddTreeItems(SortedTree(), TVI_ROOT, filter);
   }
   if (initial_launch_id_) {
     auto wanted = *initial_launch_id_; initial_launch_id_.reset();
