@@ -53,11 +53,12 @@ add_library(ibstart_core STATIC
   src/core/storage/storage.cpp
   src/core/logging/logging.cpp
   src/core/shell/shortcut.cpp
+  src/core/update/update_service.cpp
 )
 target_include_directories(ibstart_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src" "${IBSTART_GENERATED_DIR}")
 target_compile_definitions(ibstart_core PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
 target_compile_options(ibstart_core PRIVATE /W4 /permissive- /EHsc /Zc:__cplusplus /utf-8)
-target_link_libraries(ibstart_core PUBLIC Advapi32 Shell32 Ole32)
+target_link_libraries(ibstart_core PUBLIC Advapi32 Shell32 Ole32 Winhttp)
 
 add_executable(IBStart WIN32
   src/app/main.cpp
@@ -80,6 +81,7 @@ set(IBSTART_ICON_FILES
   "${IBSTART_RESOURCE_DIR}/icons/refresh.ico"
   "${IBSTART_RESOURCE_DIR}/icons/file_database.ico"
   "${IBSTART_RESOURCE_DIR}/icons/server_database.ico"
+  "${IBSTART_RESOURCE_DIR}/icons/update.ico"
 )
 set_property(SOURCE "${IBSTART_GENERATED_DIR}/IBStart.rc" PROPERTY OBJECT_DEPENDS "${IBSTART_ICON_FILES}")
 target_link_libraries(IBStart PRIVATE ibstart_core Comctl32 Comdlg32)

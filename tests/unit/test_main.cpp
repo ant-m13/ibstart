@@ -6,6 +6,7 @@
 #include "core/logging/logging.hpp"
 #include "core/scanner/file_base_scanner.hpp"
 #include "core/storage/storage.hpp"
+#include "core/update/update_service.hpp"
 #include "core/v8i/v8i_file_store.hpp"
 
 #include <Windows.h>
@@ -176,6 +177,31 @@ void TestCatalogOrderingAndCycles() {
   CHECK(!ibstart::catalog::IsBareWebConnection(L"WS=\"https://example.test/base\""));
 }
 
+void TestUpdateVersionsAndReleaseResponse() {
+  CHECK(ibstart::update::CompareVersions(L"0.5.1", L"0.5.1") == 0);
+  CHECK(ibstart::update::CompareVersions(L"0.5.1", L"0.6.0") < 0);
+  CHECK(ibstart::update::CompareVersions(L"v1.0.0", L"0.9.9") > 0);
+  CHECK(ibstart::update::CompareVersions(L"1.0.0-alpha", L"1.0.0-alpha.1") < 0);
+  CHECK(ibstart::update::CompareVersions(L"1.0.0-alpha.2", L"1.0.0-alpha.10") < 0);
+  CHECK(ibstart::update::CompareVersions(L"1.0.0-beta", L"1.0.0-alpha.99") > 0);
+  CHECK(ibstart::update::CompareVersions(L"1.0.0-rc.1", L"1.0.0") < 0);
+  bool invalidVersion = false;
+  try { static_cast<void>(ibstart::update::CompareVersions(L"1.0", L"1.0.0")); }
+  catch (const std::invalid_argument&) { invalidVersion = true; }
+  CHECK(invalidVersion);
+
+  const auto release = ibstart::update::ParseLatestReleaseResponse(
+      R"({"html_url":"https:\/\/github.com\/ant-m13\/ibstart\/releases\/tag\/v0.6.0","tag_name":"v0.6.0"})");
+  CHECK(release.version == L"0.6.0");
+  CHECK(release.page_url == L"https://github.com/ant-m13/ibstart/releases/tag/v0.6.0");
+  bool invalidPage = false;
+  try {
+    static_cast<void>(ibstart::update::ParseLatestReleaseResponse(
+        R"({"tag_name":"v0.6.0","html_url":"https://example.test/release"})"));
+  } catch (const std::invalid_argument&) { invalidPage = true; }
+  CHECK(invalidPage);
+}
+
 void TestCatalogSearch() {
   const auto document = ibstart::v8i::V8iDocument::ParseUtf8(
       "[Бухгалтерия]\nConnect=Srvr=cluster-01;Ref=Accounting\nFolder=/Рабочие\nCustom=клиент-А\n");
@@ -342,6 +368,7 @@ int wmain() {
   run(L"V8iRoundTrip", TestV8iRoundTrip);
   run(L"DemoCatalogFixture", TestDemoCatalogFixture);
   run(L"ProductVersion", TestProductVersion);
+  run(L"UpdateVersionsAndReleaseResponse", TestUpdateVersionsAndReleaseResponse);
   run(L"UnicodeCaseInsensitiveSearch", TestUnicodeCaseInsensitiveSearch);
   run(L"CatalogSearch", TestCatalogSearch);
   run(L"NoBomAndCatalog", TestNoBomAndCatalog);
