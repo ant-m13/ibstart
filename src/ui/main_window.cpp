@@ -3826,8 +3826,7 @@ void MainWindow::CompleteUpdateCheck() {
   if (!error.empty()) {
     logger_.Error(L"Ошибка проверки обновлений: " + error);
     SetStatus(L"Не удалось проверить обновления.");
-    Message(window_, L"Не удалось проверить обновления. Проверьте подключение к интернету и повторите попытку. Подробности записаны в журнал.",
-        L"Проверка обновлений", MB_OK | MB_ICONWARNING);
+    ShowUpdateCheckError();
     return;
   }
   if (!release) {
@@ -3856,6 +3855,36 @@ void MainWindow::CompleteUpdateCheck() {
     logger_.Error(L"Не удалось открыть страницу релиза: " + release->page_url);
     Message(window_, L"Не удалось открыть страницу релиза в браузере.", L"Проверка обновлений", MB_OK | MB_ICONWARNING);
   }
+}
+void MainWindow::ShowUpdateCheckError() {
+  constexpr int kOpenLogButton = 1001;
+  const TASKDIALOG_BUTTON buttons[] = {{kOpenLogButton, L"Открыть журнал"}};
+  TASKDIALOGCONFIG dialog{sizeof(dialog)};
+  dialog.hwndParent = window_;
+  dialog.dwFlags = TDF_ALLOW_DIALOG_CANCELLATION | TDF_SIZE_TO_CONTENT;
+  dialog.dwCommonButtons = TDCBF_CLOSE_BUTTON;
+  dialog.pszWindowTitle = L"Проверка обновлений";
+  dialog.pszMainInstruction = L"Не удалось проверить обновления";
+  dialog.pszContent = L"Проверьте подключение к интернету и повторите попытку.\n\n"
+      L"Подробности сохранены в текущем файле журнала.";
+  dialog.pszMainIcon = TD_WARNING_ICON;
+  dialog.cButtons = static_cast<UINT>(sizeof(buttons) / sizeof(*buttons));
+  dialog.pButtons = buttons;
+
+  int selected{};
+  if (FAILED(TaskDialogIndirect(&dialog, &selected, nullptr, nullptr))) {
+    Message(window_, L"Не удалось проверить обновления. Проверьте подключение к интернету и повторите попытку.\n\n"
+        L"Подробности записаны в:\n" + logger_.path().wstring(), L"Проверка обновлений", MB_OK | MB_ICONWARNING);
+    return;
+  }
+  if (selected != kOpenLogButton) return;
+
+  const auto openResult = reinterpret_cast<INT_PTR>(
+      ShellExecuteW(window_, L"open", logger_.path().c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+  if (openResult > 32) return;
+  logger_.Error(L"Не удалось открыть файл журнала: " + logger_.path().wstring());
+  Message(window_, L"Не удалось открыть текущий файл журнала. Он находится по адресу:\n" + logger_.path().wstring(),
+      L"Проверка обновлений", MB_OK | MB_ICONWARNING);
 }
 void MainWindow::ShowAbout() const { const std::wstring text = L"ИБ Старт (IBStart)\nВерсия " + std::wstring(version::value) + L"\n\nЛёгкий менеджер запусков информационных баз 1С:Предприятие.\n\nЛицензия MIT. IBStart не является официальным продуктом фирмы «1С»."; MessageBoxW(window_, text.c_str(), L"О программе — ИБ Старт", MB_OK | MB_ICONINFORMATION); }
 void MainWindow::ReportUnhandledError(std::string_view message) noexcept { try { const auto wide = utf::FromUtf8(message); logger_.Error(L"Необработанная ошибка UI: " + wide); const auto text = L"Произошла непредвиденная ошибка. Подробности записаны в:\n" + logger_.path().wstring(); MessageBoxW(window_, text.c_str(), L"ИБ Старт", MB_OK | MB_ICONERROR); } catch (...) { MessageBoxW(window_, L"Произошла непредвиденная ошибка.", L"ИБ Старт", MB_OK | MB_ICONERROR); } }
