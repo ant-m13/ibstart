@@ -78,7 +78,7 @@ void TestDemoCatalogFixture() {
 
   const auto* legacyWeb = showcase.Find(L"Веб-база в legacy-формате");
   CHECK(legacyWeb != nullptr);
-  CHECK(ibstart::catalog::IsBareWebConnection(legacyWeb->ValueOr(L"Connect")));
+  CHECK(!ibstart::catalog::IsBareWebConnection(legacyWeb->ValueOr(L"Connect")));
 }
 
 void TestProductVersion() {

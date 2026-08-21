@@ -103,7 +103,7 @@ std::wstring FormatSize(uintmax_t bytes) {
 
   constexpr const wchar_t* units[] = {L"КБ", L"МБ", L"ГБ", L"ТБ", L"ПБ"};
   constexpr size_t unitCount = sizeof(units) / sizeof(*units);
-  double value = static_cast<double>(bytes);
+  double value = static_cast<double>(bytes) / 1024.0;
   size_t unit = 0;
   while (value >= 1024.0 && unit + 1 < unitCount) {
     value /= 1024.0;
