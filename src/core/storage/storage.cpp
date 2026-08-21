@@ -153,6 +153,23 @@ std::optional<int> JsonInteger(std::string_view json, std::string_view key) {
   try { return std::stoi(match[1].str()); } catch (...) { return std::nullopt; }
 }
 
+std::optional<SortMode> ParseSortMode(int value) {
+  if (value < static_cast<int>(SortMode::catalog_order) || value > static_cast<int>(SortMode::last_launch)) return std::nullopt;
+  return static_cast<SortMode>(value);
+}
+
+void SaveLastLaunchTimes(const StorageLayout& layout, const LastLaunchTimes& launches) {
+  std::string json = "[\n";
+  size_t written = 0;
+  for (const auto& [id, timestamp] : launches) {
+    if (id.empty()) continue;
+    if (written++) json += ",\n";
+    json += "  {\"id\": \"" + Escape(id) + "\", \"time\": " + std::to_string(std::chrono::system_clock::to_time_t(timestamp)) + "}";
+  }
+  json += "\n]\n";
+  WriteAtomically(PathFor(layout, L"last-launches.json"), json);
+}
+
 }  // namespace
 
 StorageLayout ResolveLayout(const std::filesystem::path& executable_path) {
@@ -236,6 +253,8 @@ std::vector<domain::HistoryItem> LoadHistory(const StorageLayout& layout) {
 }
 
 void AppendHistory(const StorageLayout& layout, domain::HistoryItem item) {
+  const auto id = item.database_id;
+  const auto timestamp = item.timestamp;
   auto history = LoadHistory(layout);
   history.erase(std::remove_if(history.begin(), history.end(), [&](const auto& existing) { return existing.database_id == item.database_id; }), history.end());
   history.insert(history.begin(), std::move(item));
@@ -248,10 +267,31 @@ void AppendHistory(const StorageLayout& layout, domain::HistoryItem item) {
   }
   json += "]\n";
   WriteAtomically(PathFor(layout, L"history.json"), json);
+  if (!id.empty()) {
+    auto launches = LoadLastLaunchTimes(layout);
+    launches[id] = timestamp;
+    SaveLastLaunchTimes(layout, launches);
+  }
 }
 
 void ClearHistory(const StorageLayout& layout) {
   WriteAtomically(PathFor(layout, L"history.json"), "[]\n");
+}
+
+LastLaunchTimes LoadLastLaunchTimes(const StorageLayout& layout) {
+  LastLaunchTimes result;
+  const std::regex item("\\{\\s*\\\"id\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"time\\\"\\s*:\\s*([0-9]+)\\s*\\}");
+  const auto json = ReadFile(PathFor(layout, L"last-launches.json"));
+  for (std::sregex_iterator it(json.begin(), json.end(), item), end; it != end; ++it) {
+    try {
+      const auto id = Unescape((*it)[1].str());
+      if (!id.empty()) result[id] = std::chrono::system_clock::from_time_t(std::stoll((*it)[2].str()));
+    } catch (...) {}
+  }
+  for (const auto& history : LoadHistory(layout)) {
+    if (!history.database_id.empty() && !result.contains(history.database_id)) result[history.database_id] = history.timestamp;
+  }
+  return result;
 }
 
 std::vector<std::wstring> LoadFavorites(const StorageLayout& layout) {
@@ -304,6 +344,35 @@ void SaveTags(const StorageLayout& layout, const DatabaseTags& tags) {
   }
   json += "\n]\n";
   WriteAtomically(PathFor(layout, L"tags.json"), json);
+}
+
+SortSettings LoadSortSettings(const StorageLayout& layout) {
+  SortSettings result;
+  const auto json = ReadFile(PathFor(layout, L"sorting.json"));
+  try {
+    if (const auto mode = JsonInteger(json, "default_mode")) {
+      if (const auto parsed = ParseSortMode(*mode)) result.default_mode = *parsed;
+    }
+    const std::regex item("\\{\\s*\\\"folder\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"mode\\\"\\s*:\\s*([0-9]+)\\s*\\}");
+    for (std::sregex_iterator it(json.begin(), json.end(), item), end; it != end; ++it) {
+      const auto folder = Unescape((*it)[1].str());
+      const auto mode = ParseSortMode(std::stoi((*it)[2].str()));
+      if (!folder.empty() && mode) result.folder_modes[folder] = *mode;
+    }
+  } catch (...) {}
+  return result;
+}
+
+void SaveSortSettings(const StorageLayout& layout, const SortSettings& settings) {
+  std::string json = "{\n  \"default_mode\": " + std::to_string(static_cast<int>(settings.default_mode)) + ",\n  \"folders\": [";
+  size_t written = 0;
+  for (const auto& [folder, mode] : settings.folder_modes) {
+    if (folder.empty()) continue;
+    if (written++) json += ", ";
+    json += "{\"folder\": \"" + Escape(folder) + "\", \"mode\": " + std::to_string(static_cast<int>(mode)) + "}";
+  }
+  json += "]\n}\n";
+  WriteAtomically(PathFor(layout, L"sorting.json"), json);
 }
 
 }  // namespace ibstart::storage

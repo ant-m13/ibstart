@@ -35,7 +35,7 @@ constexpr UINT kActivateMessage = WM_APP + 23;
 constexpr ULONG_PTR kLaunchCopyData = 0x49425354;
 constexpr int kMinimumWindowWidth = 940;
 constexpr int kMinimumWindowHeight = 460;
-enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kCopyDetailValue, kCopyDetailPair, kEditTags, kFavorite1 = 200 };
+enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kCopyDetailValue, kCopyDetailPair, kEditTags, kFolderSortDefault, kFolderSortCatalog, kFolderSortName, kFolderSortLastLaunch, kFavorite1 = 200 };
 enum TreeImage : int { kFileDatabaseImage, kServerDatabaseImage, kFolderImage, kFavoriteImage, kRecentImage };
 constexpr LPARAM kRecentRootItemData = 1;
 
@@ -997,6 +997,11 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
     case WM_COMMAND:
       if (reinterpret_cast<HWND>(lparam) == search_ && HIWORD(wparam) == EN_CHANGE) { PopulateTree(); return 0; }
       if (reinterpret_cast<HWND>(lparam) == tag_filter_ && HIWORD(wparam) == CBN_SELCHANGE) { PopulateTree(); return 0; }
+      if (reinterpret_cast<HWND>(lparam) == sort_mode_ && HIWORD(wparam) == CBN_SELCHANGE) {
+        const int selection = static_cast<int>(SendMessageW(sort_mode_, CB_GETCURSEL, 0, 0));
+        if (selection >= static_cast<int>(storage::SortMode::catalog_order) && selection <= static_cast<int>(storage::SortMode::last_launch)) SetDefaultSortMode(static_cast<storage::SortMode>(selection));
+        return 0;
+      }
       switch (LOWORD(wparam)) {
         case kEnterprise: LaunchSelected(domain::LaunchMode::enterprise); break; case kDesigner: LaunchSelected(domain::LaunchMode::designer); break;
         case kAddFile: AddFileDatabase(); break; case kAddServer: AddServerDatabase(); break; case kAddGroup: AddGroup(); break; case kOpenList: OpenList(); break; case kRefresh: LoadCatalog(); break;
@@ -1087,10 +1092,16 @@ void MainWindow::CreateControls() {
   HWND searchLabel = CreateWindowW(L"STATIC", L"Поиск:", WS_CHILD | WS_VISIBLE, 8, 10, 50, 20, window_, nullptr, instance_, nullptr);
   search_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 58, 7, 600, 25, window_, nullptr, instance_, nullptr);
   HWND tagFilterLabel = CreateWindowW(L"STATIC", L"Показывать:", WS_CHILD | WS_VISIBLE, 8, 42, 50, 20, window_, nullptr, instance_, nullptr);
-  tag_filter_ = CreateWindowExW(0, WC_COMBOBOXW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 58, 39, 300, 160, window_, nullptr, instance_, nullptr);
+  tag_filter_ = CreateWindowExW(0, WC_COMBOBOXW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 58, 39, 270, 160, window_, nullptr, instance_, nullptr);
   SendMessageW(tag_filter_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Все базы"));
   SendMessageW(tag_filter_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Избранные"));
   SendMessageW(tag_filter_, CB_SETCURSEL, 0, 0);
+  HWND sortLabel = CreateWindowW(L"STATIC", L"Сортировка:", WS_CHILD | WS_VISIBLE, 340, 42, 82, 20, window_, nullptr, instance_, nullptr);
+  sort_mode_ = CreateWindowExW(0, WC_COMBOBOXW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 425, 39, 230, 100, window_, nullptr, instance_, nullptr);
+  SendMessageW(sort_mode_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Исходный порядок"));
+  SendMessageW(sort_mode_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"По названию"));
+  SendMessageW(sort_mode_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"По последнему запуску"));
+  SendMessageW(sort_mode_, CB_SETCURSEL, 0, 0);
   tree_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS, 8, 74, 360, 420, window_, nullptr, instance_, nullptr);
   TreeView_SetExtendedStyle(tree_, TVS_EX_DOUBLEBUFFER, TVS_EX_DOUBLEBUFFER);
   details_title_ = CreateWindowW(L"STATIC", L"Выберите базу или группу", WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX,
@@ -1102,7 +1113,7 @@ void MainWindow::CreateControls() {
   controls_font_ = CreateUiFont(window_, 9, FW_NORMAL);
   button_font_ = CreateUiFont(window_, 9, FW_SEMIBOLD);
   if (controls_font_) {
-    for (const HWND control : {searchLabel, search_, tagFilterLabel, tag_filter_, tree_, details_}) {
+    for (const HWND control : {searchLabel, search_, tagFilterLabel, tag_filter_, sortLabel, sort_mode_, tree_, details_}) {
       if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(controls_font_), TRUE);
     }
   }
@@ -1205,14 +1216,15 @@ void MainWindow::Layout(int width, int height) {
   const int detailsHeight = std::max(42, buttonsY - detailsY - 10);
   const int keyWidth = std::clamp(rightWidth * 35 / 100, 80, 190);
 
-  HDWP positions = BeginDeferWindowPos(12);
+  HDWP positions = BeginDeferWindowPos(13);
   const auto defer = [&positions](HWND control, int x, int y, int controlWidth, int controlHeight) {
     if (!positions || !control) return;
     positions = DeferWindowPos(positions, control, nullptr, x, y, std::max(1, controlWidth), std::max(1, controlHeight),
         SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
   };
   defer(search_, 58, 7, width - 66, 25);
-  defer(tag_filter_, 58, 39, std::min(320, width - 66), 25);
+  defer(tag_filter_, 58, 39, 270, 25);
+  defer(sort_mode_, 425, 39, std::max(1, std::min(260, width - 433)), 25);
   defer(tree_, 8, top, leftWidth, height - top - bottom);
   defer(details_title_, rightX + 10, top + 7, rightWidth - 20, 26);
   defer(details_subtitle_, rightX + 10, top + 34, rightWidth - 20, 20);
@@ -1223,7 +1235,8 @@ void MainWindow::Layout(int width, int height) {
     // DeferWindowPos can fail only under severe resource pressure.  Keep a
     // complete fallback layout instead of leaving controls at old positions.
     MoveWindow(search_, 58, 7, std::max(1, width - 66), 25, TRUE);
-    MoveWindow(tag_filter_, 58, 39, std::max(1, std::min(320, width - 66)), 25, TRUE);
+    MoveWindow(tag_filter_, 58, 39, 270, 25, TRUE);
+    MoveWindow(sort_mode_, 425, 39, std::max(1, std::min(260, width - 433)), 25, TRUE);
     MoveWindow(tree_, 8, top, leftWidth, std::max(1, height - top - bottom), TRUE);
     MoveWindow(details_title_, rightX + 10, top + 7, std::max(1, rightWidth - 20), 26, TRUE);
     MoveWindow(details_subtitle_, rightX + 10, top + 34, std::max(1, rightWidth - 20), 20, TRUE);
@@ -1258,7 +1271,10 @@ void MainWindow::LoadCatalog(bool report_error) {
       logger_.Info(L"Загружен список баз: " + settings_.active_ibases.wstring() + L" | " + CatalogStatistics());
     }
     tags_ = storage::LoadTags(layout_);
+    sort_settings_ = storage::LoadSortSettings(layout_);
+    last_launches_ = storage::LoadLastLaunchTimes(layout_);
     RefreshTagFilter();
+    RefreshSortControl();
     PopulateTree();
   } catch (const std::exception& error) { logger_.Error(L"Ошибка загрузки: " + ibstart::utf::FromUtf8(error.what())); if (report_error) Message(window_, L"Не удалось загрузить список баз. Проверьте путь и кодировку UTF-8.", L"ИБ Старт", MB_OK | MB_ICONERROR); }
 }
@@ -1334,6 +1350,80 @@ void MainWindow::RefreshTagFilter() {
   }
   SendMessageW(tag_filter_, CB_SETCURSEL, selection, 0);
 }
+void MainWindow::RefreshSortControl() {
+  if (sort_mode_) SendMessageW(sort_mode_, CB_SETCURSEL, static_cast<WPARAM>(sort_settings_.default_mode), 0);
+}
+storage::SortMode MainWindow::SortModeForFolder(std::wstring_view folder) const {
+  const auto found = sort_settings_.folder_modes.find(std::wstring(folder));
+  return found == sort_settings_.folder_modes.end() ? sort_settings_.default_mode : found->second;
+}
+void MainWindow::SortTreeItems(std::vector<catalog::TreeItem>& items, std::wstring_view parent) const {
+  for (auto& item : items) if (!item.database) SortTreeItems(item.children, item.name);
+  const auto mode = SortModeForFolder(parent);
+  if (mode == storage::SortMode::catalog_order) return;
+  const auto nameLess = [](const catalog::TreeItem& left, const catalog::TreeItem& right) { return _wcsicmp(left.name.c_str(), right.name.c_str()) < 0; };
+  if (mode == storage::SortMode::name) {
+    std::stable_sort(items.begin(), items.end(), nameLess);
+    return;
+  }
+  const auto lastLaunch = [&](const catalog::TreeItem& item) -> std::optional<std::chrono::system_clock::time_point> {
+    if (!item.database || !catalog_) return std::nullopt;
+    const auto* entry = catalog_->Find(item.name);
+    if (!entry) return std::nullopt;
+    const auto found = last_launches_.find(entry->ValueOr(L"ID", entry->name));
+    return found == last_launches_.end() ? std::nullopt : std::optional(found->second);
+  };
+  std::stable_sort(items.begin(), items.end(), [&](const auto& left, const auto& right) {
+    if (left.database != right.database) return !left.database;
+    if (!left.database) return nameLess(left, right);
+    const auto leftTime = lastLaunch(left);
+    const auto rightTime = lastLaunch(right);
+    if (leftTime && rightTime && *leftTime != *rightTime) return *leftTime > *rightTime;
+    if (leftTime.has_value() != rightTime.has_value()) return leftTime.has_value();
+    return nameLess(left, right);
+  });
+}
+std::vector<catalog::TreeItem> MainWindow::SortedTree() const {
+  if (!catalog_) return {};
+  auto items = catalog_->Tree();
+  SortTreeItems(items, L"");
+  return items;
+}
+void MainWindow::SetDefaultSortMode(storage::SortMode mode) {
+  if (sort_settings_.default_mode == mode) return;
+  const auto previous = sort_settings_;
+  sort_settings_.default_mode = mode;
+  try {
+    storage::SaveSortSettings(layout_, sort_settings_);
+  } catch (const std::exception& error) {
+    sort_settings_ = previous;
+    RefreshSortControl();
+    logger_.Error(L"Ошибка сохранения сортировки: " + ibstart::utf::FromUtf8(error.what()));
+    Message(window_, L"Не удалось сохранить настройку сортировки.", L"ИБ Старт", MB_OK | MB_ICONERROR);
+    return;
+  }
+  const auto selected = SelectedName();
+  PopulateTree();
+  SelectTreeItem(selected);
+  SetStatus(L"Общая сортировка списка изменена.");
+}
+void MainWindow::SetFolderSortMode(std::wstring_view folder, std::optional<storage::SortMode> mode) {
+  if (folder.empty()) return;
+  const auto previous = sort_settings_;
+  if (mode) sort_settings_.folder_modes[std::wstring(folder)] = *mode;
+  else sort_settings_.folder_modes.erase(std::wstring(folder));
+  try {
+    storage::SaveSortSettings(layout_, sort_settings_);
+  } catch (const std::exception& error) {
+    sort_settings_ = previous;
+    logger_.Error(L"Ошибка сохранения сортировки папки: " + ibstart::utf::FromUtf8(error.what()));
+    Message(window_, L"Не удалось сохранить сортировку папки.", L"ИБ Старт", MB_OK | MB_ICONERROR);
+    return;
+  }
+  PopulateTree();
+  SelectTreeItem(folder);
+  SetStatus(L"Сортировка папки изменена.");
+}
 void MainWindow::AddTreeItems(const std::vector<catalog::TreeItem>& items, HTREEITEM parent, std::wstring_view filter) {
   for (const auto& item : items) {
     if (!ItemMatches(item, filter) || !ItemMatchesTagFilter(item)) continue;
@@ -1353,7 +1443,7 @@ void MainWindow::PopulateTree() {
   if (!tree_) return;
   wchar_t text[512]{}; GetWindowTextW(search_, text, 512); search_filter_ = text; const std::wstring_view filter = search_filter_; TreeView_DeleteAllItems(tree_);
   if (catalog_) {
-    AddTreeItems(catalog_->Tree(), TVI_ROOT, filter);
+    AddTreeItems(SortedTree(), TVI_ROOT, filter);
     const auto addSpecialRoot = [&](std::wstring_view rootName, const std::vector<std::wstring>& names, int image, LPARAM itemData = 0) {
       TVINSERTSTRUCTW root{}; root.hParent = TVI_ROOT; root.hInsertAfter = TVI_LAST;
       root.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE | TVIF_PARAM; root.item.pszText = const_cast<wchar_t*>(rootName.data()); root.item.lParam = itemData;
@@ -1649,6 +1739,21 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   append(editable, false, kMoveUp, 0, L"Переместить вверх", L"Ctrl+Shift+Up");
   append(editable, false, kMoveDown, 0, L"Переместить вниз", L"Ctrl+Shift+Down");
   append(editable, false, kDelete, IDI_ACTION_DELETE, L"Удалить…", L"Alt+Shift+Del");
+  if (group) {
+    separator();
+    HMENU sorting = CreatePopupMenu();
+    if (sorting) {
+      const auto configured = sort_settings_.folder_modes.find(entry->name);
+      const auto checked = [&](std::optional<storage::SortMode> mode) {
+        return mode ? configured != sort_settings_.folder_modes.end() && configured->second == *mode : configured == sort_settings_.folder_modes.end();
+      };
+      AppendMenuW(sorting, MF_STRING | (checked(std::nullopt) ? MF_CHECKED : MF_UNCHECKED), kFolderSortDefault, L"Как для всего списка");
+      AppendMenuW(sorting, MF_STRING | (checked(storage::SortMode::catalog_order) ? MF_CHECKED : MF_UNCHECKED), kFolderSortCatalog, L"Исходный порядок");
+      AppendMenuW(sorting, MF_STRING | (checked(storage::SortMode::name) ? MF_CHECKED : MF_UNCHECKED), kFolderSortName, L"По названию");
+      AppendMenuW(sorting, MF_STRING | (checked(storage::SortMode::last_launch) ? MF_CHECKED : MF_UNCHECKED), kFolderSortLastLaunch, L"По последнему запуску");
+      AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(sorting), L"Сортировка в этой папке");
+    }
+  }
   separator();
   append(!settings_.simple_mode, false, kAddFile, IDI_ACTION_ADD, group ? L"Добавить файловую базу в группу…" : L"Добавить файловую базу…", L"Ctrl+Alt+F");
   append(!settings_.simple_mode, false, kAddServer, IDI_ACTION_ADD, group ? L"Добавить серверную базу в группу…" : L"Добавить серверную базу…", L"Ctrl+Alt+S");
@@ -1664,6 +1769,10 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   if (command == kAddFile) AddFileDatabase(addParent);
   else if (command == kAddServer) AddServerDatabase(addParent);
   else if (command == kAddGroup) AddGroup(addParent);
+  else if (group && command == kFolderSortDefault) SetFolderSortMode(entry->name, std::nullopt);
+  else if (group && command == kFolderSortCatalog) SetFolderSortMode(entry->name, storage::SortMode::catalog_order);
+  else if (group && command == kFolderSortName) SetFolderSortMode(entry->name, storage::SortMode::name);
+  else if (group && command == kFolderSortLastLaunch) SetFolderSortMode(entry->name, storage::SortMode::last_launch);
   else SendMessageW(window_, WM_COMMAND, MAKEWPARAM(command, 0), 0);
 }
 
@@ -1709,7 +1818,22 @@ void MainWindow::DisplaySelected() {
 
 void MainWindow::LaunchSelected(domain::LaunchMode mode) {
   if (!catalog_) return; const auto name = SelectedName(); const auto* entry = catalog_->Find(name); if (!entry || !entry->IsDatabase()) { Message(window_, L"Выберите информационную базу."); return; }
-  try { const auto database = catalog_->DatabaseFor(name); if (const auto webUrl = catalog::Catalog::WebUrl(database.connect)) { const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", webUrl->c_str(), nullptr, nullptr, SW_SHOWNORMAL)); if (result <= 32) throw std::runtime_error("Unable to open the web database URL."); return; }
+  try {
+    const auto database = catalog_->DatabaseFor(name);
+    const auto rememberLaunch = [&] {
+      const auto timestamp = std::chrono::system_clock::now();
+      storage::AppendHistory(layout_, {database.id, timestamp, mode});
+      last_launches_[database.id] = timestamp;
+      PopulateTree();
+      SelectTreeItem(name);
+    };
+    if (const auto webUrl = catalog::Catalog::WebUrl(database.connect)) {
+      const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", webUrl->c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+      if (result <= 32) throw std::runtime_error("Unable to open the web database URL.");
+      rememberLaunch();
+      SetStatus(L"Запущена база: " + database.name);
+      return;
+    }
     domain::LaunchOptions options;
     options.mode = mode;
     options.client_type = ClientTypeFromApplication(database.app);
@@ -1721,7 +1845,7 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
     if (options.client_type == domain::ClientType::web) { Message(window_, L"Веб-клиент можно использовать только для веб-базы с адресом http:// или https://.", L"ИБ Старт", MB_OK | MB_ICONWARNING); return; }
     const auto selected = launcher::SelectPlatform(platforms_, options); if (!selected) { Message(window_, L"Подходящая платформа 1С не найдена. Проверьте установку и настройки поиска.", L"ИБ Старт", MB_OK | MB_ICONERROR); return; }
     const auto parameters = database.additional_parameters; if (utf::FindNoCaseOrdinal(parameters, L"/p") != std::wstring_view::npos && MessageBoxW(window_, L"В дополнительных параметрах обнаружен /P. Пароль может храниться в открытом виде в ibases.v8i. Продолжить?", L"Предупреждение", MB_YESNO | MB_ICONWARNING) != IDYES) return;
-    const auto command = launcher::BuildCommand(database, *selected, options); logger_.Info(L"Запуск: " + command.CommandLine()); launcher::Launch(command); storage::AppendHistory(layout_, {database.id, std::chrono::system_clock::now(), mode}); SetStatus(L"Запущена база: " + database.name);
+    const auto command = launcher::BuildCommand(database, *selected, options); logger_.Info(L"Запуск: " + command.CommandLine()); launcher::Launch(command); rememberLaunch(); SetStatus(L"Запущена база: " + database.name);
   } catch (const std::exception& error) { logger_.Error(L"Ошибка запуска: " + ibstart::utf::FromUtf8(error.what())); Message(window_, L"Не удалось запустить базу. Подробности — в последнем логе.", L"ИБ Старт", MB_OK | MB_ICONERROR); }
 }
 
@@ -1815,8 +1939,22 @@ void MainWindow::EditSelected() {
       Message(window_, L"Имя группы уже используется.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
       return;
     }
+    const auto renamed = TrimText(*changed);
+    if (const auto configured = sort_settings_.folder_modes.find(selected); configured != sort_settings_.folder_modes.end()) {
+      const auto previousSorting = sort_settings_;
+      sort_settings_.folder_modes[renamed] = configured->second;
+      sort_settings_.folder_modes.erase(selected);
+      try {
+        storage::SaveSortSettings(layout_, sort_settings_);
+      } catch (const std::exception& error) {
+        sort_settings_ = previousSorting;
+        logger_.Error(L"Ошибка переноса сортировки при переименовании группы: " + ibstart::utf::FromUtf8(error.what()));
+        Message(window_, L"Группа переименована, но её настройку сортировки не удалось сохранить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
+      }
+    }
     SaveCatalog();
     PopulateTree();
+    SelectTreeItem(renamed);
     return;
   }
   const auto previousTagId = TagId(*entry);
@@ -1890,10 +2028,11 @@ void MainWindow::DeleteSelected() {
   const auto* entry = catalog_->Find(name);
   if (!entry) return;
   const auto tagId = entry->IsDatabase() ? TagId(*entry) : std::wstring();
+  const bool group = entry->IsGroup();
   const auto item = entry->IsDatabase() ? L"информационную базу" : L"группу";
   const auto message = L"Удалить " + std::wstring(item) + L" \"" + name + L"\" из списка.";
   if (MessageBoxW(window_, message.c_str(), L"ИБ Старт", MB_YESNO) != IDYES) return;
-  catalog_->Remove(name);
+  if (!catalog_->Remove(name)) return;
   if (!tagId.empty() && tags_.contains(tagId)) {
     const auto previousTags = tags_;
     tags_.erase(tagId);
@@ -1903,6 +2042,17 @@ void MainWindow::DeleteSelected() {
       tags_ = previousTags;
       logger_.Error(L"Ошибка удаления тегов: " + ibstart::utf::FromUtf8(error.what()));
       Message(window_, L"База удалена из списка, но её теги не удалось удалить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
+    }
+  }
+  if (group && sort_settings_.folder_modes.contains(name)) {
+    const auto previousSorting = sort_settings_;
+    sort_settings_.folder_modes.erase(name);
+    try {
+      storage::SaveSortSettings(layout_, sort_settings_);
+    } catch (const std::exception& error) {
+      sort_settings_ = previousSorting;
+      logger_.Error(L"Ошибка удаления сортировки папки: " + ibstart::utf::FromUtf8(error.what()));
+      Message(window_, L"Папка удалена, но её настройку сортировки не удалось удалить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
     }
   }
   SaveCatalog();
