@@ -1655,7 +1655,34 @@ void MainWindow::MoveSelected(int offset) {
   }
   SaveCatalog(); PopulateTree(); SelectTreeItem(name);
 }
-void MainWindow::ClearSelectedCache() { if (settings_.simple_mode || !catalog_) return; try { const auto database = catalog_->DatabaseFor(SelectedName()); const auto candidates = cache::CandidatesFor(database); if (candidates.empty()) { Message(window_, L"Безопасных каталогов кэша для этой базы не найдено."); return; } std::wstring list = L"Будут очищены только следующие каталоги кэша:\n"; for (const auto& item : candidates) list += item.path.wstring() + L"\n"; if (cache::HasActiveOneCProcess()) list += L"\nОбнаружен активный процесс 1С. Закройте его перед очисткой.\n"; if (MessageBoxW(window_, list.c_str(), L"Очистка кэша", MB_YESNO | MB_ICONWARNING) != IDYES) return; const auto result = cache::Clear(candidates); logger_.Info(L"Очистка кэша: файлов=" + std::to_wstring(result.files) + L", байт=" + std::to_wstring(result.bytes)); Message(window_, L"Очищено файлов: " + std::to_wstring(result.files) + L"\nОсвобождено байт: " + std::to_wstring(result.bytes)); } catch (...) { Message(window_, L"Выберите базу для очистки кэша.", L"ИБ Старт", MB_OK | MB_ICONWARNING); } }
+void MainWindow::ClearSelectedCache() {
+  if (settings_.simple_mode || !catalog_) return;
+  try {
+    const auto database = catalog_->DatabaseFor(SelectedName());
+    const auto candidates = cache::CandidatesFor(database);
+    if (candidates.empty()) {
+      Message(window_, L"Безопасных каталогов кэша для этой базы не найдено.");
+      return;
+    }
+
+    uintmax_t totalBytes = 0;
+    std::wstring list = L"Будут очищены только следующие каталоги кэша:\n";
+    for (const auto& item : candidates) {
+      totalBytes += item.bytes;
+      list += item.path.wstring() + L" — " + cache::FormatSize(item.bytes) + L"\n";
+    }
+    list += L"\nПримерный объём для очистки: " + cache::FormatSize(totalBytes) + L".\n";
+    if (cache::HasActiveOneCProcess()) list += L"\nОбнаружен активный процесс 1С. Закройте его перед очисткой.\n";
+    if (MessageBoxW(window_, list.c_str(), L"Очистка кэша", MB_YESNO | MB_ICONWARNING) != IDYES) return;
+
+    const auto result = cache::Clear(candidates);
+    const auto size = cache::FormatSize(result.bytes);
+    logger_.Info(L"Очистка кэша: файлов=" + std::to_wstring(result.files) + L", байт=" + std::to_wstring(result.bytes) + L" (" + size + L")");
+    Message(window_, L"Очищено файлов: " + std::to_wstring(result.files) + L"\nОсвобождено: " + size);
+  } catch (...) {
+    Message(window_, L"Выберите базу для очистки кэша.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
+  }
+}
 void MainWindow::ClearRecentBases() {
   try {
     if (storage::LoadHistory(layout_).empty()) { SetStatus(L"Список недавних баз уже пуст."); return; }

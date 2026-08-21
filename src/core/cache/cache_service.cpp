@@ -4,8 +4,11 @@
 #include <TlHelp32.h>
 
 #include <algorithm>
+#include <cmath>
 #include <cwctype>
 #include <fstream>
+#include <iomanip>
+#include <sstream>
 
 namespace ibstart::cache {
 namespace {
@@ -93,6 +96,26 @@ std::vector<CacheItem> CandidatesFor(const domain::Database& database) {
     if (std::filesystem::is_directory(path, error)) result.push_back({path, SizeOf(path)});
   }
   return result;
+}
+
+std::wstring FormatSize(uintmax_t bytes) {
+  if (bytes < 1024) return std::to_wstring(bytes) + L" Б";
+
+  constexpr const wchar_t* units[] = {L"КБ", L"МБ", L"ГБ", L"ТБ", L"ПБ"};
+  constexpr size_t unitCount = sizeof(units) / sizeof(*units);
+  double value = static_cast<double>(bytes);
+  size_t unit = 0;
+  while (value >= 1024.0 && unit + 1 < unitCount) {
+    value /= 1024.0;
+    ++unit;
+  }
+
+  const auto roundedTenths = static_cast<unsigned long long>(std::llround(value * 10.0));
+  std::wostringstream text;
+  text << std::fixed << std::setprecision(roundedTenths % 10 == 0 ? 0 : 1) << value;
+  auto result = text.str();
+  std::replace(result.begin(), result.end(), L'.', L',');
+  return result + L" " + units[unit];
 }
 
 bool HasActiveOneCProcess() {
