@@ -48,6 +48,39 @@ void TestV8iRoundTrip() {
   CHECK(withoutFinalNewline.SerializeUtf8() == "[Base]\nConnect=x");
 }
 
+void TestDemoCatalogFixture() {
+  const auto bytes = ReadBytes(Fixture(L"ibases.v8i"));
+  CHECK(bytes.find("/P") == std::string::npos);
+  CHECK(bytes.find("C:\\Users\\") == std::string::npos);
+  CHECK(bytes.find(".example.com") != std::string::npos);
+
+  auto document = ibstart::v8i::V8iDocument::ParseUtf8(bytes);
+  CHECK(document.sections.size() == 12);
+
+  ibstart::catalog::Catalog showcase(std::move(document));
+  const auto tree = showcase.Tree();
+  CHECK(tree.size() == 4);
+  CHECK(tree[0].name == L"Файловые базы");
+  CHECK(tree[1].name == L"Клиент-серверные базы");
+  CHECK(tree[2].name == L"Веб-базы");
+
+  const auto* fileBase = showcase.Find(L"Бухгалтерия предприятия 3.0 — демонстрация");
+  CHECK(fileBase != nullptr);
+  CHECK(fileBase->ValueOr(L"CustomDemoField") == L"Показать неизвестное поле");
+
+  const auto* serverBase = showcase.Find(L"ERP Управление предприятием — демонстрационная");
+  CHECK(serverBase != nullptr);
+  CHECK(serverBase->ValueOr(L"Connect") == L"Srvr=\"demo-cluster.example.com\";Ref=\"ERP_Demo\"");
+
+  const auto* modernWeb = showcase.Find(L"Веб-портал демонстрации");
+  CHECK(modernWeb != nullptr);
+  CHECK(ibstart::catalog::Catalog::IsWebConnection(modernWeb->ValueOr(L"Connect")));
+
+  const auto* legacyWeb = showcase.Find(L"Веб-база в legacy-формате");
+  CHECK(legacyWeb != nullptr);
+  CHECK(ibstart::catalog::IsBareWebConnection(legacyWeb->ValueOr(L"Connect")));
+}
+
 void TestProductVersion() {
   CHECK(!ibstart::version::value.empty());
   const auto core = std::to_wstring(ibstart::version::major) + L"." + std::to_wstring(ibstart::version::minor) + L"." + std::to_wstring(ibstart::version::patch);
@@ -306,6 +339,7 @@ int wmain() {
     catch (...) { std::wcerr << L"UNCAUGHT unknown exception\n"; ++failures; }
   };
   run(L"V8iRoundTrip", TestV8iRoundTrip);
+  run(L"DemoCatalogFixture", TestDemoCatalogFixture);
   run(L"ProductVersion", TestProductVersion);
   run(L"UnicodeCaseInsensitiveSearch", TestUnicodeCaseInsensitiveSearch);
   run(L"CatalogSearch", TestCatalogSearch);
