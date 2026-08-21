@@ -33,6 +33,7 @@ void EnsureWritable(const StorageLayout& layout);
 void SaveSettings(const StorageLayout& layout, const Settings& settings);
 [[nodiscard]] std::vector<domain::HistoryItem> LoadHistory(const StorageLayout& layout);
 void AppendHistory(const StorageLayout& layout, domain::HistoryItem item);
+void ClearHistory(const StorageLayout& layout);
 [[nodiscard]] std::vector<std::wstring> LoadFavorites(const StorageLayout& layout);
 void SaveFavorites(const StorageLayout& layout, const std::vector<std::wstring>& favorites);
 

@@ -47,6 +47,7 @@ class MainWindow {
   bool DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const;
   void ClearContextMenuItems() noexcept;
   [[nodiscard]] std::wstring SelectedName() const;
+  [[nodiscard]] bool SelectedItemIsRecentRoot() const;
   bool SelectTreeItem(std::wstring_view name);
   void ShowTreeContextMenu(POINT screen);
   void DisplaySelected();
@@ -58,6 +59,7 @@ class MainWindow {
   void DeleteSelected();
   void MoveSelected(int offset);
   void ClearSelectedCache();
+  void ClearRecentBases();
   void CreateShortcut();
   void OpenSelectedFolder();
   void OpenList();
