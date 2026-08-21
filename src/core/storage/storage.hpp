@@ -47,11 +47,22 @@ struct SortSettings {
 
 using LastLaunchTimes = std::map<std::wstring, std::chrono::system_clock::time_point>;
 
+struct CatalogState {
+  std::vector<std::wstring> favorites;
+  std::vector<domain::HistoryItem> history;
+  LastLaunchTimes last_launches;
+  DatabaseTags tags;
+  TagStyles tag_styles;
+  SortSettings sorting;
+};
+
 [[nodiscard]] StorageLayout ResolveLayout(const std::filesystem::path& executable_path);
 [[nodiscard]] std::optional<std::filesystem::path> FindStandardIbases();
 void EnsureWritable(const StorageLayout& layout);
 [[nodiscard]] Settings LoadSettings(const StorageLayout& layout);
 void SaveSettings(const StorageLayout& layout, const Settings& settings);
+[[nodiscard]] CatalogState LoadCatalogState(const StorageLayout& layout);
+void SaveCatalogState(const StorageLayout& layout, const CatalogState& state);
 [[nodiscard]] std::vector<domain::HistoryItem> LoadHistory(const StorageLayout& layout);
 void AppendHistory(const StorageLayout& layout, domain::HistoryItem item);
 void ClearHistory(const StorageLayout& layout);

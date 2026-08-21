@@ -252,6 +252,9 @@ void TestCacheSizeFormatting() {
 void TestPortableMode() {
   const auto directory = Temp(L"portable"); const auto executable = directory / L"IBStart.exe"; WriteBytes(executable, ""); WriteBytes(directory / L"IBStart.portable", "");
   const auto layout = ibstart::storage::ResolveLayout(executable); CHECK(layout.portable); CHECK(layout.root == directory / L"data"); ibstart::storage::EnsureWritable(layout);
+  WriteBytes(layout.root / L"favorites.json", "[\"Устаревшее избранное\"]\n");
+  CHECK(ibstart::storage::LoadFavorites(layout).empty());
+  std::error_code removeLegacyError; std::filesystem::remove(layout.root / L"favorites.json", removeLegacyError);
   ibstart::storage::Settings settings; settings.active_ibases = directory / L"База 😀.v8i"; settings.simple_mode = true; settings.platform_search_paths = {directory / L"Платформа"}; settings.window_width = 1234;
   ibstart::storage::SaveSettings(layout, settings); const auto loaded = ibstart::storage::LoadSettings(layout);
   CHECK(loaded.active_ibases == settings.active_ibases); CHECK(loaded.simple_mode); CHECK(loaded.platform_search_paths == settings.platform_search_paths); CHECK(loaded.window_width == 1234);
@@ -269,7 +272,14 @@ void TestPortableMode() {
   const auto launchTime = std::chrono::system_clock::from_time_t(123456789);
   ibstart::storage::AppendHistory(layout, {L"id-😀", launchTime, ibstart::domain::LaunchMode::designer}); const auto history = ibstart::storage::LoadHistory(layout); CHECK(history.size() == 1); CHECK(!history.empty() && history[0].database_id == L"id-😀");
   const auto launches = ibstart::storage::LoadLastLaunchTimes(layout); CHECK(launches.contains(L"id-😀") && launches.at(L"id-😀") == launchTime);
-  ibstart::storage::ClearHistory(layout); CHECK(ibstart::storage::LoadHistory(layout).empty()); CHECK(ibstart::storage::LoadLastLaunchTimes(layout) == launches); CHECK(ibstart::storage::LoadFavorites(layout) == favorites);
+  ibstart::storage::ClearHistory(layout);
+  const auto state = ibstart::storage::LoadCatalogState(layout);
+  CHECK(state.history.empty()); CHECK(state.last_launches == launches); CHECK(state.favorites == favorites);
+  CHECK(state.tags == tags); CHECK(state.tag_styles == tagStyles); CHECK(state.sorting.default_mode == sorting.default_mode); CHECK(state.sorting.folder_modes == sorting.folder_modes);
+  CHECK(std::filesystem::is_regular_file(layout.root / L"catalog-state.json"));
+  CHECK(!std::filesystem::exists(layout.root / L"history.json")); CHECK(!std::filesystem::exists(layout.root / L"last-launches.json"));
+  CHECK(!std::filesystem::exists(layout.root / L"favorites.json")); CHECK(!std::filesystem::exists(layout.root / L"tags.json"));
+  CHECK(!std::filesystem::exists(layout.root / L"tag-styles.json")); CHECK(!std::filesystem::exists(layout.root / L"sorting.json"));
   std::error_code error; std::filesystem::remove_all(directory, error);
 }
 }
