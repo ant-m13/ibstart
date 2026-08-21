@@ -7,7 +7,7 @@ src/ui (тонкий Win32-слой)
         │
         ├── catalog ── v8i ── domain
         ├── launcher ── platform ── domain
-        ├── storage / logging / cache / scanner / shell
+        ├── storage / logging / cache / scanner / shell / update
         └── domain
 ```
 
@@ -19,8 +19,10 @@ src/ui (тонкий Win32-слой)
 
 `storage` использует `%LOCALAPPDATA%\IBStart` или `data` возле EXE в portable mode. Активный `ibases.v8i` не дублируется. `logging` маскирует секреты до записи. `cache` намеренно принимает только список разрешённых cache-подкаталогов (`%APPDATA%\1C\1Cv8`, `%LOCALAPPDATA%\1C\1Cv8`, `%LOCALAPPDATA%\IBStart\cache`), никогда не путь из `Connect`, и отказывается очищать подкаталоги лицензий.
 
+`update` по явной команде пользователя обращается к публичному GitHub Releases API через WinHTTP и с короткими тайм-аутами. Модуль получает только `tag_name` и страницу последнего стабильного релиза, сравнивает SemVer-версии и не скачивает файлы, не меняет исполняемый файл и не сохраняет историю проверок. Сетевой запрос выполняется вне потока окна; UI получает лишь готовый результат.
+
 Версия продукта задаётся только в `cmake/IBStartVersion.cmake`. На этапе конфигурации CMake из неё генерируются C++ header, Windows VERSIONINFO, manifest и `ibstart-version.txt` для CI. Благодаря этому окно «О программе», свойства PE-файла и release workflow используют одно значение.
 
 ## Тестируемость
 
-`tests/unit/test_main.cpp` — самостоятельный CTest-исполняемый файл без фреймворка. Он использует fixtures, не открывает окна и проверяет round trip, сохранение/backup/conflict, команды запуска, выбор x64, маскирование `/P` и portable mode.
+`tests/unit/test_main.cpp` — самостоятельный CTest-исполняемый файл без фреймворка. Он использует fixtures, не открывает окна и проверяет round trip, сохранение/backup/conflict, команды запуска, выбор x64, маскирование `/P`, portable mode, SemVer-сравнение и разбор метаданных GitHub Release.
