@@ -33,11 +33,15 @@ constexpr wchar_t kClassName[] = L"IBStart.MainWindow";
 constexpr wchar_t kInputBoxClass[] = L"IBStart.InputBox";
 constexpr wchar_t kDatabaseEditorClass[] = L"IBStart.DatabaseEditor";
 constexpr wchar_t kAdvancedDatabaseOptionsClass[] = L"IBStart.AdvancedDatabaseOptions";
+constexpr wchar_t kTagManagerClass[] = L"IBStart.TagManager";
+constexpr wchar_t kFolderPickerClass[] = L"IBStart.FolderPicker";
 constexpr UINT kActivateMessage = WM_APP + 23;
 constexpr ULONG_PTR kLaunchCopyData = 0x49425354;
 constexpr int kMinimumWindowWidth = 940;
 constexpr int kMinimumWindowHeight = 460;
-enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kCopyDetailValue, kCopyDetailPair, kEditTags, kConfigureTagColors, kFolderSortDefault, kFolderSortCatalog, kFolderSortName, kFolderSortLastLaunch, kFavorite1 = 200 };
+enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kCopyDetailValue, kCopyDetailPair, kEditTags, kConfigureTagColors, kFolderSortDefault, kFolderSortCatalog, kFolderSortName, kFolderSortLastLaunch, kMoveToFolder, kOpenStandardList, kShowTagsInList, kNewTagForSelected, kFavorite1 = 200 };
+constexpr UINT kRecentList1 = 300;
+constexpr UINT kQuickTag1 = 400;
 enum TreeImage : int { kFileDatabaseImage, kServerDatabaseImage, kFolderImage, kFavoriteImage, kRecentImage };
 constexpr LPARAM kRecentRootItemData = 1;
 constexpr LPARAM kFavoritesRootItemData = 2;
@@ -526,15 +530,47 @@ const storage::TagStyle* TagStyleFor(const storage::TagStyles& styles, std::wstr
   const auto found = std::find_if(styles.begin(), styles.end(), [&](const auto& item) { return EqualNoCase(item.first, tag); });
   return found == styles.end() ? nullptr : &found->second;
 }
-std::optional<COLORREF> ChooseTagColor(HWND owner, COLORREF initial) {
-  std::array<COLORREF, 16> custom{};
-  CHOOSECOLORW dialog{};
-  dialog.lStructSize = sizeof(dialog);
-  dialog.hwndOwner = owner;
-  dialog.rgbResult = initial;
-  dialog.lpCustColors = custom.data();
-  dialog.Flags = CC_FULLOPEN | CC_RGBINIT;
-  return ChooseColorW(&dialog) ? std::optional<COLORREF>(dialog.rgbResult) : std::nullopt;
+std::vector<std::wstring> KnownTags(const storage::DatabaseTags& tags, const storage::TagStyles& styles) {
+  std::vector<std::wstring> result;
+  const auto append = [&](std::wstring_view tag) {
+    if (!tag.empty() && std::none_of(result.begin(), result.end(), [&](const auto& existing) { return EqualNoCase(existing, tag); })) result.emplace_back(tag);
+  };
+  for (const auto& [_, values] : tags) for (const auto& tag : values) append(tag);
+  for (const auto& [tag, _] : styles) append(tag);
+  std::sort(result.begin(), result.end(), [](const auto& left, const auto& right) { return _wcsicmp(left.c_str(), right.c_str()) < 0; });
+  return result;
+}
+std::wstring ColorText(COLORREF color) {
+  wchar_t value[8]{};
+  swprintf_s(value, L"#%02X%02X%02X", GetRValue(color), GetGValue(color), GetBValue(color));
+  return value;
+}
+std::optional<COLORREF> ParseColorText(std::wstring_view value) {
+  const std::wstring trimmed = TrimText(value);
+  std::wstring_view text = trimmed;
+  if (!text.empty() && text.front() == L'#') text.remove_prefix(1);
+  if (text.size() != 6) return std::nullopt;
+  const auto digit = [](wchar_t character) -> int {
+    if (character >= L'0' && character <= L'9') return character - L'0';
+    if (character >= L'a' && character <= L'f') return character - L'a' + 10;
+    if (character >= L'A' && character <= L'F') return character - L'A' + 10;
+    return -1;
+  };
+  const auto byte = [&](size_t index) -> std::optional<BYTE> {
+    const int high = digit(text[index]);
+    const int low = digit(text[index + 1]);
+    if (high < 0 || low < 0) return std::nullopt;
+    return static_cast<BYTE>(high * 16 + low);
+  };
+  const auto red = byte(0), green = byte(2), blue = byte(4);
+  if (!red || !green || !blue) return std::nullopt;
+  return RGB(*red, *green, *blue);
+}
+void EraseTagStyle(storage::TagStyles& styles, std::wstring_view name) {
+  for (auto it = styles.begin(); it != styles.end();) {
+    if (EqualNoCase(it->first, name)) it = styles.erase(it);
+    else ++it;
+  }
 }
 bool ContainsTag(const std::vector<std::wstring>& tags, std::wstring_view value) {
   return std::any_of(tags.begin(), tags.end(), [&](const auto& tag) { return EqualNoCase(tag, value); });
@@ -965,6 +1001,356 @@ std::optional<std::wstring> InputBox(HWND owner, std::wstring_view title, std::w
   return state.result;
 }
 
+enum TagManagerControl : int {
+  kTagManagerList = 1700,
+  kTagManagerName,
+  kTagManagerBackground,
+  kTagManagerText,
+  kTagManagerNew,
+  kTagManagerSave,
+  kTagManagerDelete
+};
+
+struct TagManagerResult {
+  storage::DatabaseTags tags;
+  storage::TagStyles styles;
+};
+
+struct TagManagerState {
+  HWND list{};
+  HWND name{};
+  HWND background{};
+  HWND text{};
+  HFONT font{};
+  HFONT button_font{};
+  storage::DatabaseTags tags;
+  storage::TagStyles styles;
+  std::wstring selected;
+  std::optional<TagManagerResult> result;
+  bool done{false};
+};
+
+std::wstring ListBoxText(HWND list, int index) {
+  if (!list || index == LB_ERR) return {};
+  const LRESULT length = SendMessageW(list, LB_GETTEXTLEN, static_cast<WPARAM>(index), 0);
+  if (length == LB_ERR) return {};
+  std::wstring value(static_cast<size_t>(length) + 1, L'\0');
+  if (SendMessageW(list, LB_GETTEXT, static_cast<WPARAM>(index), reinterpret_cast<LPARAM>(value.data())) == LB_ERR) return {};
+  value.resize(static_cast<size_t>(length));
+  return value;
+}
+
+void SetTagManagerFields(TagManagerState& state, std::wstring_view name) {
+  state.selected = std::wstring(name);
+  const auto* style = TagStyleFor(state.styles, name);
+  const storage::TagStyle value = style ? *style : storage::TagStyle{};
+  SetWindowTextW(state.name, std::wstring(name).c_str());
+  SetWindowTextW(state.background, ColorText(value.background).c_str());
+  SetWindowTextW(state.text, ColorText(value.text).c_str());
+}
+
+void RefreshTagManagerList(TagManagerState& state, std::wstring_view selected = {}) {
+  const auto tags = KnownTags(state.tags, state.styles);
+  SendMessageW(state.list, LB_RESETCONTENT, 0, 0);
+  int selection = LB_ERR;
+  for (const auto& tag : tags) {
+    const int index = static_cast<int>(SendMessageW(state.list, LB_ADDSTRING, 0, reinterpret_cast<LPARAM>(tag.c_str())));
+    if (selection == LB_ERR && EqualNoCase(tag, selected)) selection = index;
+  }
+  if (selection != LB_ERR) {
+    SendMessageW(state.list, LB_SETCURSEL, static_cast<WPARAM>(selection), 0);
+    SetTagManagerFields(state, ListBoxText(state.list, selection));
+  } else {
+    SetTagManagerFields(state, L"");
+  }
+}
+
+bool SaveTagManagerEntry(HWND dialog, TagManagerState& state) {
+  const std::wstring name = TrimText(ReadControlText(state.name));
+  const auto background = ParseColorText(ReadControlText(state.background));
+  const auto text = ParseColorText(ReadControlText(state.text));
+  if (name.empty()) {
+    Message(dialog, L"Укажите название тега.", L"Настройка тегов", MB_OK | MB_ICONWARNING);
+    return false;
+  }
+  if (!background || !text) {
+    Message(dialog, L"Цвета указываются в виде #RRGGBB, например #E2F2F4.", L"Настройка тегов", MB_OK | MB_ICONWARNING);
+    return false;
+  }
+  const auto known = KnownTags(state.tags, state.styles);
+  const auto existing = std::find_if(known.begin(), known.end(), [&](const auto& tag) { return EqualNoCase(tag, name); });
+  if (existing != known.end() && (state.selected.empty() || !EqualNoCase(state.selected, name))) {
+    Message(dialog, L"Тег с таким названием уже есть.", L"Настройка тегов", MB_OK | MB_ICONWARNING);
+    return false;
+  }
+
+  if (!state.selected.empty() && !EqualNoCase(state.selected, name)) {
+    for (auto& [_, values] : state.tags) {
+      for (auto& tag : values) if (EqualNoCase(tag, state.selected)) tag = name;
+    }
+    EraseTagStyle(state.styles, state.selected);
+  }
+  EraseTagStyle(state.styles, name);
+  state.styles[name] = {*background, *text};
+  RefreshTagManagerList(state, name);
+  return true;
+}
+
+void DeleteTagManagerEntry(HWND dialog, TagManagerState& state) {
+  if (state.selected.empty()) return;
+  const std::wstring message = L"Удалить тег «" + state.selected + L"» у всех баз и из настроек?";
+  if (MessageBoxW(dialog, message.c_str(), L"Настройка тегов", MB_YESNO | MB_ICONWARNING) != IDYES) return;
+  for (auto it = state.tags.begin(); it != state.tags.end();) {
+    auto& values = it->second;
+    values.erase(std::remove_if(values.begin(), values.end(), [&](const auto& tag) { return EqualNoCase(tag, state.selected); }), values.end());
+    if (values.empty()) it = state.tags.erase(it);
+    else ++it;
+  }
+  EraseTagStyle(state.styles, state.selected);
+  RefreshTagManagerList(state);
+}
+
+LRESULT CALLBACK TagManagerProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam) {
+  auto* state = reinterpret_cast<TagManagerState*>(GetWindowLongPtrW(wnd, GWLP_USERDATA));
+  if (message == WM_NCCREATE) {
+    SetWindowLongPtrW(wnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(reinterpret_cast<CREATESTRUCTW*>(lparam)->lpCreateParams));
+    return TRUE;
+  }
+  if (message == WM_CTLCOLORSTATIC || message == WM_CTLCOLORBTN) return DialogControlColor(message, wparam, lparam);
+  if (message == WM_COMMAND && state) {
+    const int command = LOWORD(wparam);
+    if (command == kTagManagerList && HIWORD(wparam) == LBN_SELCHANGE) {
+      const int selection = static_cast<int>(SendMessageW(state->list, LB_GETCURSEL, 0, 0));
+      SetTagManagerFields(*state, ListBoxText(state->list, selection));
+      return 0;
+    }
+    if (command == kTagManagerNew) {
+      SendMessageW(state->list, LB_SETCURSEL, static_cast<WPARAM>(-1), 0);
+      SetTagManagerFields(*state, L"");
+      SetFocus(state->name);
+      return 0;
+    }
+    if (command == kTagManagerSave) {
+      SaveTagManagerEntry(wnd, *state);
+      return 0;
+    }
+    if (command == kTagManagerDelete) {
+      DeleteTagManagerEntry(wnd, *state);
+      return 0;
+    }
+    if (command == IDOK) {
+      state->result = TagManagerResult{state->tags, state->styles};
+      state->done = true;
+      DestroyWindow(wnd);
+      return 0;
+    }
+    if (command == IDCANCEL) {
+      state->done = true;
+      DestroyWindow(wnd);
+      return 0;
+    }
+  }
+  if (message == WM_CLOSE && state) {
+    state->done = true;
+    DestroyWindow(wnd);
+    return 0;
+  }
+  return DefWindowProcW(wnd, message, wparam, lparam);
+}
+
+std::optional<TagManagerResult> EditTagManager(HWND owner, const storage::DatabaseTags& tags, const storage::TagStyles& styles) {
+  TagManagerState state;
+  state.tags = tags;
+  state.styles = styles;
+  static ATOM atom = [] {
+    WNDCLASSW klass{};
+    klass.hInstance = GetModuleHandleW(nullptr);
+    klass.lpszClassName = kTagManagerClass;
+    klass.lpfnWndProc = TagManagerProc;
+    klass.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    klass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    return RegisterClassW(&klass);
+  }();
+  (void)atom;
+  if (owner) EnableWindow(owner, FALSE);
+  const UINT dpi = owner ? GetDpiForWindow(owner) : GetDpiForSystem();
+  constexpr DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP;
+  constexpr DWORD extendedStyle = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
+  const SIZE outerSize = DialogOuterSize(owner, 650, 340, style, extendedStyle);
+  HWND dialog = CreateWindowExW(extendedStyle, kTagManagerClass, L"Настройка тегов", style,
+      CW_USEDEFAULT, CW_USEDEFAULT, outerSize.cx, outerSize.cy, owner, nullptr, GetModuleHandleW(nullptr), &state);
+  if (!dialog) {
+    RestoreModalOwner(owner);
+    return std::nullopt;
+  }
+  state.font = CreateUiFont(dialog, 9, FW_NORMAL);
+  state.button_font = CreateUiFont(dialog, 9, FW_SEMIBOLD);
+  const auto px = [dpi](int logical) { return ScaleForDpi(logical, dpi); };
+  const auto create = [&](DWORD exStyle, const wchar_t* className, std::wstring_view text, DWORD controlStyle, int x, int y, int width, int height, int id, HFONT font) {
+    const HWND control = CreateWindowExW(exStyle, className, std::wstring(text).c_str(), WS_CHILD | WS_VISIBLE | controlStyle,
+        px(x), px(y), px(width), px(height), dialog, reinterpret_cast<HMENU>(static_cast<INT_PTR>(id)), nullptr, nullptr);
+    SetControlFont(control, font);
+    return control;
+  };
+  create(0, L"STATIC", L"Теги", 0, 14, 14, 240, 20, 0, state.font);
+  state.list = create(WS_EX_CLIENTEDGE, L"LISTBOX", L"", WS_TABSTOP | LBS_NOTIFY | WS_VSCROLL, 14, 38, 240, 224, kTagManagerList, state.font);
+  create(0, L"STATIC", L"Название", 0, 280, 38, 190, 20, 0, state.font);
+  state.name = create(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_TABSTOP | ES_AUTOHSCROLL, 280, 60, 340, 25, kTagManagerName, state.font);
+  create(0, L"STATIC", L"Цвет фона (#RRGGBB)", 0, 280, 100, 190, 20, 0, state.font);
+  state.background = create(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_TABSTOP | ES_AUTOHSCROLL, 280, 122, 160, 25, kTagManagerBackground, state.font);
+  create(0, L"STATIC", L"Цвет текста (#RRGGBB)", 0, 460, 100, 160, 20, 0, state.font);
+  state.text = create(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_TABSTOP | ES_AUTOHSCROLL, 460, 122, 160, 25, kTagManagerText, state.font);
+  create(0, L"STATIC", L"Цвета задаются прямо в этой форме. Изменение названия применяется ко всем базам с этим тегом.", 0, 280, 164, 340, 42, 0, state.font);
+  create(0, L"BUTTON", L"Новый", WS_TABSTOP, 280, 220, 92, 28, kTagManagerNew, state.button_font ? state.button_font : state.font);
+  create(0, L"BUTTON", L"Сохранить тег", WS_TABSTOP, 382, 220, 130, 28, kTagManagerSave, state.button_font ? state.button_font : state.font);
+  create(0, L"BUTTON", L"Удалить", WS_TABSTOP, 522, 220, 98, 28, kTagManagerDelete, state.button_font ? state.button_font : state.font);
+  create(0, L"BUTTON", L"Готово", WS_TABSTOP | BS_DEFPUSHBUTTON, 438, 278, 86, 28, IDOK, state.button_font ? state.button_font : state.font);
+  create(0, L"BUTTON", L"Отмена", WS_TABSTOP, 534, 278, 86, 28, IDCANCEL, state.button_font ? state.button_font : state.font);
+  RefreshTagManagerList(state);
+  PositionDialogNearOwner(dialog, owner);
+  ShowWindow(dialog, SW_SHOW);
+  SetFocus(state.list);
+  MSG message{};
+  int result = 1;
+  while (!state.done && (result = GetMessageW(&message, nullptr, 0, 0)) > 0) {
+    if (!IsDialogMessageW(dialog, &message)) { TranslateMessage(&message); DispatchMessageW(&message); }
+  }
+  if (IsWindow(dialog)) DestroyWindow(dialog);
+  if (result == 0) PostQuitMessage(static_cast<int>(message.wParam));
+  RestoreModalOwner(owner);
+  if (state.font) DeleteObject(state.font);
+  if (state.button_font) DeleteObject(state.button_font);
+  return state.result;
+}
+
+enum FolderPickerControl : int { kFolderPickerTree = 1800 };
+
+struct FolderPickerState {
+  HWND tree{};
+  HFONT font{};
+  HFONT button_font{};
+  std::vector<std::wstring> folders;
+  std::optional<std::wstring> result;
+  bool done{false};
+};
+
+HTREEITEM AddFolderPickerItem(FolderPickerState& state, const catalog::TreeItem& source, HTREEITEM parent, std::wstring_view selected) {
+  if (source.database) return nullptr;
+  const size_t index = state.folders.size();
+  state.folders.push_back(source.name);
+  TVINSERTSTRUCTW insert{};
+  insert.hParent = parent;
+  insert.hInsertAfter = TVI_LAST;
+  insert.item.mask = TVIF_TEXT | TVIF_PARAM;
+  insert.item.pszText = const_cast<wchar_t*>(source.name.c_str());
+  insert.item.lParam = static_cast<LPARAM>(index);
+  const HTREEITEM node = TreeView_InsertItem(state.tree, &insert);
+  for (const auto& child : source.children) AddFolderPickerItem(state, child, node, selected);
+  TreeView_Expand(state.tree, node, TVE_EXPAND);
+  if (EqualNoCase(source.name, selected)) TreeView_SelectItem(state.tree, node);
+  return node;
+}
+
+LRESULT CALLBACK FolderPickerProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam) {
+  auto* state = reinterpret_cast<FolderPickerState*>(GetWindowLongPtrW(wnd, GWLP_USERDATA));
+  if (message == WM_NCCREATE) {
+    SetWindowLongPtrW(wnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(reinterpret_cast<CREATESTRUCTW*>(lparam)->lpCreateParams));
+    return TRUE;
+  }
+  if (message == WM_CTLCOLORSTATIC || message == WM_CTLCOLORBTN) return DialogControlColor(message, wparam, lparam);
+  if (message == WM_COMMAND && state) {
+    if (LOWORD(wparam) == IDOK) {
+      const HTREEITEM selected = TreeView_GetSelection(state->tree);
+      TVITEMW item{};
+      item.mask = TVIF_PARAM;
+      item.hItem = selected;
+      if (selected && TreeView_GetItem(state->tree, &item) && item.lParam >= 0 && static_cast<size_t>(item.lParam) < state->folders.size()) {
+        state->result = state->folders[static_cast<size_t>(item.lParam)];
+      }
+      state->done = true;
+      DestroyWindow(wnd);
+      return 0;
+    }
+    if (LOWORD(wparam) == IDCANCEL) {
+      state->done = true;
+      DestroyWindow(wnd);
+      return 0;
+    }
+  }
+  if (message == WM_CLOSE && state) {
+    state->done = true;
+    DestroyWindow(wnd);
+    return 0;
+  }
+  return DefWindowProcW(wnd, message, wparam, lparam);
+}
+
+std::optional<std::wstring> SelectCatalogFolder(HWND owner, const std::vector<catalog::TreeItem>& items, std::wstring_view initial) {
+  FolderPickerState state;
+  static ATOM atom = [] {
+    WNDCLASSW klass{};
+    klass.hInstance = GetModuleHandleW(nullptr);
+    klass.lpszClassName = kFolderPickerClass;
+    klass.lpfnWndProc = FolderPickerProc;
+    klass.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    klass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    return RegisterClassW(&klass);
+  }();
+  (void)atom;
+  if (owner) EnableWindow(owner, FALSE);
+  const UINT dpi = owner ? GetDpiForWindow(owner) : GetDpiForSystem();
+  constexpr DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP;
+  constexpr DWORD extendedStyle = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
+  const SIZE outerSize = DialogOuterSize(owner, 460, 440, style, extendedStyle);
+  HWND dialog = CreateWindowExW(extendedStyle, kFolderPickerClass, L"Переместить в папку", style,
+      CW_USEDEFAULT, CW_USEDEFAULT, outerSize.cx, outerSize.cy, owner, nullptr, GetModuleHandleW(nullptr), &state);
+  if (!dialog) {
+    RestoreModalOwner(owner);
+    return std::nullopt;
+  }
+  state.font = CreateUiFont(dialog, 9, FW_NORMAL);
+  state.button_font = CreateUiFont(dialog, 9, FW_SEMIBOLD);
+  const auto px = [dpi](int logical) { return ScaleForDpi(logical, dpi); };
+  const HWND caption = CreateWindowW(L"STATIC", L"Выберите папку, в которую нужно переместить базу:", WS_CHILD | WS_VISIBLE,
+      px(14), px(14), px(420), px(20), dialog, nullptr, nullptr, nullptr);
+  state.tree = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS,
+      px(14), px(40), px(420), px(310), dialog, reinterpret_cast<HMENU>(kFolderPickerTree), nullptr, nullptr);
+  const HWND accept = CreateWindowW(L"BUTTON", L"Переместить", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+      px(246), px(370), px(92), px(28), dialog, reinterpret_cast<HMENU>(IDOK), nullptr, nullptr);
+  const HWND cancel = CreateWindowW(L"BUTTON", L"Отмена", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+      px(348), px(370), px(86), px(28), dialog, reinterpret_cast<HMENU>(IDCANCEL), nullptr, nullptr);
+  SetControlFont(caption, state.font);
+  SetControlFont(state.tree, state.font);
+  SetControlFont(accept, state.button_font ? state.button_font : state.font);
+  SetControlFont(cancel, state.button_font ? state.button_font : state.font);
+  state.folders.push_back(L"");
+  std::wstring rootLabel = L"Корневой уровень";
+  TVINSERTSTRUCTW root{};
+  root.hParent = TVI_ROOT;
+  root.hInsertAfter = TVI_LAST;
+  root.item.mask = TVIF_TEXT | TVIF_PARAM;
+  root.item.pszText = rootLabel.data();
+  root.item.lParam = 0;
+  const HTREEITEM rootItem = TreeView_InsertItem(state.tree, &root);
+  if (initial.empty()) TreeView_SelectItem(state.tree, rootItem);
+  for (const auto& item : items) AddFolderPickerItem(state, item, rootItem, initial);
+  TreeView_Expand(state.tree, rootItem, TVE_EXPAND);
+  PositionDialogNearOwner(dialog, owner);
+  ShowWindow(dialog, SW_SHOW);
+  SetFocus(state.tree);
+  MSG message{};
+  int result = 1;
+  while (!state.done && (result = GetMessageW(&message, nullptr, 0, 0)) > 0) {
+    if (!IsDialogMessageW(dialog, &message)) { TranslateMessage(&message); DispatchMessageW(&message); }
+  }
+  if (IsWindow(dialog)) DestroyWindow(dialog);
+  if (result == 0) PostQuitMessage(static_cast<int>(message.wParam));
+  RestoreModalOwner(owner);
+  if (state.font) DeleteObject(state.font);
+  if (state.button_font) DeleteObject(state.button_font);
+  return state.result;
+}
+
 }  // namespace
 
 MainWindow::MainWindow(HINSTANCE instance, std::filesystem::path executable, storage::StorageLayout layout,
@@ -1077,12 +1463,15 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       }
       switch (LOWORD(wparam)) {
         case kEnterprise: LaunchSelected(domain::LaunchMode::enterprise); break; case kDesigner: LaunchSelected(domain::LaunchMode::designer); break;
-        case kAddFile: AddFileDatabase(); break; case kAddServer: AddServerDatabase(); break; case kAddGroup: AddGroup(); break; case kOpenList: OpenList(); break; case kRefresh: LoadCatalog(); break;
+        case kAddFile: AddFileDatabase(); break; case kAddServer: AddServerDatabase(); break; case kAddGroup: AddGroup(); break; case kOpenList: OpenList(); break; case kOpenStandardList: OpenStandardList(); break; case kRefresh: LoadCatalog(); break;
         case kEdit: EditSelected(); break; case kCache: ClearSelectedCache(); break; case kClearRecent: ClearRecentBases(); break; case kShortcut: CreateShortcut(); break; case kOpenFolder: OpenSelectedFolder(); break; case kDelete: DeleteSelected(); break;
         case kCopyDetailValue: CopySelectedDetail(false); break; case kCopyDetailPair: CopySelectedDetail(true); break; case kEditTags: EditSelectedTags(); break; case kConfigureTagColors: ConfigureTagColors(); break;
-        case kSimpleMode: SetSimpleMode(!settings_.simple_mode); break; case kToggleFavorite: ToggleFavorite(); break; case kFocusSearch: SetFocus(search_); break; case kAbout: ShowAbout(); break;
-        case kMoveUp: MoveSelected(-1); break; case kMoveDown: MoveSelected(1); break;
-        default: if (LOWORD(wparam) >= kFavorite1 && LOWORD(wparam) < kFavorite1 + 9) LaunchFavorite(LOWORD(wparam) - kFavorite1); break;
+        case kSimpleMode: SetSimpleMode(!settings_.simple_mode); break; case kToggleFavorite: ToggleFavorite(); break; case kShowTagsInList: ToggleTagDisplay(); break; case kFocusSearch: SetFocus(search_); break; case kAbout: ShowAbout(); break;
+        case kMoveUp: MoveSelected(-1); break; case kMoveDown: MoveSelected(1); break; case kMoveToFolder: MoveSelectedToFolder(); break; case kNewTagForSelected: AddNewTagToSelected(); break;
+        default:
+          if (LOWORD(wparam) >= kFavorite1 && LOWORD(wparam) < kFavorite1 + 9) LaunchFavorite(LOWORD(wparam) - kFavorite1);
+          else if (LOWORD(wparam) >= kRecentList1 && LOWORD(wparam) < kRecentList1 + 10) OpenRecentList(LOWORD(wparam) - kRecentList1);
+          break;
       } return 0;
     case WM_NOTIFY:
       if (lparam && reinterpret_cast<NMHDR*>(lparam)->hwndFrom == tree_) {
@@ -1177,13 +1566,13 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
 void MainWindow::CreateControls() {
   HWND searchLabel = CreateWindowW(L"STATIC", L"Поиск:", WS_CHILD | WS_VISIBLE, 8, 10, 50, 20, window_, nullptr, instance_, nullptr);
   search_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 58, 7, 600, 25, window_, nullptr, instance_, nullptr);
-  HWND tagFilterLabel = CreateWindowW(L"STATIC", L"Показывать:", WS_CHILD | WS_VISIBLE, 8, 42, 50, 20, window_, nullptr, instance_, nullptr);
-  tag_filter_ = CreateWindowExW(0, WC_COMBOBOXW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 58, 39, 270, 160, window_, nullptr, instance_, nullptr);
+  HWND tagFilterLabel = CreateWindowW(L"STATIC", L"Фильтр по тегу:", WS_CHILD | WS_VISIBLE, 8, 42, 106, 20, window_, nullptr, instance_, nullptr);
+  tag_filter_ = CreateWindowExW(0, WC_COMBOBOXW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 116, 39, 258, 160, window_, nullptr, instance_, nullptr);
   SendMessageW(tag_filter_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Все базы"));
   SendMessageW(tag_filter_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Избранные"));
   SendMessageW(tag_filter_, CB_SETCURSEL, 0, 0);
-  HWND sortLabel = CreateWindowW(L"STATIC", L"Сортировка:", WS_CHILD | WS_VISIBLE, 340, 42, 82, 20, window_, nullptr, instance_, nullptr);
-  sort_mode_ = CreateWindowExW(0, WC_COMBOBOXW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 425, 39, 230, 100, window_, nullptr, instance_, nullptr);
+  HWND sortLabel = CreateWindowW(L"STATIC", L"Сортировка:", WS_CHILD | WS_VISIBLE, 388, 42, 86, 20, window_, nullptr, instance_, nullptr);
+  sort_mode_ = CreateWindowExW(0, WC_COMBOBOXW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 476, 39, 230, 100, window_, nullptr, instance_, nullptr);
   SendMessageW(sort_mode_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Исходный порядок"));
   SendMessageW(sort_mode_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"По названию"));
   SendMessageW(sort_mode_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"По последнему запуску"));
@@ -1257,10 +1646,13 @@ void MainWindow::CreateControls() {
   AttachButtonIcon(shortcut_, instance_, IDI_ACTION_SHORTCUT, button_images_);
   AttachButtonIcon(remove_, instance_, IDI_ACTION_DELETE, button_images_);
   status_ = CreateWindowW(STATUSCLASSNAMEW, L"", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window_, nullptr, instance_, nullptr);
-  HMENU menu = CreateMenu(), file = CreatePopupMenu(), view = CreatePopupMenu(), help = CreatePopupMenu();
-  AppendMenuW(file, MF_STRING, kOpenList, L"Открыть список баз…\tCtrl+O"); AppendMenuW(file, MF_STRING, kAddFile, L"Добавить файловую базу…\tCtrl+Alt+F"); AppendMenuW(file, MF_STRING, kAddServer, L"Добавить серверную базу…\tCtrl+Alt+S"); AppendMenuW(file, MF_STRING, kAddGroup, L"Добавить группу…\tCtrl+Alt+G"); AppendMenuW(file, MF_STRING, kRefresh, L"Обновить список\tF5");
-  AppendMenuW(view, MF_STRING, kToggleFavorite, L"Добавить/убрать из избранного\tCtrl+Alt+I"); AppendMenuW(view, MF_STRING, kEditTags, L"Теги выбранной базы…"); AppendMenuW(view, MF_STRING, kConfigureTagColors, L"Настроить цвета тегов…"); AppendMenuW(view, MF_STRING, kClearRecent, L"Очистить недавние базы…");
-  AppendMenuW(view, MF_STRING, kSimpleMode, L"Простой режим\tCtrl+Alt+M"); AppendMenuW(help, MF_STRING, kAbout, L"О программе…\tF1"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(file), L"Файл"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(view), L"Вид"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(help), L"Справка"); SetMenu(window_, menu);
+  HMENU menu = CreateMenu(), help = CreatePopupMenu();
+  file_menu_ = CreatePopupMenu();
+  view_menu_ = CreatePopupMenu();
+  RefreshFileMenu();
+  AppendMenuW(view_menu_, MF_STRING, kToggleFavorite, L"Добавить/убрать из избранного\tCtrl+Alt+I"); AppendMenuW(view_menu_, MF_STRING, kEditTags, L"Изменить теги выбранной базы…"); AppendMenuW(view_menu_, MF_STRING, kConfigureTagColors, L"Настроить теги…");
+  AppendMenuW(view_menu_, MF_STRING | (settings_.show_tags_in_list ? MF_CHECKED : MF_UNCHECKED), kShowTagsInList, L"Показывать теги в списке баз"); AppendMenuW(view_menu_, MF_STRING, kClearRecent, L"Очистить недавние базы…");
+  AppendMenuW(view_menu_, MF_STRING, kSimpleMode, L"Простой режим\tCtrl+Alt+M"); AppendMenuW(help, MF_STRING, kAbout, L"О программе…\tF1"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(file_menu_), L"Файл"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(view_menu_), L"Вид"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(help), L"Справка"); SetMenu(window_, menu);
   SetSimpleMode(settings_.simple_mode);
   DisplaySelected();
 }
@@ -1309,8 +1701,8 @@ void MainWindow::Layout(int width, int height) {
         SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
   };
   defer(search_, 58, 7, width - 66, 25);
-  defer(tag_filter_, 58, 39, 270, 25);
-  defer(sort_mode_, 425, 39, std::max(1, std::min(260, width - 433)), 25);
+  defer(tag_filter_, 116, 39, 258, 25);
+  defer(sort_mode_, 476, 39, std::max(1, std::min(260, width - 484)), 25);
   defer(tree_, 8, top, leftWidth, height - top - bottom);
   defer(details_title_, rightX + 10, top + 7, rightWidth - 20, 26);
   defer(details_subtitle_, rightX + 10, top + 34, rightWidth - 20, 20);
@@ -1321,8 +1713,8 @@ void MainWindow::Layout(int width, int height) {
     // DeferWindowPos can fail only under severe resource pressure.  Keep a
     // complete fallback layout instead of leaving controls at old positions.
     MoveWindow(search_, 58, 7, std::max(1, width - 66), 25, TRUE);
-    MoveWindow(tag_filter_, 58, 39, 270, 25, TRUE);
-    MoveWindow(sort_mode_, 425, 39, std::max(1, std::min(260, width - 433)), 25, TRUE);
+    MoveWindow(tag_filter_, 116, 39, 258, 25, TRUE);
+    MoveWindow(sort_mode_, 476, 39, std::max(1, std::min(260, width - 484)), 25, TRUE);
     MoveWindow(tree_, 8, top, leftWidth, std::max(1, height - top - bottom), TRUE);
     MoveWindow(details_title_, rightX + 10, top + 7, std::max(1, rightWidth - 20), 26, TRUE);
     MoveWindow(details_subtitle_, rightX + 10, top + 34, std::max(1, rightWidth - 20), 20, TRUE);
@@ -1378,7 +1770,12 @@ void MainWindow::SaveCatalog() {
       }
       store_.emplace(settings_.active_ibases);
     }
-    store_->Save(catalog_->document()); storage::SaveSettings(layout_, settings_); SetStatus(L"Сохранено: " + settings_.active_ibases.wstring() + L" | " + CatalogStatistics());
+    store_->Save(catalog_->document());
+    RememberRecentList(settings_.active_ibases);
+    storage::SaveSettings(layout_, settings_);
+    RefreshFileMenu();
+    DrawMenuBar(window_);
+    SetStatus(L"Сохранено: " + settings_.active_ibases.wstring() + L" | " + CatalogStatistics());
   } catch (const v8i::ExternalModificationError&) { const int answer = MessageBoxW(window_, L"Файл ibases.v8i был изменён другой программой. Перечитать его?", L"ИБ Старт", MB_YESNO | MB_ICONWARNING); if (answer == IDYES) LoadCatalog(); }
   catch (const std::exception& error) { logger_.Error(L"Ошибка записи: " + ibstart::utf::FromUtf8(error.what())); Message(window_, L"Не удалось сохранить ibases.v8i. Исходный файл не изменён.", L"ИБ Старт", MB_OK | MB_ICONERROR); }
 }
@@ -1573,18 +1970,58 @@ void MainWindow::PopulateTree() {
 }
 LRESULT MainWindow::DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const {
   if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
-  if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) return search_filter_.empty() ? CDRF_DODEFAULT : CDRF_NOTIFYPOSTPAINT;
-  if (draw->nmcd.dwDrawStage != CDDS_ITEMPOSTPAINT || search_filter_.empty()) return CDRF_DODEFAULT;
+  if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) return settings_.show_tags_in_list || !search_filter_.empty() ? CDRF_NOTIFYPOSTPAINT : CDRF_DODEFAULT;
+  if (draw->nmcd.dwDrawStage != CDDS_ITEMPOSTPAINT) return CDRF_DODEFAULT;
 
   const auto item = reinterpret_cast<HTREEITEM>(draw->nmcd.dwItemSpec);
   wchar_t text[512]{};
   TVITEMW treeItem{}; treeItem.mask = TVIF_TEXT; treeItem.hItem = item; treeItem.pszText = text; treeItem.cchTextMax = 512;
   if (!TreeView_GetItem(tree_, &treeItem)) return CDRF_DODEFAULT;
   const std::wstring_view label(text);
-  if (utf::FindNoCaseOrdinal(label, search_filter_) == std::wstring_view::npos) return CDRF_DODEFAULT;
 
   RECT labelRect{};
   if (!TreeView_GetItemRect(tree_, item, &labelRect, TRUE)) return CDRF_DODEFAULT;
+  if (settings_.show_tags_in_list && catalog_ && TreeItemData(tree_, item) == 0) {
+    if (const auto* entry = catalog_->Find(label); entry && entry->IsDatabase()) {
+      const auto& tags = TagsFor(tags_, *entry);
+      if (!tags.empty()) {
+        RECT client{};
+        GetClientRect(tree_, &client);
+        const int saved = SaveDC(draw->nmcd.hdc);
+        const HFONT font = controls_font_ ? controls_font_ : reinterpret_cast<HFONT>(SendMessageW(tree_, WM_GETFONT, 0, 0));
+        if (font) SelectObject(draw->nmcd.hdc, font);
+        SetBkMode(draw->nmcd.hdc, TRANSPARENT);
+        int x = labelRect.right + 8;
+        const int height = std::max(16, labelRect.bottom - labelRect.top - 2);
+        const int y = labelRect.top + (labelRect.bottom - labelRect.top - height) / 2;
+        for (const auto& tag : tags) {
+          SIZE textSize{};
+          GetTextExtentPoint32W(draw->nmcd.hdc, tag.c_str(), static_cast<int>(tag.size()), &textSize);
+          const int width = textSize.cx + 14;
+          if (x + width > client.right - 4) break;
+          const auto* configured = TagStyleFor(tag_styles_, tag);
+          const storage::TagStyle style = configured ? *configured : storage::TagStyle{};
+          const HBRUSH brush = CreateSolidBrush(style.background);
+          const HPEN pen = CreatePen(PS_SOLID, 1, style.background);
+          if (brush && pen) {
+            const auto oldBrush = SelectObject(draw->nmcd.hdc, brush);
+            const auto oldPen = SelectObject(draw->nmcd.hdc, pen);
+            RoundRect(draw->nmcd.hdc, x, y, x + width, y + height, height, height);
+            SelectObject(draw->nmcd.hdc, oldBrush);
+            SelectObject(draw->nmcd.hdc, oldPen);
+            SetTextColor(draw->nmcd.hdc, style.text);
+            RECT textRect{x + 7, y, x + width - 7, y + height};
+            DrawTextW(draw->nmcd.hdc, tag.c_str(), static_cast<int>(tag.size()), &textRect, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+          }
+          if (brush) DeleteObject(brush);
+          if (pen) DeleteObject(pen);
+          x += width + 4;
+        }
+        RestoreDC(draw->nmcd.hdc, saved);
+      }
+    }
+  }
+  if (search_filter_.empty() || utf::FindNoCaseOrdinal(label, search_filter_) == std::wstring_view::npos) return CDRF_DODEFAULT;
   const int saved = SaveDC(draw->nmcd.hdc);
   if (const auto font = reinterpret_cast<HFONT>(SendMessageW(tree_, WM_GETFONT, 0, 0))) SelectObject(draw->nmcd.hdc, font);
   SetBkMode(draw->nmcd.hdc, TRANSPARENT);
@@ -1948,7 +2385,8 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
 
   HMENU menu = CreatePopupMenu();
   if (!menu) return;
-  context_menu_items_.reserve(16);
+  context_menu_items_.reserve(24);
+  std::vector<std::wstring> quick_tags;
   const auto append = [&](bool enabled, bool checked, UINT command, int iconResource, std::wstring text, std::wstring shortcut = {}) {
     ContextMenuItem visual{command, iconResource == 0 ? nullptr : LoadResourceIcon(instance_, iconResource, 20), std::move(text), std::move(shortcut)};
     context_menu_items_.push_back(std::move(visual));
@@ -1966,7 +2404,23 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   append(database, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор", L"F4");
   separator();
   append(database, favorite, kToggleFavorite, IDI_ACTION_FAVORITE, favorite ? L"Убрать из избранного" : L"Добавить в избранное", L"Ctrl+Alt+I");
-  append(database && !settings_.simple_mode, false, kEditTags, IDI_ACTION_EDIT, L"Теги…");
+  append(database && !settings_.simple_mode, false, kEditTags, IDI_ACTION_EDIT, L"Изменить теги…");
+  if (database && !settings_.simple_mode) {
+    HMENU tagMenu = CreatePopupMenu();
+    if (tagMenu) {
+      const auto& assigned = TagsFor(tags_, *entry);
+      for (const auto& tag : KnownTags(tags_, tag_styles_)) {
+        if (ContainsTag(assigned, tag)) continue;
+        const UINT command = kQuickTag1 + static_cast<UINT>(quick_tags.size());
+        quick_tags.push_back(tag);
+        AppendMenuW(tagMenu, MF_STRING, command, tag.c_str());
+      }
+      if (quick_tags.empty()) AppendMenuW(tagMenu, MF_STRING | MF_GRAYED, 0, L"Нет доступных тегов");
+      AppendMenuW(tagMenu, MF_SEPARATOR, 0, nullptr);
+      AppendMenuW(tagMenu, MF_STRING, kNewTagForSelected, L"Новый тег…");
+      AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(tagMenu), L"Добавить тег");
+    }
+  }
   append(editable, false, kEdit, IDI_ACTION_EDIT, L"Изменить…", L"F2");
   append(database && !settings_.simple_mode, false, kCache, IDI_ACTION_CACHE, L"Очистить кэш…", L"Ctrl+Shift+Del");
   append(database && !settings_.simple_mode, false, kShortcut, IDI_ACTION_SHORTCUT, L"Создать ярлык", L"Ctrl+Shift+S");
@@ -1975,6 +2429,7 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   separator();
   append(editable && manualOrder, false, kMoveUp, 0, L"Переместить вверх", L"Ctrl+Shift+Up");
   append(editable && manualOrder, false, kMoveDown, 0, L"Переместить вниз", L"Ctrl+Shift+Down");
+  append(database && !settings_.simple_mode, false, kMoveToFolder, IDI_TREE_FOLDER, L"Переместить в папку…");
   append(editable, false, kDelete, IDI_ACTION_DELETE, L"Удалить…", L"Alt+Shift+Del");
   if (group) {
     separator();
@@ -2003,7 +2458,9 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   DestroyMenu(menu);
   ClearContextMenuItems();
   if (!command) return;
-  if (command == kAddFile) AddFileDatabase(addParent);
+  const size_t quickTagIndex = command >= kQuickTag1 ? static_cast<size_t>(command - kQuickTag1) : quick_tags.size();
+  if (quickTagIndex < quick_tags.size()) AddTagToSelected(quick_tags[quickTagIndex]);
+  else if (command == kAddFile) AddFileDatabase(addParent);
   else if (command == kAddServer) AddServerDatabase(addParent);
   else if (command == kAddGroup) AddGroup(addParent);
   else if (group && command == kFolderSortDefault) SetFolderSortMode(entry->name, std::nullopt);
@@ -2036,6 +2493,11 @@ void MainWindow::DisplaySelected() {
     const int index = ListView_InsertItem(details_, &item);
     if (index >= 0) ListView_SetItemText(details_, index, 1, value.data());
   };
+  const auto addDivider = [&] {
+    std::wstring empty;
+    LVITEMW item{}; item.mask = LVIF_TEXT; item.iItem = ListView_GetItemCount(details_); item.pszText = empty.data();
+    ListView_InsertItem(details_, &item);
+  };
   addRow(L"Тип", type);
   for (const auto& field : entry->fields) {
     auto value = SingleLine(field.value);
@@ -2048,20 +2510,22 @@ void MainWindow::DisplaySelected() {
     const auto connect = entry->ValueOr(L"Connect");
     if (!ConnectionValue(connect, L"File").empty()) {
       const auto passport = ReadFileDatabasePassport(connect);
-      addRow(L"Паспорт: каталог", passport.directory.wstring());
-      addRow(L"Паспорт: файл 1Cv8.1CD", passport.database_file.wstring());
+      addDivider();
+      addRow(L"Каталог", passport.directory.wstring());
+      addRow(L"Файл 1Cv8.1CD", passport.database_file.wstring());
       if (passport.size) {
-        addRow(L"Паспорт: размер 1Cv8.1CD", cache::FormatSize(*passport.size));
-        addRow(L"Паспорт: изменён", passport.modified);
+        addRow(L"Размер 1Cv8.1CD", cache::FormatSize(*passport.size));
+        addRow(L"Изменён", passport.modified);
       } else {
-        addRow(L"Паспорт: состояние", L"Файл не найден или недоступен");
+        addRow(L"Состояние", L"Файл не найден или недоступен");
       }
     } else {
       const auto server = ConnectionValue(connect, L"Srvr");
       const auto reference = ConnectionValue(connect, L"Ref");
       if (!server.empty() || !reference.empty()) {
-        addRow(L"Паспорт: сервер 1С", server);
-        addRow(L"Паспорт: имя базы", reference);
+        addDivider();
+        addRow(L"Сервер 1С", server);
+        addRow(L"Имя базы", reference);
       }
     }
   }
@@ -2279,50 +2743,60 @@ void MainWindow::EditSelectedTags() {
   SetStatus(values.empty() ? L"Теги базы очищены." : L"Теги базы сохранены: " + TagsText(values));
 }
 void MainWindow::ConfigureTagColors() {
-  if (filter_tags_.empty()) {
-    Message(window_, L"Сначала назначьте хотя бы один тег информационной базе.", L"Цвета тегов", MB_OK | MB_ICONINFORMATION);
+  const auto updated = EditTagManager(window_, tags_, tag_styles_);
+  if (!updated) return;
+  const auto previousTags = tags_;
+  const auto previousStyles = tag_styles_;
+  tags_ = updated->tags;
+  tag_styles_ = updated->styles;
+  try {
+    storage::SaveTagsAndStyles(layout_, tags_, tag_styles_);
+  } catch (const std::exception& error) {
+    tags_ = previousTags;
+    tag_styles_ = previousStyles;
+    logger_.Error(L"Ошибка сохранения настроек тегов: " + ibstart::utf::FromUtf8(error.what()));
+    Message(window_, L"Не удалось сохранить настройки тегов.", L"ИБ Старт", MB_OK | MB_ICONERROR);
     return;
   }
-  std::wstring initial = filter_tags_.front();
-  if (catalog_) {
-    if (const auto* entry = catalog_->Find(SelectedName()); entry && entry->IsDatabase()) {
-      const auto& tags = TagsFor(tags_, *entry);
-      if (!tags.empty()) initial = tags.front();
-    }
+  RefreshTagFilter();
+  PopulateTree();
+  SetStatus(L"Настройки тегов сохранены.");
+}
+void MainWindow::AddTagToSelected(std::wstring tag) {
+  if (settings_.simple_mode || !catalog_) return;
+  tag = TrimText(tag);
+  const auto name = SelectedName();
+  const auto* entry = catalog_->Find(name);
+  if (tag.empty() || !entry || !entry->IsDatabase()) return;
+  const auto previousTags = tags_;
+  auto values = TagsFor(tags_, *entry);
+  if (ContainsTag(values, tag)) {
+    SetStatus(L"У базы уже есть тег «" + tag + L"».");
+    return;
   }
-  const auto entered = InputBox(window_, L"Цвета тегов", L"Название тега:", initial);
+  values.push_back(std::move(tag));
+  tags_[TagId(*entry)] = std::move(values);
+  try {
+    storage::SaveTags(layout_, tags_);
+  } catch (const std::exception& error) {
+    tags_ = previousTags;
+    logger_.Error(L"Ошибка добавления тега: " + ibstart::utf::FromUtf8(error.what()));
+    Message(window_, L"Не удалось добавить тег базе.", L"ИБ Старт", MB_OK | MB_ICONERROR);
+    return;
+  }
+  RefreshTagFilter();
+  PopulateTree();
+  SelectTreeItem(name);
+  SetStatus(L"Тег добавлен: " + TagsText(tags_.at(TagId(*entry))));
+}
+void MainWindow::AddNewTagToSelected() {
+  const auto entered = InputBox(window_, L"Новый тег", L"Название тега:", L"");
   if (!entered) return;
   const auto requested = TrimText(*entered);
-  const auto found = std::find_if(filter_tags_.begin(), filter_tags_.end(), [&](const auto& tag) { return EqualNoCase(tag, requested); });
-  if (requested.empty() || found == filter_tags_.end()) {
-    Message(window_, L"Такого тега нет. Сначала назначьте его информационной базе.", L"Цвета тегов", MB_OK | MB_ICONWARNING);
-    return;
-  }
-  const auto* current = TagStyleFor(tag_styles_, *found);
-  const storage::TagStyle previousStyle = current ? *current : storage::TagStyle{};
-  Message(window_, L"В следующем окне выберите цвет фона тега «" + *found + L"».", L"Цвета тегов");
-  const auto background = ChooseTagColor(window_, previousStyle.background);
-  if (!background) return;
-  Message(window_, L"Теперь выберите цвет текста тега «" + *found + L"».", L"Цвета тегов");
-  const auto text = ChooseTagColor(window_, previousStyle.text);
-  if (!text) return;
-
-  const auto previousStyles = tag_styles_;
-  for (auto it = tag_styles_.begin(); it != tag_styles_.end();) {
-    if (EqualNoCase(it->first, *found)) it = tag_styles_.erase(it);
-    else ++it;
-  }
-  tag_styles_[*found] = {*background, *text};
-  try {
-    storage::SaveTagStyles(layout_, tag_styles_);
-  } catch (const std::exception& error) {
-    tag_styles_ = previousStyles;
-    logger_.Error(L"Ошибка сохранения цветов тега: " + ibstart::utf::FromUtf8(error.what()));
-    Message(window_, L"Не удалось сохранить цвета тега.", L"ИБ Старт", MB_OK | MB_ICONERROR);
-    return;
-  }
-  DisplaySelected();
-  SetStatus(L"Цвета тега сохранены: " + *found);
+  if (requested.empty()) return;
+  const auto known = KnownTags(tags_, tag_styles_);
+  const auto found = std::find_if(known.begin(), known.end(), [&](const auto& tag) { return EqualNoCase(tag, requested); });
+  AddTagToSelected(found == known.end() ? requested : *found);
 }
 void MainWindow::DeleteSelected() {
   if (settings_.simple_mode || !catalog_) return;
@@ -2374,6 +2848,30 @@ void MainWindow::MoveSelected(int offset) {
   }
   SaveCatalog(); PopulateTree(); SelectTreeItem(name);
 }
+void MainWindow::MoveSelectedToFolder() {
+  if (settings_.simple_mode || !catalog_) return;
+  const auto name = SelectedName();
+  const auto* entry = catalog_->Find(name);
+  if (!entry || !entry->IsDatabase()) {
+    Message(window_, L"Выберите информационную базу для перемещения.", L"Перемещение базы", MB_OK | MB_ICONWARNING);
+    return;
+  }
+  const auto current = catalog_->ParentOf(entry->name);
+  const auto target = SelectCatalogFolder(window_, SortedTree(), current);
+  if (!target) return;
+  if (EqualNoCase(*target, current)) {
+    SetStatus(L"База уже находится в выбранной папке.");
+    return;
+  }
+  if (!catalog_->Move(name, *target, std::numeric_limits<size_t>::max())) {
+    Message(window_, L"Не удалось переместить базу в выбранную папку.", L"Перемещение базы", MB_OK | MB_ICONWARNING);
+    return;
+  }
+  SaveCatalog();
+  PopulateTree();
+  SelectTreeItem(name);
+  SetStatus(target->empty() ? L"База перемещена в корневой уровень." : L"База перемещена в папку: " + *target);
+}
 void MainWindow::ClearSelectedCache() {
   if (settings_.simple_mode || !catalog_) return;
   try {
@@ -2416,7 +2914,106 @@ void MainWindow::ClearRecentBases() {
   }
 }
 void MainWindow::CreateShortcut() { if (!catalog_) return; try { const auto database = catalog_->DatabaseFor(SelectedName()); shell::CreateDesktopShortcut(executable_, database.id, database.name); Message(window_, L"Ярлык создан на рабочем столе."); } catch (...) { Message(window_, L"Не удалось создать ярлык.", L"ИБ Старт", MB_OK | MB_ICONERROR); } }
-void MainWindow::OpenList() { if (settings_.simple_mode) return; wchar_t filename[MAX_PATH]{}; OPENFILENAMEW dialog{}; dialog.lStructSize = sizeof(dialog); dialog.hwndOwner = window_; dialog.lpstrFilter = L"ibases.v8i\0ibases.v8i\0Все файлы\0*.*\0"; dialog.lpstrFile = filename; dialog.nMaxFile = MAX_PATH; dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST; if (GetOpenFileNameW(&dialog)) { settings_.active_ibases = filename; storage::SaveSettings(layout_, settings_); LoadCatalog(); } }
+void MainWindow::RefreshFileMenu() {
+  if (!file_menu_) return;
+  while (GetMenuItemCount(file_menu_) > 0) {
+    const HMENU submenu = GetSubMenu(file_menu_, 0);
+    RemoveMenu(file_menu_, 0, MF_BYPOSITION);
+    if (submenu) DestroyMenu(submenu);
+  }
+  AppendMenuW(file_menu_, MF_STRING, kOpenList, L"Открыть список баз…\tCtrl+O");
+  AppendMenuW(file_menu_, MF_STRING, kOpenStandardList, L"Открыть стандартный список 1С");
+  HMENU recent = CreatePopupMenu();
+  if (recent) {
+    size_t count = 0;
+    for (const auto& path : settings_.recent_ibases) {
+      if (count >= 9) break;
+      const UINT command = kRecentList1 + static_cast<UINT>(count++);
+      AppendMenuW(recent, MF_STRING, command, path.wstring().c_str());
+    }
+    if (count == 0) AppendMenuW(recent, MF_STRING | MF_GRAYED, 0, L"Нет недавно открытых списков");
+    AppendMenuW(file_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(recent), L"Недавно открытые списки");
+  }
+  AppendMenuW(file_menu_, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(file_menu_, MF_STRING, kAddFile, L"Добавить файловую базу…\tCtrl+Alt+F");
+  AppendMenuW(file_menu_, MF_STRING, kAddServer, L"Добавить серверную базу…\tCtrl+Alt+S");
+  AppendMenuW(file_menu_, MF_STRING, kAddGroup, L"Добавить группу…\tCtrl+Alt+G");
+  AppendMenuW(file_menu_, MF_SEPARATOR, 0, nullptr);
+  AppendMenuW(file_menu_, MF_STRING, kRefresh, L"Обновить список\tF5");
+}
+void MainWindow::RememberRecentList(const std::filesystem::path& path) {
+  if (path.empty()) return;
+  for (auto it = settings_.recent_ibases.begin(); it != settings_.recent_ibases.end();) {
+    if (EqualNoCase(it->wstring(), path.wstring())) it = settings_.recent_ibases.erase(it);
+    else ++it;
+  }
+  settings_.recent_ibases.insert(settings_.recent_ibases.begin(), path);
+  if (settings_.recent_ibases.size() > 9) settings_.recent_ibases.resize(9);
+}
+void MainWindow::OpenList() {
+  if (settings_.simple_mode) return;
+  wchar_t filename[MAX_PATH]{};
+  OPENFILENAMEW dialog{};
+  dialog.lStructSize = sizeof(dialog);
+  dialog.hwndOwner = window_;
+  dialog.lpstrFilter = L"ibases.v8i\0ibases.v8i\0Все файлы\0*.*\0";
+  dialog.lpstrFile = filename;
+  dialog.nMaxFile = MAX_PATH;
+  dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
+  if (!GetOpenFileNameW(&dialog)) return;
+  settings_.active_ibases = filename;
+  RememberRecentList(settings_.active_ibases);
+  storage::SaveSettings(layout_, settings_);
+  RefreshFileMenu();
+  DrawMenuBar(window_);
+  LoadCatalog();
+}
+void MainWindow::OpenStandardList() {
+  const auto standard = storage::FindStandardIbases();
+  if (!standard) {
+    Message(window_, L"Стандартный файл ibases.v8i не найден. Откройте список вручную.", L"Список баз", MB_OK | MB_ICONINFORMATION);
+    return;
+  }
+  settings_.active_ibases = *standard;
+  RememberRecentList(*standard);
+  storage::SaveSettings(layout_, settings_);
+  RefreshFileMenu();
+  DrawMenuBar(window_);
+  LoadCatalog();
+}
+void MainWindow::OpenRecentList(size_t index) {
+  if (index >= settings_.recent_ibases.size()) return;
+  const auto path = settings_.recent_ibases[index];
+  std::error_code error;
+  if (!std::filesystem::is_regular_file(path, error) || error) {
+    settings_.recent_ibases.erase(settings_.recent_ibases.begin() + static_cast<std::ptrdiff_t>(index));
+    storage::SaveSettings(layout_, settings_);
+    RefreshFileMenu();
+    DrawMenuBar(window_);
+    Message(window_, L"Этот список больше не доступен. Он удалён из истории.", L"Список баз", MB_OK | MB_ICONWARNING);
+    return;
+  }
+  settings_.active_ibases = path;
+  RememberRecentList(path);
+  storage::SaveSettings(layout_, settings_);
+  RefreshFileMenu();
+  DrawMenuBar(window_);
+  LoadCatalog();
+}
+void MainWindow::ToggleTagDisplay() {
+  const bool previous = settings_.show_tags_in_list;
+  settings_.show_tags_in_list = !settings_.show_tags_in_list;
+  try {
+    storage::SaveSettings(layout_, settings_);
+  } catch (const std::exception& error) {
+    settings_.show_tags_in_list = previous;
+    logger_.Error(L"Ошибка сохранения отображения тегов: " + ibstart::utf::FromUtf8(error.what()));
+    Message(window_, L"Не удалось сохранить настройку отображения тегов.", L"ИБ Старт", MB_OK | MB_ICONERROR);
+    return;
+  }
+  if (view_menu_) CheckMenuItem(view_menu_, kShowTagsInList, MF_BYCOMMAND | (settings_.show_tags_in_list ? MF_CHECKED : MF_UNCHECKED));
+  RedrawWindow(tree_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+}
 void MainWindow::SetStatus(std::wstring text) { if (status_) SendMessageW(status_, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(text.c_str())); }
 std::wstring MainWindow::CatalogStatistics() const { return L"Баз: " + std::to_wstring(catalog_ ? catalog_->Databases().size() : 0) + L" | Платформ: " + std::to_wstring(platforms_.size()); }
 void MainWindow::SetSimpleMode(bool enabled) {
@@ -2426,9 +3023,10 @@ void MainWindow::SetSimpleMode(bool enabled) {
   if (cache_) ShowWindow(cache_, visible);
   if (shortcut_) ShowWindow(shortcut_, visible);
   if (remove_) ShowWindow(remove_, visible);
-  if (HMENU menu = GetMenu(window_)) {
-    CheckMenuItem(menu, kSimpleMode, MF_BYCOMMAND | (enabled ? MF_CHECKED : MF_UNCHECKED));
-    EnableMenuItem(menu, kEditTags, MF_BYCOMMAND | (enabled ? MF_GRAYED : MF_ENABLED));
+  if (HMENU menu = GetMenu(window_)) CheckMenuItem(menu, kSimpleMode, MF_BYCOMMAND | (enabled ? MF_CHECKED : MF_UNCHECKED));
+  if (view_menu_) {
+    EnableMenuItem(view_menu_, kEditTags, MF_BYCOMMAND | (enabled ? MF_GRAYED : MF_ENABLED));
+    EnableMenuItem(view_menu_, kConfigureTagColors, MF_BYCOMMAND | (enabled ? MF_GRAYED : MF_ENABLED));
   }
   DisplaySelected();
 }

@@ -20,6 +20,8 @@ struct StorageLayout {
 struct Settings {
   std::filesystem::path active_ibases;
   bool simple_mode{false};
+  bool show_tags_in_list{true};
+  std::vector<std::filesystem::path> recent_ibases;
   std::vector<std::filesystem::path> platform_search_paths;
   int window_x{CW_USEDEFAULT};
   int window_y{CW_USEDEFAULT};
@@ -73,6 +75,7 @@ void SaveFavorites(const StorageLayout& layout, const std::vector<std::wstring>&
 void SaveTags(const StorageLayout& layout, const DatabaseTags& tags);
 [[nodiscard]] TagStyles LoadTagStyles(const StorageLayout& layout);
 void SaveTagStyles(const StorageLayout& layout, const TagStyles& styles);
+void SaveTagsAndStyles(const StorageLayout& layout, const DatabaseTags& tags, const TagStyles& styles);
 [[nodiscard]] SortSettings LoadSortSettings(const StorageLayout& layout);
 void SaveSortSettings(const StorageLayout& layout, const SortSettings& settings);
 
