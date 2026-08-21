@@ -204,6 +204,32 @@ std::wstring ConnectionValue(std::wstring_view connect, std::wstring_view key) {
   }
   return {};
 }
+struct FileDatabasePassport {
+  std::filesystem::path directory;
+  std::filesystem::path database_file;
+  std::optional<uintmax_t> size;
+  std::wstring modified;
+};
+std::wstring FormatFileModificationTime(const FILETIME& value) {
+  FILETIME local{};
+  SYSTEMTIME time{};
+  if (!FileTimeToLocalFileTime(&value, &local) || !FileTimeToSystemTime(&local, &time)) return {};
+  wchar_t text[32]{};
+  swprintf_s(text, L"%02u.%02u.%04u %02u:%02u", time.wDay, time.wMonth, time.wYear, time.wHour, time.wMinute);
+  return text;
+}
+FileDatabasePassport ReadFileDatabasePassport(std::wstring_view connect) {
+  FileDatabasePassport result;
+  result.directory = ConnectionValue(connect, L"File");
+  result.database_file = result.directory / L"1Cv8.1CD";
+  if (result.directory.empty()) return result;
+  WIN32_FILE_ATTRIBUTE_DATA attributes{};
+  if (!GetFileAttributesExW(result.database_file.c_str(), GetFileExInfoStandard, &attributes) ||
+      attributes.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) return result;
+  result.size = (static_cast<uintmax_t>(attributes.nFileSizeHigh) << 32) | attributes.nFileSizeLow;
+  result.modified = FormatFileModificationTime(attributes.ftLastWriteTime);
+  return result;
+}
 DatabaseConnectionKind DetectConnectionKind(std::wstring_view connect) {
   if (catalog::Catalog::WebUrl(connect)) return DatabaseConnectionKind::web;
   if (!ConnectionValue(connect, L"File").empty()) return DatabaseConnectionKind::file;
@@ -1808,6 +1834,25 @@ void MainWindow::DisplaySelected() {
   if (entry->IsDatabase()) {
     const auto& tags = TagsFor(tags_, *entry);
     if (!tags.empty()) addRow(L"Теги", TagsText(tags));
+    const auto connect = entry->ValueOr(L"Connect");
+    if (!ConnectionValue(connect, L"File").empty()) {
+      const auto passport = ReadFileDatabasePassport(connect);
+      addRow(L"Паспорт: каталог", passport.directory.wstring());
+      addRow(L"Паспорт: файл 1Cv8.1CD", passport.database_file.wstring());
+      if (passport.size) {
+        addRow(L"Паспорт: размер 1Cv8.1CD", cache::FormatSize(*passport.size));
+        addRow(L"Паспорт: изменён", passport.modified);
+      } else {
+        addRow(L"Паспорт: состояние", L"Файл не найден или недоступен");
+      }
+    } else {
+      const auto server = ConnectionValue(connect, L"Srvr");
+      const auto reference = ConnectionValue(connect, L"Ref");
+      if (!server.empty() || !reference.empty()) {
+        addRow(L"Паспорт: сервер 1С", server);
+        addRow(L"Паспорт: имя базы", reference);
+      }
+    }
   }
   const bool database = entry->IsDatabase();
   EnableWindow(enterprise_, database); EnableWindow(designer_, database);
