@@ -256,6 +256,8 @@ void TestPortableMode() {
   ibstart::storage::SaveSettings(layout, settings); const auto loaded = ibstart::storage::LoadSettings(layout);
   CHECK(loaded.active_ibases == settings.active_ibases); CHECK(loaded.simple_mode); CHECK(loaded.platform_search_paths == settings.platform_search_paths); CHECK(loaded.window_width == 1234);
   const std::vector<std::wstring> favorites = {L"База 😀", L"Строка\nс переводом"}; ibstart::storage::SaveFavorites(layout, favorites); CHECK(ibstart::storage::LoadFavorites(layout) == favorites);
+  const ibstart::storage::DatabaseTags tags = {{L"id-😀", {L"Продуктив", L"Клиент А"}}, {L"id-2", {L"Тест"}}};
+  ibstart::storage::SaveTags(layout, tags); CHECK(ibstart::storage::LoadTags(layout) == tags);
   ibstart::storage::AppendHistory(layout, {L"id-😀", std::chrono::system_clock::now(), ibstart::domain::LaunchMode::designer}); const auto history = ibstart::storage::LoadHistory(layout); CHECK(history.size() == 1); CHECK(!history.empty() && history[0].database_id == L"id-😀");
   ibstart::storage::ClearHistory(layout); CHECK(ibstart::storage::LoadHistory(layout).empty()); CHECK(ibstart::storage::LoadFavorites(layout) == favorites);
   std::error_code error; std::filesystem::remove_all(directory, error);

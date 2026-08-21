@@ -35,7 +35,7 @@ constexpr UINT kActivateMessage = WM_APP + 23;
 constexpr ULONG_PTR kLaunchCopyData = 0x49425354;
 constexpr int kMinimumWindowWidth = 940;
 constexpr int kMinimumWindowHeight = 460;
-enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kCopyDetailValue, kCopyDetailPair, kFavorite1 = 200 };
+enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kCopyDetailValue, kCopyDetailPair, kEditTags, kFavorite1 = 200 };
 enum TreeImage : int { kFileDatabaseImage, kServerDatabaseImage, kFolderImage, kFavoriteImage, kRecentImage };
 constexpr LPARAM kRecentRootItemData = 1;
 
@@ -450,6 +450,35 @@ void ShowAdvancedParameterHelp(HWND owner, int command) {
     default: return;
   }
   Message(owner, text, title, MB_OK | MB_ICONINFORMATION);
+}
+std::vector<std::wstring> ParseTags(std::wstring_view text) {
+  std::vector<std::wstring> result;
+  size_t start = 0;
+  while (start <= text.size()) {
+    const size_t end = text.find_first_of(L",;\r\n", start);
+    const auto tag = TrimText(text.substr(start, end == std::wstring_view::npos ? text.size() - start : end - start));
+    if (!tag.empty() && std::none_of(result.begin(), result.end(), [&](const auto& existing) { return EqualNoCase(existing, tag); })) result.push_back(tag);
+    if (end == std::wstring_view::npos) break;
+    start = end + 1;
+  }
+  return result;
+}
+std::wstring TagsText(const std::vector<std::wstring>& tags) {
+  std::wstring result;
+  for (const auto& tag : tags) {
+    if (!result.empty()) result += L", ";
+    result += tag;
+  }
+  return result;
+}
+std::wstring TagId(const domain::Entry& entry) { return entry.ValueOr(L"ID", entry.name); }
+const std::vector<std::wstring>& TagsFor(const storage::DatabaseTags& tags, const domain::Entry& entry) {
+  static const std::vector<std::wstring> empty;
+  const auto found = tags.find(TagId(entry));
+  return found == tags.end() ? empty : found->second;
+}
+bool ContainsTag(const std::vector<std::wstring>& tags, std::wstring_view value) {
+  return std::any_of(tags.begin(), tags.end(), [&](const auto& tag) { return EqualNoCase(tag, value); });
 }
 
 void RestoreModalOwner(HWND owner) {
@@ -967,11 +996,12 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
     case WM_KEYDOWN: if (wparam == VK_F3) { LaunchSelected(domain::LaunchMode::enterprise); return 0; } if (wparam == VK_F4) { LaunchSelected(domain::LaunchMode::designer); return 0; } break;
     case WM_COMMAND:
       if (reinterpret_cast<HWND>(lparam) == search_ && HIWORD(wparam) == EN_CHANGE) { PopulateTree(); return 0; }
+      if (reinterpret_cast<HWND>(lparam) == tag_filter_ && HIWORD(wparam) == CBN_SELCHANGE) { PopulateTree(); return 0; }
       switch (LOWORD(wparam)) {
         case kEnterprise: LaunchSelected(domain::LaunchMode::enterprise); break; case kDesigner: LaunchSelected(domain::LaunchMode::designer); break;
         case kAddFile: AddFileDatabase(); break; case kAddServer: AddServerDatabase(); break; case kAddGroup: AddGroup(); break; case kOpenList: OpenList(); break; case kRefresh: LoadCatalog(); break;
         case kEdit: EditSelected(); break; case kCache: ClearSelectedCache(); break; case kClearRecent: ClearRecentBases(); break; case kShortcut: CreateShortcut(); break; case kOpenFolder: OpenSelectedFolder(); break; case kDelete: DeleteSelected(); break;
-        case kCopyDetailValue: CopySelectedDetail(false); break; case kCopyDetailPair: CopySelectedDetail(true); break;
+        case kCopyDetailValue: CopySelectedDetail(false); break; case kCopyDetailPair: CopySelectedDetail(true); break; case kEditTags: EditSelectedTags(); break;
         case kSimpleMode: SetSimpleMode(!settings_.simple_mode); break; case kToggleFavorite: ToggleFavorite(); break; case kFocusSearch: SetFocus(search_); break; case kAbout: ShowAbout(); break;
         case kMoveUp: MoveSelected(-1); break; case kMoveDown: MoveSelected(1); break;
         default: if (LOWORD(wparam) >= kFavorite1 && LOWORD(wparam) < kFavorite1 + 9) LaunchFavorite(LOWORD(wparam) - kFavorite1); break;
@@ -1056,7 +1086,12 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
 void MainWindow::CreateControls() {
   HWND searchLabel = CreateWindowW(L"STATIC", L"Поиск:", WS_CHILD | WS_VISIBLE, 8, 10, 50, 20, window_, nullptr, instance_, nullptr);
   search_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 58, 7, 600, 25, window_, nullptr, instance_, nullptr);
-  tree_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS, 8, 42, 360, 420, window_, nullptr, instance_, nullptr);
+  HWND tagFilterLabel = CreateWindowW(L"STATIC", L"Показывать:", WS_CHILD | WS_VISIBLE, 8, 42, 50, 20, window_, nullptr, instance_, nullptr);
+  tag_filter_ = CreateWindowExW(0, WC_COMBOBOXW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 58, 39, 300, 160, window_, nullptr, instance_, nullptr);
+  SendMessageW(tag_filter_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Все базы"));
+  SendMessageW(tag_filter_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Избранные"));
+  SendMessageW(tag_filter_, CB_SETCURSEL, 0, 0);
+  tree_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS, 8, 74, 360, 420, window_, nullptr, instance_, nullptr);
   TreeView_SetExtendedStyle(tree_, TVS_EX_DOUBLEBUFFER, TVS_EX_DOUBLEBUFFER);
   details_title_ = CreateWindowW(L"STATIC", L"Выберите базу или группу", WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX,
       390, 49, 460, 26, window_, nullptr, instance_, nullptr);
@@ -1067,7 +1102,7 @@ void MainWindow::CreateControls() {
   controls_font_ = CreateUiFont(window_, 9, FW_NORMAL);
   button_font_ = CreateUiFont(window_, 9, FW_SEMIBOLD);
   if (controls_font_) {
-    for (const HWND control : {searchLabel, search_, tree_, details_}) {
+    for (const HWND control : {searchLabel, search_, tagFilterLabel, tag_filter_, tree_, details_}) {
       if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(controls_font_), TRUE);
     }
   }
@@ -1127,7 +1162,7 @@ void MainWindow::CreateControls() {
   status_ = CreateWindowW(STATUSCLASSNAMEW, L"", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window_, nullptr, instance_, nullptr);
   HMENU menu = CreateMenu(), file = CreatePopupMenu(), view = CreatePopupMenu(), help = CreatePopupMenu();
   AppendMenuW(file, MF_STRING, kOpenList, L"Открыть список баз…\tCtrl+O"); AppendMenuW(file, MF_STRING, kAddFile, L"Добавить файловую базу…\tCtrl+Alt+F"); AppendMenuW(file, MF_STRING, kAddServer, L"Добавить серверную базу…\tCtrl+Alt+S"); AppendMenuW(file, MF_STRING, kAddGroup, L"Добавить группу…\tCtrl+Alt+G"); AppendMenuW(file, MF_STRING, kRefresh, L"Обновить список\tF5");
-  AppendMenuW(view, MF_STRING, kToggleFavorite, L"Добавить/убрать из избранного\tCtrl+Alt+I"); AppendMenuW(view, MF_STRING, kClearRecent, L"Очистить недавние базы…");
+  AppendMenuW(view, MF_STRING, kToggleFavorite, L"Добавить/убрать из избранного\tCtrl+Alt+I"); AppendMenuW(view, MF_STRING, kEditTags, L"Теги выбранной базы…"); AppendMenuW(view, MF_STRING, kClearRecent, L"Очистить недавние базы…");
   AppendMenuW(view, MF_STRING, kSimpleMode, L"Простой режим\tCtrl+Alt+M"); AppendMenuW(help, MF_STRING, kAbout, L"О программе…\tF1"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(file), L"Файл"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(view), L"Вид"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(help), L"Справка"); SetMenu(window_, menu);
   SetSimpleMode(settings_.simple_mode);
   DisplaySelected();
@@ -1135,7 +1170,7 @@ void MainWindow::CreateControls() {
 
 void MainWindow::Layout(int width, int height) {
   constexpr int statusHeight = 22;
-  constexpr int top = 42;
+  constexpr int top = 74;
   constexpr int bottom = statusHeight + 10;
   constexpr int buttonGap = 8;
   constexpr int buttonRowGap = 6;
@@ -1170,13 +1205,14 @@ void MainWindow::Layout(int width, int height) {
   const int detailsHeight = std::max(42, buttonsY - detailsY - 10);
   const int keyWidth = std::clamp(rightWidth * 35 / 100, 80, 190);
 
-  HDWP positions = BeginDeferWindowPos(11);
+  HDWP positions = BeginDeferWindowPos(12);
   const auto defer = [&positions](HWND control, int x, int y, int controlWidth, int controlHeight) {
     if (!positions || !control) return;
     positions = DeferWindowPos(positions, control, nullptr, x, y, std::max(1, controlWidth), std::max(1, controlHeight),
         SWP_NOACTIVATE | SWP_NOOWNERZORDER | SWP_NOZORDER);
   };
   defer(search_, 58, 7, width - 66, 25);
+  defer(tag_filter_, 58, 39, std::min(320, width - 66), 25);
   defer(tree_, 8, top, leftWidth, height - top - bottom);
   defer(details_title_, rightX + 10, top + 7, rightWidth - 20, 26);
   defer(details_subtitle_, rightX + 10, top + 34, rightWidth - 20, 20);
@@ -1187,6 +1223,7 @@ void MainWindow::Layout(int width, int height) {
     // DeferWindowPos can fail only under severe resource pressure.  Keep a
     // complete fallback layout instead of leaving controls at old positions.
     MoveWindow(search_, 58, 7, std::max(1, width - 66), 25, TRUE);
+    MoveWindow(tag_filter_, 58, 39, std::max(1, std::min(320, width - 66)), 25, TRUE);
     MoveWindow(tree_, 8, top, leftWidth, std::max(1, height - top - bottom), TRUE);
     MoveWindow(details_title_, rightX + 10, top + 7, std::max(1, rightWidth - 20), 26, TRUE);
     MoveWindow(details_subtitle_, rightX + 10, top + 34, std::max(1, rightWidth - 20), 20, TRUE);
@@ -1220,6 +1257,8 @@ void MainWindow::LoadCatalog(bool report_error) {
       SetStatus(settings_.active_ibases.wstring() + L" | " + CatalogStatistics());
       logger_.Info(L"Загружен список баз: " + settings_.active_ibases.wstring() + L" | " + CatalogStatistics());
     }
+    tags_ = storage::LoadTags(layout_);
+    RefreshTagFilter();
     PopulateTree();
   } catch (const std::exception& error) { logger_.Error(L"Ошибка загрузки: " + ibstart::utf::FromUtf8(error.what())); if (report_error) Message(window_, L"Не удалось загрузить список баз. Проверьте путь и кодировку UTF-8.", L"ИБ Старт", MB_OK | MB_ICONERROR); }
 }
@@ -1244,13 +1283,60 @@ void MainWindow::SaveCatalog() {
 bool MainWindow::ItemMatches(const catalog::TreeItem& item, std::wstring_view filter) const {
   if (filter.empty()) return true;
   if (catalog_) {
-    if (const auto* entry = catalog_->Find(item.name); entry && catalog::MatchesSearchText(*entry, filter)) return true;
+    if (const auto* entry = catalog_->Find(item.name); entry) {
+      if (catalog::MatchesSearchText(*entry, filter)) return true;
+      if (entry->IsDatabase()) {
+        const auto& tags = TagsFor(tags_, *entry);
+        if (std::any_of(tags.begin(), tags.end(), [&](const auto& tag) { return utf::FindNoCaseOrdinal(tag, filter) != std::wstring_view::npos; })) return true;
+      }
+    }
   }
   return std::any_of(item.children.begin(), item.children.end(), [&](const auto& child) { return ItemMatches(child, filter); });
 }
+bool MainWindow::ItemMatchesTagFilter(const catalog::TreeItem& item) const {
+  const int selection = tag_filter_ ? static_cast<int>(SendMessageW(tag_filter_, CB_GETCURSEL, 0, 0)) : 0;
+  if (selection <= 0 || !catalog_) return true;
+  const auto* entry = catalog_->Find(item.name);
+  if (entry && entry->IsDatabase()) {
+    if (selection == 1) return ContainsTag(filter_favorites_, entry->name);
+    const size_t tag = static_cast<size_t>(selection - 2);
+    return tag < filter_tags_.size() && ContainsTag(TagsFor(tags_, *entry), filter_tags_[tag]);
+  }
+  return std::any_of(item.children.begin(), item.children.end(), [&](const auto& child) { return ItemMatchesTagFilter(child); });
+}
+void MainWindow::RefreshTagFilter() {
+  int selection = tag_filter_ ? static_cast<int>(SendMessageW(tag_filter_, CB_GETCURSEL, 0, 0)) : 0;
+  const bool favoritesSelected = selection == 1;
+  std::wstring selectedTag;
+  if (selection >= 2 && static_cast<size_t>(selection - 2) < filter_tags_.size()) selectedTag = filter_tags_[selection - 2];
+
+  filter_favorites_ = storage::LoadFavorites(layout_);
+  filter_tags_.clear();
+  if (catalog_) {
+    for (const auto* entry : catalog_->Databases()) {
+      for (const auto& tag : TagsFor(tags_, *entry)) {
+        if (std::none_of(filter_tags_.begin(), filter_tags_.end(), [&](const auto& existing) { return EqualNoCase(existing, tag); })) filter_tags_.push_back(tag);
+      }
+    }
+  }
+  std::sort(filter_tags_.begin(), filter_tags_.end(), [](const auto& left, const auto& right) { return _wcsicmp(left.c_str(), right.c_str()) < 0; });
+  if (!tag_filter_) return;
+
+  SendMessageW(tag_filter_, CB_RESETCONTENT, 0, 0);
+  SendMessageW(tag_filter_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Все базы"));
+  SendMessageW(tag_filter_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Избранные"));
+  for (const auto& tag : filter_tags_) SendMessageW(tag_filter_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(tag.c_str()));
+  selection = favoritesSelected ? 1 : 0;
+  if (!selectedTag.empty()) {
+    for (size_t index = 0; index < filter_tags_.size(); ++index) {
+      if (EqualNoCase(filter_tags_[index], selectedTag)) { selection = static_cast<int>(index + 2); break; }
+    }
+  }
+  SendMessageW(tag_filter_, CB_SETCURSEL, selection, 0);
+}
 void MainWindow::AddTreeItems(const std::vector<catalog::TreeItem>& items, HTREEITEM parent, std::wstring_view filter) {
   for (const auto& item : items) {
-    if (!ItemMatches(item, filter)) continue;
+    if (!ItemMatches(item, filter) || !ItemMatchesTagFilter(item)) continue;
     TVINSERTSTRUCTW row{}; row.hParent = parent; row.hInsertAfter = TVI_LAST;
     row.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE;
     row.item.pszText = const_cast<wchar_t*>(item.name.c_str());
@@ -1275,7 +1361,9 @@ void MainWindow::PopulateTree() {
       const HTREEITEM rootHandle = TreeView_InsertItem(tree_, &root);
       bool any = false;
       for (const auto& name : names) {
-        const auto* entry = catalog_->Find(name); if (!entry || !entry->IsDatabase() || (!filter.empty() && utf::FindNoCaseOrdinal(entry->name, filter) == std::wstring_view::npos)) continue;
+        const auto* entry = catalog_->Find(name);
+        const catalog::TreeItem item{name, true, {}, {}};
+        if (!entry || !entry->IsDatabase() || !ItemMatches(item, filter) || !ItemMatchesTagFilter(item)) continue;
         TVINSERTSTRUCTW row{}; row.hParent = rootHandle; row.hInsertAfter = TVI_LAST;
         row.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE; row.item.pszText = const_cast<wchar_t*>(entry->name.c_str());
         row.item.iImage = row.item.iSelectedImage = DatabaseTreeImage(entry); TreeView_InsertItem(tree_, &row); any = true;
@@ -1551,6 +1639,7 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   append(database, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор", L"F4");
   separator();
   append(database, favorite, kToggleFavorite, IDI_ACTION_FAVORITE, favorite ? L"Убрать из избранного" : L"Добавить в избранное", L"Ctrl+Alt+I");
+  append(database && !settings_.simple_mode, false, kEditTags, IDI_ACTION_EDIT, L"Теги…");
   append(editable, false, kEdit, IDI_ACTION_EDIT, L"Изменить…", L"F2");
   append(database && !settings_.simple_mode, false, kCache, IDI_ACTION_CACHE, L"Очистить кэш…", L"Ctrl+Shift+Del");
   append(database && !settings_.simple_mode, false, kShortcut, IDI_ACTION_SHORTCUT, L"Создать ярлык", L"Ctrl+Shift+S");
@@ -1606,6 +1695,10 @@ void MainWindow::DisplaySelected() {
     auto value = SingleLine(field.value);
     if (_wcsicmp(field.key.c_str(), L"Folder") == 0 && (value.empty() || value == L"/")) value = L"Корневой уровень";
     addRow(FriendlyFieldName(field.key), std::move(value));
+  }
+  if (entry->IsDatabase()) {
+    const auto& tags = TagsFor(tags_, *entry);
+    if (!tags.empty()) addRow(L"Теги", TagsText(tags));
   }
   const bool database = entry->IsDatabase();
   EnableWindow(enterprise_, database); EnableWindow(designer_, database);
@@ -1726,6 +1819,8 @@ void MainWindow::EditSelected() {
     PopulateTree();
     return;
   }
+  const auto previousTagId = TagId(*entry);
+  const auto previousTags = tags_;
   const auto edited = EditDatabase(window_, L"Редактирование информационной базы", DatabaseEditorDataFromEntry(*entry), platforms_);
   if (!edited) return;
   if (selected != edited->name && !catalog_->RenameDatabase(selected, edited->name)) {
@@ -1742,21 +1837,76 @@ void MainWindow::EditSelected() {
       if (EqualNoCase(favorite, selected)) { favorite = edited->name; changed = true; }
     }
     if (changed) storage::SaveFavorites(layout_, favorites);
+    if (previousTagId != TagId(*entry)) {
+      if (const auto tags = tags_.find(previousTagId); tags != tags_.end()) {
+        tags_[TagId(*entry)] = std::move(tags->second);
+        tags_.erase(tags);
+        try {
+          storage::SaveTags(layout_, tags_);
+        } catch (const std::exception& error) {
+          tags_ = previousTags;
+          logger_.Error(L"Ошибка переноса тегов при переименовании: " + ibstart::utf::FromUtf8(error.what()));
+          Message(window_, L"Не удалось сохранить теги после переименования базы.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
+        }
+      }
+    }
   }
   SaveCatalog();
+  RefreshTagFilter();
   PopulateTree();
   SelectTreeItem(edited->name);
+}
+void MainWindow::EditSelectedTags() {
+  if (settings_.simple_mode || !catalog_) return;
+  const auto name = SelectedName();
+  const auto* entry = catalog_->Find(name);
+  if (!entry || !entry->IsDatabase()) {
+    Message(window_, L"Выберите информационную базу для изменения тегов.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
+    return;
+  }
+  const auto entered = InputBox(window_, L"Теги базы", L"Теги через запятую:", TagsText(TagsFor(tags_, *entry)));
+  if (!entered) return;
+
+  const auto previous = tags_;
+  const auto values = ParseTags(*entered);
+  if (values.empty()) tags_.erase(TagId(*entry));
+  else tags_[TagId(*entry)] = values;
+  try {
+    storage::SaveTags(layout_, tags_);
+  } catch (const std::exception& error) {
+    tags_ = previous;
+    logger_.Error(L"Ошибка сохранения тегов: " + ibstart::utf::FromUtf8(error.what()));
+    Message(window_, L"Не удалось сохранить теги базы.", L"ИБ Старт", MB_OK | MB_ICONERROR);
+    return;
+  }
+  RefreshTagFilter();
+  PopulateTree();
+  SelectTreeItem(name);
+  SetStatus(values.empty() ? L"Теги базы очищены." : L"Теги базы сохранены: " + TagsText(values));
 }
 void MainWindow::DeleteSelected() {
   if (settings_.simple_mode || !catalog_) return;
   const auto name = SelectedName();
   const auto* entry = catalog_->Find(name);
   if (!entry) return;
+  const auto tagId = entry->IsDatabase() ? TagId(*entry) : std::wstring();
   const auto item = entry->IsDatabase() ? L"информационную базу" : L"группу";
   const auto message = L"Удалить " + std::wstring(item) + L" \"" + name + L"\" из списка.";
   if (MessageBoxW(window_, message.c_str(), L"ИБ Старт", MB_YESNO) != IDYES) return;
   catalog_->Remove(name);
+  if (!tagId.empty() && tags_.contains(tagId)) {
+    const auto previousTags = tags_;
+    tags_.erase(tagId);
+    try {
+      storage::SaveTags(layout_, tags_);
+    } catch (const std::exception& error) {
+      tags_ = previousTags;
+      logger_.Error(L"Ошибка удаления тегов: " + ibstart::utf::FromUtf8(error.what()));
+      Message(window_, L"База удалена из списка, но её теги не удалось удалить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
+    }
+  }
   SaveCatalog();
+  RefreshTagFilter();
   PopulateTree();
 }
 void MainWindow::MoveSelected(int offset) {
@@ -1813,8 +1963,20 @@ void MainWindow::CreateShortcut() { if (!catalog_) return; try { const auto data
 void MainWindow::OpenList() { if (settings_.simple_mode) return; wchar_t filename[MAX_PATH]{}; OPENFILENAMEW dialog{}; dialog.lStructSize = sizeof(dialog); dialog.hwndOwner = window_; dialog.lpstrFilter = L"ibases.v8i\0ibases.v8i\0Все файлы\0*.*\0"; dialog.lpstrFile = filename; dialog.nMaxFile = MAX_PATH; dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST; if (GetOpenFileNameW(&dialog)) { settings_.active_ibases = filename; storage::SaveSettings(layout_, settings_); LoadCatalog(); } }
 void MainWindow::SetStatus(std::wstring text) { if (status_) SendMessageW(status_, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(text.c_str())); }
 std::wstring MainWindow::CatalogStatistics() const { return L"Баз: " + std::to_wstring(catalog_ ? catalog_->Databases().size() : 0) + L" | Платформ: " + std::to_wstring(platforms_.size()); }
-void MainWindow::SetSimpleMode(bool enabled) { settings_.simple_mode = enabled; const int visible = enabled ? SW_HIDE : SW_SHOW; if (edit_) ShowWindow(edit_, visible); if (cache_) ShowWindow(cache_, visible); if (shortcut_) ShowWindow(shortcut_, visible); if (remove_) ShowWindow(remove_, visible); HMENU menu = GetMenu(window_); if (menu) CheckMenuItem(menu, kSimpleMode, MF_BYCOMMAND | (enabled ? MF_CHECKED : MF_UNCHECKED)); DisplaySelected(); }
-void MainWindow::ToggleFavorite() { if (!catalog_) return; const auto name = SelectedName(); const auto* entry = catalog_->Find(name); if (!entry || !entry->IsDatabase()) { Message(window_, L"Выберите базу для добавления в избранное."); return; } auto favorites = storage::LoadFavorites(layout_); const auto found = std::find(favorites.begin(), favorites.end(), name); if (found == favorites.end()) { favorites.insert(favorites.begin(), name); if (favorites.size() > 9) favorites.resize(9); SetStatus(L"Добавлено в избранное: " + name); } else { favorites.erase(found); SetStatus(L"Удалено из избранного: " + name); } storage::SaveFavorites(layout_, favorites); PopulateTree(); }
+void MainWindow::SetSimpleMode(bool enabled) {
+  settings_.simple_mode = enabled;
+  const int visible = enabled ? SW_HIDE : SW_SHOW;
+  if (edit_) ShowWindow(edit_, visible);
+  if (cache_) ShowWindow(cache_, visible);
+  if (shortcut_) ShowWindow(shortcut_, visible);
+  if (remove_) ShowWindow(remove_, visible);
+  if (HMENU menu = GetMenu(window_)) {
+    CheckMenuItem(menu, kSimpleMode, MF_BYCOMMAND | (enabled ? MF_CHECKED : MF_UNCHECKED));
+    EnableMenuItem(menu, kEditTags, MF_BYCOMMAND | (enabled ? MF_GRAYED : MF_ENABLED));
+  }
+  DisplaySelected();
+}
+void MainWindow::ToggleFavorite() { if (!catalog_) return; const auto name = SelectedName(); const auto* entry = catalog_->Find(name); if (!entry || !entry->IsDatabase()) { Message(window_, L"Выберите базу для добавления в избранное."); return; } auto favorites = storage::LoadFavorites(layout_); const auto found = std::find(favorites.begin(), favorites.end(), name); if (found == favorites.end()) { favorites.insert(favorites.begin(), name); if (favorites.size() > 9) favorites.resize(9); SetStatus(L"Добавлено в избранное: " + name); } else { favorites.erase(found); SetStatus(L"Удалено из избранного: " + name); } storage::SaveFavorites(layout_, favorites); RefreshTagFilter(); PopulateTree(); }
 void MainWindow::LaunchFavorite(size_t slot) { auto favorites = storage::LoadFavorites(layout_); if (slot >= favorites.size()) { Message(window_, L"Этот слот избранного пока не назначен."); return; } SetWindowTextW(search_, L""); PopulateTree(); if (SelectTreeItem(favorites[slot])) LaunchSelected(domain::LaunchMode::enterprise); }
 void MainWindow::ShowAbout() const { const std::wstring text = L"ИБ Старт (IBStart)\nВерсия " + std::wstring(version::value) + L"\n\nЛёгкий менеджер запусков информационных баз 1С:Предприятие.\n\nЛицензия MIT. IBStart не является официальным продуктом фирмы «1С»."; MessageBoxW(window_, text.c_str(), L"О программе — ИБ Старт", MB_OK | MB_ICONINFORMATION); }
 void MainWindow::ReportUnhandledError(std::string_view message) noexcept { try { const auto wide = utf::FromUtf8(message); logger_.Error(L"Необработанная ошибка UI: " + wide); const auto text = L"Произошла непредвиденная ошибка. Подробности записаны в:\n" + logger_.path().wstring(); MessageBoxW(window_, text.c_str(), L"ИБ Старт", MB_OK | MB_ICONERROR); } catch (...) { MessageBoxW(window_, L"Произошла непредвиденная ошибка.", L"ИБ Старт", MB_OK | MB_ICONERROR); } }

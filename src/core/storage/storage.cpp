@@ -271,4 +271,39 @@ void SaveFavorites(const StorageLayout& layout, const std::vector<std::wstring>&
   WriteAtomically(PathFor(layout, L"favorites.json"), json);
 }
 
+DatabaseTags LoadTags(const StorageLayout& layout) {
+  DatabaseTags result;
+  const std::regex item("\\{\\s*\\\"id\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"tags\\\"\\s*:\\s*\\[([^\\]]*)\\]\\s*\\}");
+  const std::regex tag("\\\"((?:\\\\.|[^\\\"])*)\\\"");
+  const auto json = ReadFile(PathFor(layout, L"tags.json"));
+  for (std::sregex_iterator it(json.begin(), json.end(), item), end; it != end; ++it) {
+    try {
+      const auto id = Unescape((*it)[1].str());
+      if (id.empty()) continue;
+      std::vector<std::wstring> values;
+      const auto list = (*it)[2].str();
+      for (std::sregex_iterator tagIt(list.begin(), list.end(), tag), tagEnd; tagIt != tagEnd; ++tagIt) values.push_back(Unescape((*tagIt)[1].str()));
+      if (!values.empty()) result[id] = std::move(values);
+    } catch (...) {}
+  }
+  return result;
+}
+
+void SaveTags(const StorageLayout& layout, const DatabaseTags& tags) {
+  std::string json = "[\n";
+  size_t written = 0;
+  for (const auto& [id, values] : tags) {
+    if (id.empty() || values.empty()) continue;
+    if (written++) json += ",\n";
+    json += "  {\"id\": \"" + Escape(id) + "\", \"tags\": [";
+    for (size_t index = 0; index < values.size(); ++index) {
+      if (index) json += ", ";
+      json += "\"" + Escape(values[index]) + "\"";
+    }
+    json += "]}";
+  }
+  json += "\n]\n";
+  WriteAtomically(PathFor(layout, L"tags.json"), json);
+}
+
 }  // namespace ibstart::storage

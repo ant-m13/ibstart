@@ -5,6 +5,7 @@
 #include <Windows.h>
 
 #include <filesystem>
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -26,6 +27,8 @@ struct Settings {
   int window_height{560};
 };
 
+using DatabaseTags = std::map<std::wstring, std::vector<std::wstring>>;
+
 [[nodiscard]] StorageLayout ResolveLayout(const std::filesystem::path& executable_path);
 [[nodiscard]] std::optional<std::filesystem::path> FindStandardIbases();
 void EnsureWritable(const StorageLayout& layout);
@@ -36,5 +39,7 @@ void AppendHistory(const StorageLayout& layout, domain::HistoryItem item);
 void ClearHistory(const StorageLayout& layout);
 [[nodiscard]] std::vector<std::wstring> LoadFavorites(const StorageLayout& layout);
 void SaveFavorites(const StorageLayout& layout, const std::vector<std::wstring>& favorites);
+[[nodiscard]] DatabaseTags LoadTags(const StorageLayout& layout);
+void SaveTags(const StorageLayout& layout, const DatabaseTags& tags);
 
 }  // namespace ibstart::storage
