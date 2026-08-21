@@ -1,0 +1,35 @@
+name: Вопрос или поддержка
+description: Задайте вопрос по использованию или сборке IBStart.
+title: "[Вопрос]: "
+body:
+  - type: dropdown
+    id: topic
+    attributes:
+      label: Тема
+      options:
+        - Использование приложения
+        - Поиск платформы 1С
+        - Формат ibases.v8i
+        - Сборка из исходников
+        - Другое
+    validations:
+      required: true
+  - type: textarea
+    id: question
+    attributes:
+      label: Вопрос
+      description: Опишите цель, предпринятые действия и полученный результат.
+    validations:
+      required: true
+  - type: textarea
+    id: environment
+    attributes:
+      label: Среда
+      description: При необходимости укажите версию IBStart, Windows и 1С. Не публикуйте пароли и рабочие строки подключения.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Проверки перед отправкой
+      options:
+        - label: Я просмотрел(а) README, руководство пользователя и открытые issue.
+          required: true

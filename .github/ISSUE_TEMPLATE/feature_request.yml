@@ -1,0 +1,38 @@
+name: Предложение возможности
+description: Предложите улучшение IBStart.
+title: "[Функция]: "
+body:
+  - type: markdown
+    attributes:
+      value: Спасибо за идею. Опишите задачу пользователя и ожидаемый результат, а не только реализацию.
+  - type: textarea
+    id: problem
+    attributes:
+      label: Какую проблему это решает?
+      description: Кому и в каком сценарии не хватает текущего поведения?
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Предлагаемое решение
+      description: Опишите желаемый интерфейс и поведение.
+    validations:
+      required: true
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Рассмотренные альтернативы
+      description: Что уже пробовали или почему существующие команды не подходят?
+  - type: textarea
+    id: additional
+    attributes:
+      label: Дополнительный контекст
+      description: Скриншоты, примеры или ограничения. Не добавляйте чувствительные данные.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Проверки перед отправкой
+      options:
+        - label: Я проверил(а), что похожего предложения нет среди открытых issue.
+          required: true

@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Сообщение об уязвимости
+    url: https://github.com/ant-m13/ibstart/security/policy
+    about: Не публикуйте сведения об уязвимости в обычном issue.

@@ -1,0 +1,70 @@
+name: Сообщение об ошибке
+description: Сообщите о воспроизводимой проблеме в IBStart.
+title: "[Ошибка]: "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Спасибо за помощь. Не добавляйте пароли, токены, рабочие строки подключения и персональные данные. Для уязвимостей используйте [политику безопасности](https://github.com/ant-m13/ibstart/security/policy).
+  - type: input
+    id: version
+    attributes:
+      label: Версия IBStart
+      description: Укажите номер из «Справка → О программе».
+      placeholder: "0.6.0"
+    validations:
+      required: true
+  - type: input
+    id: windows
+    attributes:
+      label: Версия Windows
+      placeholder: "Windows 11 24H2 x64"
+    validations:
+      required: true
+  - type: dropdown
+    id: installation
+    attributes:
+      label: Способ запуска
+      options:
+        - EXE из GitHub Release
+        - Portable mode
+        - Сборка из исходников
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Шаги воспроизведения
+      description: Перечислите минимальные безопасные шаги.
+      placeholder: |
+        1. …
+        2. …
+        3. …
+    validations:
+      required: true
+  - type: textarea
+    id: actual
+    attributes:
+      label: Фактический результат
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Ожидаемый результат
+    validations:
+      required: true
+  - type: textarea
+    id: additional
+    attributes:
+      label: Дополнительные сведения
+      description: При необходимости приложите обезличенный фрагмент журнала или скриншот.
+  - type: checkboxes
+    id: checks
+    attributes:
+      label: Проверки перед отправкой
+      options:
+        - label: Я проверил(а), что похожей открытой проблемы нет.
+          required: true
+        - label: В сообщении нет паролей, токенов, реальных адресов серверов и персональных данных.
+          required: true
