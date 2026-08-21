@@ -1090,8 +1090,10 @@ void DrawTagManagerPreview(const DRAWITEMSTRUCT& draw, const TagManagerState& st
   GetTextExtentPoint32W(draw.hDC, label.c_str(), static_cast<int>(label.size()), &textSize);
   const int previewWidth = static_cast<int>(preview.right - preview.left);
   const int previewHeight = static_cast<int>(preview.bottom - preview.top);
-  const int width = std::min(previewWidth - 16, std::max(88, textSize.cx + 22));
-  const int height = std::min(previewHeight - 10, std::max(22, textSize.cy + 8));
+  const int textWidth = static_cast<int>(textSize.cx);
+  const int textHeight = static_cast<int>(textSize.cy);
+  const int width = std::min(previewWidth - 16, std::max(88, textWidth + 22));
+  const int height = std::min(previewHeight - 10, std::max(22, textHeight + 8));
   const int left = static_cast<int>(preview.left) + (previewWidth - width) / 2;
   const int top = static_cast<int>(preview.top) + (previewHeight - height) / 2;
   RECT tag{left, top, left + width, top + height};
@@ -1324,7 +1326,7 @@ struct TagAssignmentState {
 };
 
 int AddTagAssignmentItem(TagAssignmentState& state, std::wstring_view tag, bool checked) {
-  const std::wstring value(tag);
+  std::wstring value(tag);
   LVITEMW item{};
   item.mask = LVIF_TEXT;
   item.iItem = ListView_GetItemCount(state.list);
