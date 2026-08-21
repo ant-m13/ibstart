@@ -31,6 +31,7 @@ class MainWindow {
     std::wstring text;
     std::wstring shortcut;
   };
+  struct UpdateCheckState;
 
   static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
   LRESULT Handle(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
@@ -96,6 +97,8 @@ class MainWindow {
   void SetSimpleMode(bool enabled);
   void ToggleFavorite();
   void LaunchFavorite(size_t slot);
+  void CheckForUpdates();
+  void CompleteUpdateCheck();
   void ShowAbout() const;
   [[nodiscard]] std::wstring NextName(std::wstring_view stem) const;
   void ReportUnhandledError(std::string_view message) noexcept;
@@ -148,6 +151,7 @@ class MainWindow {
   std::vector<std::wstring> filter_tags_;
   std::vector<std::wstring> filter_favorites_;
   std::optional<std::wstring> initial_launch_id_;
+  std::shared_ptr<UpdateCheckState> update_check_;
   std::wstring search_filter_;
   std::wstring dragging_name_;
   std::wstring drag_target_name_;

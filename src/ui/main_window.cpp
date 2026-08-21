@@ -7,6 +7,7 @@
 #include "core/launcher/command_builder.hpp"
 #include "core/platform/platform_discovery.hpp"
 #include "core/shell/shortcut.hpp"
+#include "core/update/update_service.hpp"
 
 #include <CommCtrl.h>
 #include <ShlObj.h>
@@ -25,9 +26,11 @@
 #include <initializer_list>
 #include <limits>
 #include <memory>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
+#include <thread>
 
 namespace ibstart::ui {
 namespace {
@@ -39,11 +42,12 @@ constexpr wchar_t kTagManagerClass[] = L"IBStart.TagManager";
 constexpr wchar_t kTagAssignmentClass[] = L"IBStart.TagAssignment";
 constexpr wchar_t kFolderPickerClass[] = L"IBStart.FolderPicker";
 constexpr UINT kActivateMessage = WM_APP + 23;
+constexpr UINT kUpdateCheckFinishedMessage = WM_APP + 24;
 constexpr ULONG_PTR kLaunchCopyData = 0x49425354;
 constexpr int kMinimumWindowWidth = 940;
 constexpr int kMinimumSimpleWindowWidth = 520;
 constexpr int kMinimumWindowHeight = 460;
-enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kCopyDetailValue, kCopyDetailPair, kEditTags, kConfigureTagColors, kFolderSortDefault, kFolderSortCatalog, kFolderSortName, kFolderSortLastLaunch, kMoveToFolder, kOpenStandardList, kShowTagsInList, kNewTagForSelected, kFavorite1 = 200 };
+enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kCheckForUpdates, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kCopyDetailValue, kCopyDetailPair, kEditTags, kConfigureTagColors, kFolderSortDefault, kFolderSortCatalog, kFolderSortName, kFolderSortLastLaunch, kMoveToFolder, kOpenStandardList, kShowTagsInList, kNewTagForSelected, kFavorite1 = 200 };
 constexpr UINT kRecentList1 = 300;
 constexpr UINT kQuickTag1 = 400;
 constexpr UINT kTagsContextMenu = 250;
@@ -53,6 +57,10 @@ constexpr LPARAM kRecentRootItemData = 1;
 constexpr LPARAM kFavoritesRootItemData = 2;
 
 void Message(HWND owner, std::wstring_view text, std::wstring_view title = L"ИБ Старт", UINT type = MB_OK | MB_ICONINFORMATION) { MessageBoxW(owner, std::wstring(text).c_str(), std::wstring(title).c_str(), type); }
+std::wstring WideErrorText(std::string_view message) noexcept {
+  try { return utf::FromUtf8(message); }
+  catch (...) { return std::wstring(message.begin(), message.end()); }
+}
 HICON LoadResourceIcon(HINSTANCE instance, int resource, int size) {
   return static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(resource), IMAGE_ICON, size, size, LR_DEFAULTCOLOR));
 }
@@ -1683,6 +1691,13 @@ std::optional<std::wstring> SelectCatalogFolder(HWND owner, const std::vector<ca
 
 }  // namespace
 
+struct MainWindow::UpdateCheckState {
+  std::mutex mutex;
+  std::optional<update::Release> release;
+  std::wstring error;
+  bool completed{false};
+};
+
 MainWindow::MainWindow(HINSTANCE instance, std::filesystem::path executable, storage::StorageLayout layout,
     storage::Settings settings, std::optional<std::wstring> launch_id)
     : instance_(instance), executable_(std::move(executable)), layout_(std::move(layout)), settings_(std::move(settings)),
@@ -1808,7 +1823,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
         }
         case kEdit: EditSelected(); break; case kCache: ClearSelectedCache(); break; case kClearRecent: ClearRecentBases(); break; case kShortcut: CreateShortcut(); break; case kOpenFolder: OpenSelectedFolder(); break; case kDelete: DeleteSelected(); break;
         case kCopyDetailValue: CopySelectedDetail(false); break; case kCopyDetailPair: CopySelectedDetail(true); break; case kEditTags: EditSelectedTags(); break; case kConfigureTagColors: ConfigureTagColors(); break;
-        case kSimpleMode: SetSimpleMode(!settings_.simple_mode); break; case kToggleFavorite: ToggleFavorite(); break; case kShowTagsInList: ToggleTagDisplay(); break; case kFocusSearch: SetFocus(search_); break; case kAbout: ShowAbout(); break;
+        case kSimpleMode: SetSimpleMode(!settings_.simple_mode); break; case kToggleFavorite: ToggleFavorite(); break; case kShowTagsInList: ToggleTagDisplay(); break; case kFocusSearch: SetFocus(search_); break; case kCheckForUpdates: CheckForUpdates(); break; case kAbout: ShowAbout(); break;
         case kMoveUp: MoveSelected(-1); break; case kMoveDown: MoveSelected(1); break; case kMoveToFolder: MoveSelectedToFolder(); break; case kNewTagForSelected: AddNewTagToSelected(); break;
         default:
           if (LOWORD(wparam) >= kFavorite1 && LOWORD(wparam) < kFavorite1 + 9) LaunchFavorite(LOWORD(wparam) - kFavorite1);
@@ -1905,6 +1920,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       return TRUE;
     }
     case kActivateMessage: Activate(); return 0;
+    case kUpdateCheckFinishedMessage: CompleteUpdateCheck(); return 0;
     case WM_CLOSE:
       settings_.selected_entry = SelectedName();
       DestroyWindow(window);
@@ -3602,7 +3618,7 @@ void MainWindow::RefreshMainMenuBar() {
   clearMenu(help_menu_);
   for (const auto& item : main_menu_items_) if (item.icon) DestroyIcon(item.icon);
   main_menu_items_.clear();
-  main_menu_items_.reserve(12);
+  main_menu_items_.reserve(14);
   const auto append = [&](HMENU target, UINT command, int iconResource, std::wstring text, std::wstring shortcut = {}, bool checked = false) {
     ContextMenuItem visual{command, iconResource == 0 ? nullptr : LoadResourceIcon(instance_, iconResource, 20), std::move(text), std::move(shortcut)};
     main_menu_items_.push_back(std::move(visual));
@@ -3624,6 +3640,8 @@ void MainWindow::RefreshMainMenuBar() {
     append(view_menu_, kShowTagsInList, 0, L"Показывать теги в списке баз", {}, settings_.show_tags_in_list);
     append(view_menu_, kClearRecent, IDI_ACTION_DELETE, L"Очистить недавние базы…");
     append(view_menu_, kSimpleMode, 0, L"Простой режим", L"Ctrl+Alt+M");
+    append(help_menu_, kCheckForUpdates, IDI_ACTION_UPDATE, L"Проверить обновления…");
+    AppendMenuW(help_menu_, MF_SEPARATOR, 0, nullptr);
     append(help_menu_, kAbout, IDI_IBSTART, L"О программе…", L"F1");
   }
   clearMenu(menu_);
@@ -3758,6 +3776,87 @@ void MainWindow::SetSimpleMode(bool enabled) {
 }
 void MainWindow::ToggleFavorite() { if (!catalog_) return; const auto name = SelectedName(); const auto* entry = catalog_->Find(name); if (!entry || !entry->IsDatabase()) { Message(window_, L"Выберите базу для добавления в избранное."); return; } auto favorites = storage::LoadFavorites(layout_); const auto found = std::find(favorites.begin(), favorites.end(), name); if (found == favorites.end()) { favorites.insert(favorites.begin(), name); if (favorites.size() > 9) favorites.resize(9); SetStatus(L"Добавлено в избранное: " + name); } else { favorites.erase(found); SetStatus(L"Удалено из избранного: " + name); } storage::SaveFavorites(layout_, favorites); RefreshTagFilter(); PopulateTree(); }
 void MainWindow::LaunchFavorite(size_t slot) { auto favorites = storage::LoadFavorites(layout_); if (slot >= favorites.size()) { Message(window_, L"Этот слот избранного пока не назначен."); return; } SetWindowTextW(search_, L""); PopulateTree(); if (SelectTreeItem(favorites[slot])) LaunchSelected(domain::LaunchMode::enterprise); }
+void MainWindow::CheckForUpdates() {
+  if (update_check_) {
+    SetStatus(L"Проверка обновлений уже выполняется…");
+    return;
+  }
+  auto state = std::make_shared<UpdateCheckState>();
+  update_check_ = state;
+  EnableMenuItem(help_menu_, kCheckForUpdates, MF_BYCOMMAND | MF_GRAYED);
+  DrawMenuBar(window_);
+  SetStatus(L"Проверяем наличие обновлений…");
+  const HWND owner = window_;
+  std::thread([state, owner] {
+    std::optional<update::Release> release;
+    std::wstring error;
+    try {
+      release = update::FetchLatestRelease();
+    } catch (const std::exception& exception) {
+      error = WideErrorText(exception.what());
+    } catch (...) {
+      error = L"Неизвестная ошибка проверки обновлений.";
+    }
+    {
+      std::lock_guard lock(state->mutex);
+      state->release = std::move(release);
+      state->error = std::move(error);
+      state->completed = true;
+    }
+    PostMessageW(owner, kUpdateCheckFinishedMessage, 0, 0);
+  }).detach();
+}
+void MainWindow::CompleteUpdateCheck() {
+  auto state = std::move(update_check_);
+  if (!state) return;
+
+  std::optional<update::Release> release;
+  std::wstring error;
+  {
+    std::lock_guard lock(state->mutex);
+    if (!state->completed) {
+      update_check_ = std::move(state);
+      return;
+    }
+    release = std::move(state->release);
+    error = std::move(state->error);
+  }
+  EnableMenuItem(help_menu_, kCheckForUpdates, MF_BYCOMMAND | MF_ENABLED);
+  DrawMenuBar(window_);
+  if (!error.empty()) {
+    logger_.Error(L"Ошибка проверки обновлений: " + error);
+    SetStatus(L"Не удалось проверить обновления.");
+    Message(window_, L"Не удалось проверить обновления. Проверьте подключение к интернету и повторите попытку. Подробности записаны в журнал.",
+        L"Проверка обновлений", MB_OK | MB_ICONWARNING);
+    return;
+  }
+  if (!release) {
+    SetStatus(L"Опубликованной стабильной версии пока нет.");
+    Message(window_, L"Для ИБ Старт пока нет опубликованной стабильной версии. Предварительные версии не устанавливаются автоматически.",
+        L"Проверка обновлений", MB_OK | MB_ICONINFORMATION);
+    return;
+  }
+
+  const int comparison = update::CompareVersions(version::value, release->version);
+  if (comparison >= 0) {
+    const std::wstring text = comparison == 0
+        ? L"У вас установлена актуальная версия " + std::wstring(version::value) + L"."
+        : L"У вас установлена версия " + std::wstring(version::value) + L", которая новее последней опубликованной стабильной версии " + release->version + L".";
+    SetStatus(L"Проверка обновлений завершена.");
+    Message(window_, text, L"Проверка обновлений", MB_OK | MB_ICONINFORMATION);
+    return;
+  }
+
+  SetStatus(L"Доступно обновление: " + release->version);
+  const std::wstring text = L"Доступна новая версия ИБ Старт " + release->version + L".\n\nУстановлена версия: " +
+      std::wstring(version::value) + L".\n\nОткрыть страницу релиза в браузере?";
+  if (MessageBoxW(window_, text.c_str(), L"Доступно обновление", MB_YESNO | MB_ICONINFORMATION) != IDYES) return;
+  const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", release->page_url.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+  if (result <= 32) {
+    logger_.Error(L"Не удалось открыть страницу релиза: " + release->page_url);
+    Message(window_, L"Не удалось открыть страницу релиза в браузере.", L"Проверка обновлений", MB_OK | MB_ICONWARNING);
+  }
+}
 void MainWindow::ShowAbout() const { const std::wstring text = L"ИБ Старт (IBStart)\nВерсия " + std::wstring(version::value) + L"\n\nЛёгкий менеджер запусков информационных баз 1С:Предприятие.\n\nЛицензия MIT. IBStart не является официальным продуктом фирмы «1С»."; MessageBoxW(window_, text.c_str(), L"О программе — ИБ Старт", MB_OK | MB_ICONINFORMATION); }
 void MainWindow::ReportUnhandledError(std::string_view message) noexcept { try { const auto wide = utf::FromUtf8(message); logger_.Error(L"Необработанная ошибка UI: " + wide); const auto text = L"Произошла непредвиденная ошибка. Подробности записаны в:\n" + logger_.path().wstring(); MessageBoxW(window_, text.c_str(), L"ИБ Старт", MB_OK | MB_ICONERROR); } catch (...) { MessageBoxW(window_, L"Произошла непредвиденная ошибка.", L"ИБ Старт", MB_OK | MB_ICONERROR); } }
 
