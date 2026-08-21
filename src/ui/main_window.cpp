@@ -303,6 +303,7 @@ struct FileDatabasePassport {
   std::filesystem::path database_file;
   std::optional<uintmax_t> size;
   std::wstring modified;
+  bool network_path{false};
 };
 std::wstring FormatFileModificationTime(const FILETIME& value) {
   FILETIME local{};
@@ -312,11 +313,21 @@ std::wstring FormatFileModificationTime(const FILETIME& value) {
   swprintf_s(text, L"%02u.%02u.%04u %02u:%02u", time.wDay, time.wMonth, time.wYear, time.wHour, time.wMinute);
   return text;
 }
+bool IsNetworkFilePath(const std::filesystem::path& path) {
+  const std::wstring_view native = path.native();
+  const bool extendedUnc = native.size() >= 8 && native.starts_with(L"\\\\?\\") &&
+      _wcsnicmp(native.data() + 4, L"UNC\\", 4) == 0;
+  if (extendedUnc || (native.starts_with(L"\\\\") && !native.starts_with(L"\\\\?\\")) || native.starts_with(L"//")) return true;
+  const auto root = path.root_path();
+  return !root.empty() && GetDriveTypeW(root.c_str()) == DRIVE_REMOTE;
+}
 FileDatabasePassport ReadFileDatabasePassport(std::wstring_view connect) {
   FileDatabasePassport result;
   result.directory = ConnectionValue(connect, L"File");
   result.database_file = result.directory / L"1Cv8.1CD";
   if (result.directory.empty()) return result;
+  result.network_path = IsNetworkFilePath(result.directory);
+  if (result.network_path) return result;
   WIN32_FILE_ATTRIBUTE_DATA attributes{};
   if (!GetFileAttributesExW(result.database_file.c_str(), GetFileExInfoStandard, &attributes) ||
       attributes.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) return result;
@@ -3146,7 +3157,9 @@ void MainWindow::DisplaySelected() {
       addDivider();
       addRow(L"Каталог", passport.directory.wstring());
       addRow(L"Файл 1Cv8.1CD", passport.database_file.wstring());
-      if (passport.size) {
+      if (passport.network_path) {
+        addRow(L"Состояние", L"Сетевая папка: сведения не загружаются");
+      } else if (passport.size) {
         addRow(L"Размер 1Cv8.1CD", cache::FormatSize(*passport.size));
         addRow(L"Изменён", passport.modified);
       } else {
