@@ -1634,7 +1634,18 @@ void MainWindow::EditSelected() {
   PopulateTree();
   SelectTreeItem(edited->name);
 }
-void MainWindow::DeleteSelected() { if (settings_.simple_mode || !catalog_) return; const auto name = SelectedName(); if (name.empty()) return; if (MessageBoxW(window_, (L"Удалить «" + name + L"» только из списка баз? Каталог файловой базы не удаляется.").c_str(), L"ИБ Старт", MB_YESNO | MB_ICONWARNING) != IDYES) return; catalog_->Remove(name); SaveCatalog(); PopulateTree(); }
+void MainWindow::DeleteSelected() {
+  if (settings_.simple_mode || !catalog_) return;
+  const auto name = SelectedName();
+  const auto* entry = catalog_->Find(name);
+  if (!entry) return;
+  const auto item = entry->IsDatabase() ? L"информационную базу" : L"группу";
+  const auto message = L"Удалить " + std::wstring(item) + L" \"" + name + L"\" из списка.";
+  if (MessageBoxW(window_, message.c_str(), L"ИБ Старт", MB_YESNO) != IDYES) return;
+  catalog_->Remove(name);
+  SaveCatalog();
+  PopulateTree();
+}
 void MainWindow::MoveSelected(int offset) {
   if (settings_.simple_mode || !catalog_) return;
   const auto name = SelectedName();
