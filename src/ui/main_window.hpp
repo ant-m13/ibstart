@@ -50,6 +50,8 @@ class MainWindow {
   [[nodiscard]] bool SelectedItemIsRecentRoot() const;
   bool SelectTreeItem(std::wstring_view name);
   void ShowTreeContextMenu(POINT screen);
+  void ShowDetailsContextMenu(POINT screen);
+  void CopySelectedDetail(bool include_name);
   void DisplaySelected();
   void LaunchSelected(domain::LaunchMode mode);
   void AddFileDatabase(std::wstring parent = {});
