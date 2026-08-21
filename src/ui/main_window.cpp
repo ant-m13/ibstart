@@ -34,6 +34,7 @@ constexpr wchar_t kInputBoxClass[] = L"IBStart.InputBox";
 constexpr wchar_t kDatabaseEditorClass[] = L"IBStart.DatabaseEditor";
 constexpr wchar_t kAdvancedDatabaseOptionsClass[] = L"IBStart.AdvancedDatabaseOptions";
 constexpr wchar_t kTagManagerClass[] = L"IBStart.TagManager";
+constexpr wchar_t kTagAssignmentClass[] = L"IBStart.TagAssignment";
 constexpr wchar_t kFolderPickerClass[] = L"IBStart.FolderPicker";
 constexpr UINT kActivateMessage = WM_APP + 23;
 constexpr ULONG_PTR kLaunchCopyData = 0x49425354;
@@ -1006,6 +1007,9 @@ enum TagManagerControl : int {
   kTagManagerName,
   kTagManagerBackground,
   kTagManagerText,
+  kTagManagerBackgroundPalette,
+  kTagManagerTextPalette,
+  kTagManagerPreview,
   kTagManagerNew,
   kTagManagerSave,
   kTagManagerDelete
@@ -1021,8 +1025,10 @@ struct TagManagerState {
   HWND name{};
   HWND background{};
   HWND text{};
+  HWND preview{};
   HFONT font{};
   HFONT button_font{};
+  std::array<COLORREF, 16> custom_colors{};
   storage::DatabaseTags tags;
   storage::TagStyles styles;
   std::wstring selected;
@@ -1040,6 +1046,8 @@ std::wstring ListBoxText(HWND list, int index) {
   return value;
 }
 
+void UpdateTagManagerPreview(const TagManagerState& state);
+
 void SetTagManagerFields(TagManagerState& state, std::wstring_view name) {
   state.selected = std::wstring(name);
   const auto* style = TagStyleFor(state.styles, name);
@@ -1047,6 +1055,58 @@ void SetTagManagerFields(TagManagerState& state, std::wstring_view name) {
   SetWindowTextW(state.name, std::wstring(name).c_str());
   SetWindowTextW(state.background, ColorText(value.background).c_str());
   SetWindowTextW(state.text, ColorText(value.text).c_str());
+  UpdateTagManagerPreview(state);
+}
+
+void UpdateTagManagerPreview(const TagManagerState& state) {
+  if (state.preview) InvalidateRect(state.preview, nullptr, TRUE);
+}
+
+void ChooseTagManagerColor(HWND dialog, TagManagerState& state, HWND field, COLORREF fallback) {
+  CHOOSECOLORW choice{};
+  choice.lStructSize = sizeof(choice);
+  choice.hwndOwner = dialog;
+  choice.rgbResult = ParseColorText(ReadControlText(field)).value_or(fallback);
+  choice.lpCustColors = state.custom_colors.data();
+  choice.Flags = CC_FULLOPEN | CC_RGBINIT;
+  if (!ChooseColorW(&choice)) return;
+  SetWindowTextW(field, ColorText(choice.rgbResult).c_str());
+  UpdateTagManagerPreview(state);
+}
+
+void DrawTagManagerPreview(const DRAWITEMSTRUCT& draw, const TagManagerState& state) {
+  RECT preview = draw.rcItem;
+  FillRect(draw.hDC, &preview, GetSysColorBrush(COLOR_WINDOW));
+  const storage::TagStyle defaults{};
+  const COLORREF background = ParseColorText(ReadControlText(state.background)).value_or(defaults.background);
+  const COLORREF text = ParseColorText(ReadControlText(state.text)).value_or(defaults.text);
+  std::wstring label = TrimText(ReadControlText(state.name));
+  if (label.empty()) label = L"Название тега";
+
+  const HFONT font = state.button_font ? state.button_font : state.font;
+  const HGDIOBJ previousFont = font ? SelectObject(draw.hDC, font) : nullptr;
+  SetBkMode(draw.hDC, TRANSPARENT);
+  SIZE textSize{};
+  GetTextExtentPoint32W(draw.hDC, label.c_str(), static_cast<int>(label.size()), &textSize);
+  const int previewWidth = static_cast<int>(preview.right - preview.left);
+  const int previewHeight = static_cast<int>(preview.bottom - preview.top);
+  const int width = std::min(previewWidth - 16, std::max(88, textSize.cx + 22));
+  const int height = std::min(previewHeight - 10, std::max(22, textSize.cy + 8));
+  const int left = static_cast<int>(preview.left) + (previewWidth - width) / 2;
+  const int top = static_cast<int>(preview.top) + (previewHeight - height) / 2;
+  RECT tag{left, top, left + width, top + height};
+  const HBRUSH brush = CreateSolidBrush(background);
+  const HPEN pen = CreatePen(PS_SOLID, 1, background);
+  const HGDIOBJ previousBrush = SelectObject(draw.hDC, brush);
+  const HGDIOBJ previousPen = SelectObject(draw.hDC, pen);
+  RoundRect(draw.hDC, tag.left, tag.top, tag.right, tag.bottom, height, height);
+  SetTextColor(draw.hDC, text);
+  DrawTextW(draw.hDC, label.c_str(), static_cast<int>(label.size()), &tag, DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_END_ELLIPSIS);
+  SelectObject(draw.hDC, previousBrush);
+  SelectObject(draw.hDC, previousPen);
+  if (previousFont) SelectObject(draw.hDC, previousFont);
+  DeleteObject(brush);
+  DeleteObject(pen);
 }
 
 void RefreshTagManagerList(TagManagerState& state, std::wstring_view selected = {}) {
@@ -1117,11 +1177,31 @@ LRESULT CALLBACK TagManagerProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lp
     return TRUE;
   }
   if (message == WM_CTLCOLORSTATIC || message == WM_CTLCOLORBTN) return DialogControlColor(message, wparam, lparam);
+  if (message == WM_DRAWITEM && state) {
+    const auto* draw = reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
+    if (draw && draw->CtlID == kTagManagerPreview) {
+      DrawTagManagerPreview(*draw, *state);
+      return TRUE;
+    }
+  }
   if (message == WM_COMMAND && state) {
     const int command = LOWORD(wparam);
+    const int notification = HIWORD(wparam);
     if (command == kTagManagerList && HIWORD(wparam) == LBN_SELCHANGE) {
       const int selection = static_cast<int>(SendMessageW(state->list, LB_GETCURSEL, 0, 0));
       SetTagManagerFields(*state, ListBoxText(state->list, selection));
+      return 0;
+    }
+    if ((command == kTagManagerName || command == kTagManagerBackground || command == kTagManagerText) && notification == EN_CHANGE) {
+      UpdateTagManagerPreview(*state);
+      return 0;
+    }
+    if (command == kTagManagerBackgroundPalette) {
+      ChooseTagManagerColor(wnd, *state, state->background, storage::TagStyle{}.background);
+      return 0;
+    }
+    if (command == kTagManagerTextPalette) {
+      ChooseTagManagerColor(wnd, *state, state->text, storage::TagStyle{}.text);
       return 0;
     }
     if (command == kTagManagerNew) {
@@ -1176,7 +1256,7 @@ std::optional<TagManagerResult> EditTagManager(HWND owner, const storage::Databa
   const UINT dpi = owner ? GetDpiForWindow(owner) : GetDpiForSystem();
   constexpr DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP;
   constexpr DWORD extendedStyle = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
-  const SIZE outerSize = DialogOuterSize(owner, 650, 340, style, extendedStyle);
+  const SIZE outerSize = DialogOuterSize(owner, 650, 322, style, extendedStyle);
   HWND dialog = CreateWindowExW(extendedStyle, kTagManagerClass, L"Настройка тегов", style,
       CW_USEDEFAULT, CW_USEDEFAULT, outerSize.cx, outerSize.cy, owner, nullptr, GetModuleHandleW(nullptr), &state);
   if (!dialog) {
@@ -1192,21 +1272,206 @@ std::optional<TagManagerResult> EditTagManager(HWND owner, const storage::Databa
     SetControlFont(control, font);
     return control;
   };
-  create(0, L"STATIC", L"Теги", 0, 14, 14, 240, 20, 0, state.font);
-  state.list = create(WS_EX_CLIENTEDGE, L"LISTBOX", L"", WS_TABSTOP | LBS_NOTIFY | WS_VSCROLL, 14, 38, 240, 224, kTagManagerList, state.font);
-  create(0, L"STATIC", L"Название", 0, 280, 38, 190, 20, 0, state.font);
-  state.name = create(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_TABSTOP | ES_AUTOHSCROLL, 280, 60, 340, 25, kTagManagerName, state.font);
-  create(0, L"STATIC", L"Цвет фона (#RRGGBB)", 0, 280, 100, 190, 20, 0, state.font);
-  state.background = create(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_TABSTOP | ES_AUTOHSCROLL, 280, 122, 160, 25, kTagManagerBackground, state.font);
-  create(0, L"STATIC", L"Цвет текста (#RRGGBB)", 0, 460, 100, 160, 20, 0, state.font);
-  state.text = create(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_TABSTOP | ES_AUTOHSCROLL, 460, 122, 160, 25, kTagManagerText, state.font);
-  create(0, L"STATIC", L"Цвета задаются прямо в этой форме. Изменение названия применяется ко всем базам с этим тегом.", 0, 280, 164, 340, 42, 0, state.font);
-  create(0, L"BUTTON", L"Новый", WS_TABSTOP, 280, 220, 92, 28, kTagManagerNew, state.button_font ? state.button_font : state.font);
-  create(0, L"BUTTON", L"Сохранить тег", WS_TABSTOP, 382, 220, 130, 28, kTagManagerSave, state.button_font ? state.button_font : state.font);
-  create(0, L"BUTTON", L"Удалить", WS_TABSTOP, 522, 220, 98, 28, kTagManagerDelete, state.button_font ? state.button_font : state.font);
-  create(0, L"BUTTON", L"Готово", WS_TABSTOP | BS_DEFPUSHBUTTON, 438, 278, 86, 28, IDOK, state.button_font ? state.button_font : state.font);
-  create(0, L"BUTTON", L"Отмена", WS_TABSTOP, 534, 278, 86, 28, IDCANCEL, state.button_font ? state.button_font : state.font);
+  create(0, L"STATIC", L"Теги", 0, 10, 10, 230, 18, 0, state.font);
+  state.list = create(WS_EX_CLIENTEDGE, L"LISTBOX", L"", WS_TABSTOP | LBS_NOTIFY | WS_VSCROLL, 10, 30, 230, 234, kTagManagerList, state.font);
+  create(0, L"STATIC", L"Параметры тега", 0, 270, 10, 200, 18, 0, state.font);
+  create(0, L"STATIC", L"Название", 0, 270, 32, 370, 18, 0, state.font);
+  state.name = create(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_TABSTOP | ES_AUTOHSCROLL, 270, 51, 370, 25, kTagManagerName, state.font);
+  create(0, L"STATIC", L"Цвет фона", 0, 270, 87, 190, 18, 0, state.font);
+  state.background = create(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_TABSTOP | ES_AUTOHSCROLL, 270, 106, 190, 25, kTagManagerBackground, state.font);
+  create(0, L"BUTTON", L"Выбрать…", WS_TABSTOP, 470, 105, 170, 27, kTagManagerBackgroundPalette, state.button_font ? state.button_font : state.font);
+  create(0, L"STATIC", L"Цвет текста", 0, 270, 143, 190, 18, 0, state.font);
+  state.text = create(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_TABSTOP | ES_AUTOHSCROLL, 270, 162, 190, 25, kTagManagerText, state.font);
+  create(0, L"BUTTON", L"Выбрать…", WS_TABSTOP, 470, 161, 170, 27, kTagManagerTextPalette, state.button_font ? state.button_font : state.font);
+  create(0, L"STATIC", L"Предпросмотр", 0, 270, 199, 370, 18, 0, state.font);
+  state.preview = create(WS_EX_CLIENTEDGE, L"STATIC", L"", SS_OWNERDRAW, 270, 218, 370, 47, kTagManagerPreview, state.font);
+  create(0, L"BUTTON", L"Новый", WS_TABSTOP, 10, 278, 108, 28, kTagManagerNew, state.button_font ? state.button_font : state.font);
+  create(0, L"BUTTON", L"Удалить", WS_TABSTOP, 128, 278, 112, 28, kTagManagerDelete, state.button_font ? state.button_font : state.font);
+  create(0, L"BUTTON", L"Сохранить тег", WS_TABSTOP, 270, 278, 122, 28, kTagManagerSave, state.button_font ? state.button_font : state.font);
+  create(0, L"BUTTON", L"Готово", WS_TABSTOP | BS_DEFPUSHBUTTON, 450, 278, 90, 28, IDOK, state.button_font ? state.button_font : state.font);
+  create(0, L"BUTTON", L"Отмена", WS_TABSTOP, 550, 278, 90, 28, IDCANCEL, state.button_font ? state.button_font : state.font);
   RefreshTagManagerList(state);
+  PositionDialogNearOwner(dialog, owner);
+  ShowWindow(dialog, SW_SHOW);
+  SetFocus(state.list);
+  MSG message{};
+  int result = 1;
+  while (!state.done && (result = GetMessageW(&message, nullptr, 0, 0)) > 0) {
+    if (!IsDialogMessageW(dialog, &message)) { TranslateMessage(&message); DispatchMessageW(&message); }
+  }
+  if (IsWindow(dialog)) DestroyWindow(dialog);
+  if (result == 0) PostQuitMessage(static_cast<int>(message.wParam));
+  RestoreModalOwner(owner);
+  if (state.font) DeleteObject(state.font);
+  if (state.button_font) DeleteObject(state.button_font);
+  return state.result;
+}
+
+enum TagAssignmentControl : int {
+  kTagAssignmentList = 1750,
+  kTagAssignmentName,
+  kTagAssignmentAdd
+};
+
+struct TagAssignmentState {
+  HWND list{};
+  HWND name{};
+  HFONT font{};
+  HFONT button_font{};
+  const storage::TagStyles* styles{};
+  std::optional<std::vector<std::wstring>> result;
+  bool done{false};
+};
+
+int AddTagAssignmentItem(TagAssignmentState& state, std::wstring_view tag, bool checked) {
+  const std::wstring value(tag);
+  LVITEMW item{};
+  item.mask = LVIF_TEXT;
+  item.iItem = ListView_GetItemCount(state.list);
+  item.pszText = value.data();
+  const int row = ListView_InsertItem(state.list, &item);
+  if (row >= 0) ListView_SetCheckState(state.list, row, checked);
+  return row;
+}
+
+bool AddTagAssignmentEntry(HWND dialog, TagAssignmentState& state) {
+  const std::wstring name = TrimText(ReadControlText(state.name));
+  if (name.empty()) {
+    Message(dialog, L"Укажите название нового тега.", L"Теги базы", MB_OK | MB_ICONWARNING);
+    return false;
+  }
+  const int count = ListView_GetItemCount(state.list);
+  for (int row = 0; row < count; ++row) {
+    if (!EqualNoCase(ListViewText(state.list, row, 0), name)) continue;
+    ListView_SetCheckState(state.list, row, TRUE);
+    ListView_SetItemState(state.list, row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_EnsureVisible(state.list, row, FALSE);
+    SetWindowTextW(state.name, L"");
+    return true;
+  }
+  const int row = AddTagAssignmentItem(state, name, true);
+  if (row < 0) {
+    Message(dialog, L"Не удалось добавить тег в список.", L"Теги базы", MB_OK | MB_ICONERROR);
+    return false;
+  }
+  ListView_SetItemState(state.list, row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+  ListView_EnsureVisible(state.list, row, FALSE);
+  SetWindowTextW(state.name, L"");
+  return true;
+}
+
+std::vector<std::wstring> SelectedAssignmentTags(const TagAssignmentState& state) {
+  std::vector<std::wstring> result;
+  const int count = ListView_GetItemCount(state.list);
+  for (int row = 0; row < count; ++row) {
+    if (ListView_GetCheckState(state.list, row)) result.push_back(ListViewText(state.list, row, 0));
+  }
+  return result;
+}
+
+LRESULT CALLBACK TagAssignmentProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam) {
+  auto* state = reinterpret_cast<TagAssignmentState*>(GetWindowLongPtrW(wnd, GWLP_USERDATA));
+  if (message == WM_NCCREATE) {
+    SetWindowLongPtrW(wnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(reinterpret_cast<CREATESTRUCTW*>(lparam)->lpCreateParams));
+    return TRUE;
+  }
+  if (message == WM_CTLCOLORSTATIC || message == WM_CTLCOLORBTN) return DialogControlColor(message, wparam, lparam);
+  if (message == WM_NOTIFY && state) {
+    const auto* header = reinterpret_cast<const NMHDR*>(lparam);
+    if (header && header->idFrom == kTagAssignmentList && header->code == NM_CUSTOMDRAW) {
+      auto* draw = reinterpret_cast<NMLVCUSTOMDRAW*>(lparam);
+      if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
+      if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
+        const std::wstring tag = ListViewText(state->list, static_cast<int>(draw->nmcd.dwItemSpec), 0);
+        const auto* configured = state->styles ? TagStyleFor(*state->styles, tag) : nullptr;
+        const storage::TagStyle style = configured ? *configured : storage::TagStyle{};
+        draw->clrTextBk = style.background;
+        draw->clrText = style.text;
+        return CDRF_DODEFAULT;
+      }
+    }
+  }
+  if (message == WM_COMMAND && state) {
+    const int command = LOWORD(wparam);
+    if (command == kTagAssignmentAdd) {
+      AddTagAssignmentEntry(wnd, *state);
+      return 0;
+    }
+    if (command == IDOK) {
+      state->result = SelectedAssignmentTags(*state);
+      state->done = true;
+      DestroyWindow(wnd);
+      return 0;
+    }
+    if (command == IDCANCEL) {
+      state->done = true;
+      DestroyWindow(wnd);
+      return 0;
+    }
+  }
+  if (message == WM_CLOSE && state) {
+    state->done = true;
+    DestroyWindow(wnd);
+    return 0;
+  }
+  return DefWindowProcW(wnd, message, wparam, lparam);
+}
+
+std::optional<std::vector<std::wstring>> EditTagAssignment(HWND owner, const std::vector<std::wstring>& assigned,
+    const storage::DatabaseTags& tags, const storage::TagStyles& styles) {
+  TagAssignmentState state;
+  state.styles = &styles;
+  static ATOM atom = [] {
+    WNDCLASSW klass{};
+    klass.hInstance = GetModuleHandleW(nullptr);
+    klass.lpszClassName = kTagAssignmentClass;
+    klass.lpfnWndProc = TagAssignmentProc;
+    klass.hCursor = LoadCursor(nullptr, IDC_ARROW);
+    klass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
+    return RegisterClassW(&klass);
+  }();
+  (void)atom;
+  if (owner) EnableWindow(owner, FALSE);
+  const UINT dpi = owner ? GetDpiForWindow(owner) : GetDpiForSystem();
+  constexpr DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP;
+  constexpr DWORD extendedStyle = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
+  const SIZE outerSize = DialogOuterSize(owner, 500, 358, style, extendedStyle);
+  HWND dialog = CreateWindowExW(extendedStyle, kTagAssignmentClass, L"Теги базы", style,
+      CW_USEDEFAULT, CW_USEDEFAULT, outerSize.cx, outerSize.cy, owner, nullptr, GetModuleHandleW(nullptr), &state);
+  if (!dialog) {
+    RestoreModalOwner(owner);
+    return std::nullopt;
+  }
+  state.font = CreateUiFont(dialog, 9, FW_NORMAL);
+  state.button_font = CreateUiFont(dialog, 9, FW_SEMIBOLD);
+  const auto px = [dpi](int logical) { return ScaleForDpi(logical, dpi); };
+  const HWND caption = CreateWindowW(L"STATIC", L"Отметьте существующие теги или быстро добавьте новый.", WS_CHILD | WS_VISIBLE,
+      px(10), px(10), px(480), px(18), dialog, nullptr, nullptr, nullptr);
+  state.list = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
+      px(10), px(31), px(480), px(219), dialog, reinterpret_cast<HMENU>(kTagAssignmentList), nullptr, nullptr);
+  const HWND newCaption = CreateWindowW(L"STATIC", L"Новый тег", WS_CHILD | WS_VISIBLE,
+      px(10), px(261), px(330), px(18), dialog, nullptr, nullptr, nullptr);
+  state.name = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
+      px(10), px(280), px(340), px(25), dialog, reinterpret_cast<HMENU>(kTagAssignmentName), nullptr, nullptr);
+  const HWND add = CreateWindowW(L"BUTTON", L"Добавить и отметить", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+      px(360), px(279), px(130), px(27), dialog, reinterpret_cast<HMENU>(kTagAssignmentAdd), nullptr, nullptr);
+  const HWND accept = CreateWindowW(L"BUTTON", L"Готово", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
+      px(310), px(320), px(82), px(28), dialog, reinterpret_cast<HMENU>(IDOK), nullptr, nullptr);
+  const HWND cancel = CreateWindowW(L"BUTTON", L"Отмена", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
+      px(402), px(320), px(88), px(28), dialog, reinterpret_cast<HMENU>(IDCANCEL), nullptr, nullptr);
+  SetControlFont(caption, state.font);
+  SetControlFont(newCaption, state.font);
+  SetControlFont(state.list, state.font);
+  SetControlFont(state.name, state.font);
+  SetControlFont(add, state.button_font ? state.button_font : state.font);
+  SetControlFont(accept, state.button_font ? state.button_font : state.font);
+  SetControlFont(cancel, state.button_font ? state.button_font : state.font);
+  ListView_SetExtendedListViewStyle(state.list, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
+  LVCOLUMNW column{};
+  column.mask = LVCF_WIDTH;
+  column.cx = px(454);
+  ListView_InsertColumn(state.list, 0, &column);
+  for (const auto& tag : KnownTags(tags, styles)) AddTagAssignmentItem(state, tag, ContainsTag(assigned, tag));
   PositionDialogNearOwner(dialog, owner);
   ShowWindow(dialog, SW_SHOW);
   SetFocus(state.list);
@@ -1301,7 +1566,7 @@ std::optional<std::wstring> SelectCatalogFolder(HWND owner, const std::vector<ca
   const UINT dpi = owner ? GetDpiForWindow(owner) : GetDpiForSystem();
   constexpr DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP;
   constexpr DWORD extendedStyle = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
-  const SIZE outerSize = DialogOuterSize(owner, 460, 440, style, extendedStyle);
+  const SIZE outerSize = DialogOuterSize(owner, 440, 400, style, extendedStyle);
   HWND dialog = CreateWindowExW(extendedStyle, kFolderPickerClass, L"Переместить в папку", style,
       CW_USEDEFAULT, CW_USEDEFAULT, outerSize.cx, outerSize.cy, owner, nullptr, GetModuleHandleW(nullptr), &state);
   if (!dialog) {
@@ -1312,13 +1577,13 @@ std::optional<std::wstring> SelectCatalogFolder(HWND owner, const std::vector<ca
   state.button_font = CreateUiFont(dialog, 9, FW_SEMIBOLD);
   const auto px = [dpi](int logical) { return ScaleForDpi(logical, dpi); };
   const HWND caption = CreateWindowW(L"STATIC", L"Выберите папку, в которую нужно переместить базу:", WS_CHILD | WS_VISIBLE,
-      px(14), px(14), px(420), px(20), dialog, nullptr, nullptr, nullptr);
+      px(10), px(10), px(420), px(18), dialog, nullptr, nullptr, nullptr);
   state.tree = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS,
-      px(14), px(40), px(420), px(310), dialog, reinterpret_cast<HMENU>(kFolderPickerTree), nullptr, nullptr);
+      px(10), px(32), px(420), px(315), dialog, reinterpret_cast<HMENU>(kFolderPickerTree), nullptr, nullptr);
   const HWND accept = CreateWindowW(L"BUTTON", L"Переместить", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-      px(246), px(370), px(92), px(28), dialog, reinterpret_cast<HMENU>(IDOK), nullptr, nullptr);
+      px(236), px(360), px(92), px(28), dialog, reinterpret_cast<HMENU>(IDOK), nullptr, nullptr);
   const HWND cancel = CreateWindowW(L"BUTTON", L"Отмена", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-      px(348), px(370), px(86), px(28), dialog, reinterpret_cast<HMENU>(IDCANCEL), nullptr, nullptr);
+      px(338), px(360), px(92), px(28), dialog, reinterpret_cast<HMENU>(IDCANCEL), nullptr, nullptr);
   SetControlFont(caption, state.font);
   SetControlFont(state.tree, state.font);
   SetControlFont(accept, state.button_font ? state.button_font : state.font);
@@ -1981,14 +2246,23 @@ LRESULT MainWindow::DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const {
 
   RECT labelRect{};
   if (!TreeView_GetItemRect(tree_, item, &labelRect, TRUE)) return CDRF_DODEFAULT;
-  if (settings_.show_tags_in_list && catalog_ && TreeItemData(tree_, item) == 0) {
+  if (catalog_ && TreeItemData(tree_, item) == 0) {
     if (const auto* entry = catalog_->Find(label); entry && entry->IsDatabase()) {
       const auto& tags = TagsFor(tags_, *entry);
-      if (!tags.empty()) {
+      const bool tagMatchesSearch = !search_filter_.empty() && std::any_of(tags.begin(), tags.end(), [&](const auto& tag) {
+        return utf::FindNoCaseOrdinal(tag, search_filter_) != std::wstring_view::npos;
+      });
+      if (!tags.empty() && (settings_.show_tags_in_list || tagMatchesSearch)) {
         RECT client{};
         GetClientRect(tree_, &client);
         const int saved = SaveDC(draw->nmcd.hdc);
         const HFONT font = controls_font_ ? controls_font_ : reinterpret_cast<HFONT>(SendMessageW(tree_, WM_GETFONT, 0, 0));
+        HFONT boldFont{};
+        LOGFONTW boldDescription{};
+        if (font && GetObjectW(font, static_cast<int>(sizeof(boldDescription)), &boldDescription) == static_cast<int>(sizeof(boldDescription))) {
+          boldDescription.lfWeight = FW_BOLD;
+          boldFont = CreateFontIndirectW(&boldDescription);
+        }
         if (font) SelectObject(draw->nmcd.hdc, font);
         SetBkMode(draw->nmcd.hdc, TRANSPARENT);
         int x = labelRect.right + 8;
@@ -1996,9 +2270,30 @@ LRESULT MainWindow::DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const {
         const int height = std::max(16, labelHeight - 2);
         const int y = static_cast<int>(labelRect.top) + (labelHeight - height) / 2;
         for (const auto& tag : tags) {
-          SIZE textSize{};
-          GetTextExtentPoint32W(draw->nmcd.hdc, tag.c_str(), static_cast<int>(tag.size()), &textSize);
-          const int width = textSize.cx + 14;
+          const bool matches = !search_filter_.empty() && utf::FindNoCaseOrdinal(tag, search_filter_) != std::wstring_view::npos;
+          if (!settings_.show_tags_in_list && !matches) continue;
+          const auto measure = [&](std::wstring_view fragment, HFONT selectedFont) {
+            SIZE size{};
+            const HGDIOBJ previous = selectedFont ? SelectObject(draw->nmcd.hdc, selectedFont) : nullptr;
+            GetTextExtentPoint32W(draw->nmcd.hdc, fragment.data(), static_cast<int>(fragment.size()), &size);
+            if (previous) SelectObject(draw->nmcd.hdc, previous);
+            return size.cx;
+          };
+          int textWidth = 0;
+          if (matches) {
+            size_t start = 0;
+            size_t match = utf::FindNoCaseOrdinal(tag, search_filter_, start);
+            while (match != std::wstring_view::npos) {
+              textWidth += measure(std::wstring_view(tag).substr(start, match - start), font);
+              textWidth += measure(std::wstring_view(tag).substr(match, search_filter_.size()), boldFont ? boldFont : font);
+              start = match + search_filter_.size();
+              match = utf::FindNoCaseOrdinal(tag, search_filter_, start);
+            }
+            textWidth += measure(std::wstring_view(tag).substr(start), font);
+          } else {
+            textWidth = measure(tag, font);
+          }
+          const int width = textWidth + 14;
           if (x + width > client.right - 4) break;
           const auto* configured = TagStyleFor(tag_styles_, tag);
           const storage::TagStyle style = configured ? *configured : storage::TagStyle{};
@@ -2011,13 +2306,36 @@ LRESULT MainWindow::DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const {
             SelectObject(draw->nmcd.hdc, oldBrush);
             SelectObject(draw->nmcd.hdc, oldPen);
             SetTextColor(draw->nmcd.hdc, style.text);
-            RECT textRect{x + 7, y, x + width - 7, y + height};
-            DrawTextW(draw->nmcd.hdc, tag.c_str(), static_cast<int>(tag.size()), &textRect, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            int textX = x + 7;
+            const auto drawSegment = [&](std::wstring_view fragment, HFONT selectedFont) {
+              if (fragment.empty()) return;
+              const HGDIOBJ previous = selectedFont ? SelectObject(draw->nmcd.hdc, selectedFont) : nullptr;
+              SIZE size{};
+              GetTextExtentPoint32W(draw->nmcd.hdc, fragment.data(), static_cast<int>(fragment.size()), &size);
+              RECT textRect{textX, y, textX + size.cx, y + height};
+              DrawTextW(draw->nmcd.hdc, fragment.data(), static_cast<int>(fragment.size()), &textRect, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+              textX += size.cx;
+              if (previous) SelectObject(draw->nmcd.hdc, previous);
+            };
+            if (matches) {
+              size_t start = 0;
+              size_t match = utf::FindNoCaseOrdinal(tag, search_filter_, start);
+              while (match != std::wstring_view::npos) {
+                drawSegment(std::wstring_view(tag).substr(start, match - start), font);
+                drawSegment(std::wstring_view(tag).substr(match, search_filter_.size()), boldFont ? boldFont : font);
+                start = match + search_filter_.size();
+                match = utf::FindNoCaseOrdinal(tag, search_filter_, start);
+              }
+              drawSegment(std::wstring_view(tag).substr(start), font);
+            } else {
+              drawSegment(tag, font);
+            }
           }
           if (brush) DeleteObject(brush);
           if (pen) DeleteObject(pen);
           x += width + 4;
         }
+        if (boldFont) DeleteObject(boldFont);
         RestoreDC(draw->nmcd.hdc, saved);
       }
     }
@@ -2405,21 +2723,25 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   append(database, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор", L"F4");
   separator();
   append(database, favorite, kToggleFavorite, IDI_ACTION_FAVORITE, favorite ? L"Убрать из избранного" : L"Добавить в избранное", L"Ctrl+Alt+I");
-  append(database && !settings_.simple_mode, false, kEditTags, IDI_ACTION_EDIT, L"Изменить теги…");
   if (database && !settings_.simple_mode) {
     HMENU tagMenu = CreatePopupMenu();
     if (tagMenu) {
+      AppendMenuW(tagMenu, MF_STRING, kEditTags, L"Изменить назначение тегов…");
+      AppendMenuW(tagMenu, MF_SEPARATOR, 0, nullptr);
       const auto& assigned = TagsFor(tags_, *entry);
+      bool hasAvailableTags = false;
       for (const auto& tag : KnownTags(tags_, tag_styles_)) {
         if (ContainsTag(assigned, tag)) continue;
         const UINT command = kQuickTag1 + static_cast<UINT>(quick_tags.size());
         quick_tags.push_back(tag);
         AppendMenuW(tagMenu, MF_STRING, command, tag.c_str());
+        hasAvailableTags = true;
       }
-      if (quick_tags.empty()) AppendMenuW(tagMenu, MF_STRING | MF_GRAYED, 0, L"Нет доступных тегов");
+      if (!hasAvailableTags) AppendMenuW(tagMenu, MF_STRING | MF_GRAYED, 0, L"Нет доступных тегов для добавления");
       AppendMenuW(tagMenu, MF_SEPARATOR, 0, nullptr);
       AppendMenuW(tagMenu, MF_STRING, kNewTagForSelected, L"Новый тег…");
-      AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(tagMenu), L"Добавить тег");
+      AppendMenuW(tagMenu, MF_STRING, kConfigureTagColors, L"Настроить теги…");
+      AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(tagMenu), L"Теги");
     }
   }
   append(editable, false, kEdit, IDI_ACTION_EDIT, L"Изменить…", L"F2");
@@ -2723,11 +3045,11 @@ void MainWindow::EditSelectedTags() {
     Message(window_, L"Выберите информационную базу для изменения тегов.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
     return;
   }
-  const auto entered = InputBox(window_, L"Теги базы", L"Теги через запятую:", TagsText(TagsFor(tags_, *entry)));
-  if (!entered) return;
+  const auto edited = EditTagAssignment(window_, TagsFor(tags_, *entry), tags_, tag_styles_);
+  if (!edited) return;
 
   const auto previous = tags_;
-  const auto values = ParseTags(*entered);
+  const auto& values = *edited;
   if (values.empty()) tags_.erase(TagId(*entry));
   else tags_[TagId(*entry)] = values;
   try {
