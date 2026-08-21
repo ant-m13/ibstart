@@ -451,6 +451,14 @@ void ShowAdvancedParameterHelp(HWND owner, int command) {
   }
   Message(owner, text, title, MB_OK | MB_ICONINFORMATION);
 }
+
+void RestoreModalOwner(HWND owner) {
+  if (!owner || !IsWindow(owner)) return;
+  EnableWindow(owner, TRUE);
+  // The owner shares this UI thread; activation restores input without forcing the app to the foreground.
+  SetActiveWindow(owner);
+}
+
 void CreateAdvancedDatabaseOptionsControls(HWND dialog, AdvancedDatabaseOptionsState& state) {
   const UINT dpi = GetDpiForWindow(dialog);
   const auto px = [dpi](int logical) { return ScaleForDpi(logical, dpi); };
@@ -557,7 +565,7 @@ std::optional<DatabaseEditorData> EditAdvancedDatabaseOptions(HWND owner, Databa
   HWND dialog = CreateWindowExW(extendedStyle, kAdvancedDatabaseOptionsClass, L"Дополнительные настройки базы", style,
       CW_USEDEFAULT, CW_USEDEFAULT, outerSize.cx, outerSize.cy, owner, nullptr, GetModuleHandleW(nullptr), &state);
   if (!dialog) {
-    if (owner) EnableWindow(owner, TRUE);
+    RestoreModalOwner(owner);
     return std::nullopt;
   }
   state.font = CreateUiFont(dialog, 9, FW_NORMAL);
@@ -573,7 +581,7 @@ std::optional<DatabaseEditorData> EditAdvancedDatabaseOptions(HWND owner, Databa
   }
   if (IsWindow(dialog)) DestroyWindow(dialog);
   if (pumpResult == 0) PostQuitMessage(static_cast<int>(message.wParam));
-  if (owner) { EnableWindow(owner, TRUE); SetForegroundWindow(owner); }
+  RestoreModalOwner(owner);
   if (state.font) DeleteObject(state.font);
   if (state.button_font) DeleteObject(state.button_font);
   return state.result;
@@ -712,7 +720,7 @@ std::optional<DatabaseEditorData> EditDatabase(HWND owner, std::wstring_view tit
       style, CW_USEDEFAULT, CW_USEDEFAULT, outerSize.cx, outerSize.cy,
       owner, nullptr, GetModuleHandleW(nullptr), &state);
   if (!dialog) {
-    if (owner) EnableWindow(owner, TRUE);
+    RestoreModalOwner(owner);
     return std::nullopt;
   }
   state.font = CreateUiFont(dialog, 9, FW_NORMAL);
@@ -728,7 +736,7 @@ std::optional<DatabaseEditorData> EditDatabase(HWND owner, std::wstring_view tit
   }
   if (IsWindow(dialog)) DestroyWindow(dialog);
   if (pumpResult == 0) PostQuitMessage(static_cast<int>(message.wParam));
-  if (owner) { EnableWindow(owner, TRUE); SetForegroundWindow(owner); }
+  RestoreModalOwner(owner);
   if (state.font) DeleteObject(state.font);
   if (state.button_font) DeleteObject(state.button_font);
   return state.result;
@@ -798,7 +806,7 @@ std::optional<std::wstring> InputBox(HWND owner, std::wstring_view title, std::w
   HWND dialog = CreateWindowExW(extendedStyle, kInputBoxClass, std::wstring(title).c_str(), style,
       CW_USEDEFAULT, CW_USEDEFAULT, outerSize.cx, outerSize.cy, owner, nullptr, GetModuleHandleW(nullptr), &state);
   if (!dialog) {
-    EnableWindow(owner, TRUE);
+    RestoreModalOwner(owner);
     return std::nullopt;
   }
   state.font = CreateUiFont(dialog, 9, FW_NORMAL);
@@ -819,7 +827,7 @@ std::optional<std::wstring> InputBox(HWND owner, std::wstring_view title, std::w
   while (!state.done && (result = GetMessageW(&message, nullptr, 0, 0)) > 0) { if (!IsDialogMessageW(dialog, &message)) { TranslateMessage(&message); DispatchMessageW(&message); } }
   if (IsWindow(dialog)) DestroyWindow(dialog);
   if (result == 0) PostQuitMessage(static_cast<int>(message.wParam));
-  EnableWindow(owner, TRUE); SetForegroundWindow(owner);
+  RestoreModalOwner(owner);
   if (state.font) DeleteObject(state.font);
   if (state.button_font) DeleteObject(state.button_font);
   return state.result;
