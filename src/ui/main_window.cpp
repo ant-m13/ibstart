@@ -21,6 +21,7 @@
 #include <filesystem>
 #include <functional>
 #include <initializer_list>
+#include <limits>
 #include <memory>
 #include <sstream>
 #include <stdexcept>
@@ -39,6 +40,7 @@ constexpr int kMinimumWindowHeight = 460;
 enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kCopyDetailValue, kCopyDetailPair, kEditTags, kConfigureTagColors, kFolderSortDefault, kFolderSortCatalog, kFolderSortName, kFolderSortLastLaunch, kFavorite1 = 200 };
 enum TreeImage : int { kFileDatabaseImage, kServerDatabaseImage, kFolderImage, kFavoriteImage, kRecentImage };
 constexpr LPARAM kRecentRootItemData = 1;
+constexpr LPARAM kFavoritesRootItemData = 2;
 
 void Message(HWND owner, std::wstring_view text, std::wstring_view title = L"ИБ Старт", UINT type = MB_OK | MB_ICONINFORMATION) { MessageBoxW(owner, std::wstring(text).c_str(), std::wstring(title).c_str(), type); }
 HICON LoadResourceIcon(HINSTANCE instance, int resource, int size) {
@@ -122,6 +124,21 @@ std::wstring ReadControlText(HWND control) {
   GetWindowTextW(control, result.data(), length + 1);
   result.resize(static_cast<size_t>(length));
   return result;
+}
+std::wstring TreeItemName(HWND tree, HTREEITEM item) {
+  if (!tree || !item) return {};
+  wchar_t text[512]{};
+  TVITEMW data{}; data.mask = TVIF_TEXT; data.hItem = item; data.pszText = text; data.cchTextMax = 512;
+  return TreeView_GetItem(tree, &data) ? text : L"";
+}
+LPARAM TreeItemData(HWND tree, HTREEITEM item) {
+  if (!tree || !item) return 0;
+  TVITEMW data{}; data.mask = TVIF_PARAM; data.hItem = item;
+  return TreeView_GetItem(tree, &data) ? data.lParam : 0;
+}
+bool IsVirtualTreeBranch(HWND tree, HTREEITEM item) {
+  for (auto current = item; current; current = TreeView_GetParent(tree, current)) if (TreeItemData(tree, current) != 0) return true;
+  return false;
 }
 void SetControlFont(HWND control, HFONT font) {
   if (control && font) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
@@ -951,6 +968,7 @@ MainWindow::MainWindow(HINSTANCE instance, std::filesystem::path executable, sto
     : instance_(instance), executable_(std::move(executable)), layout_(std::move(layout)), settings_(std::move(settings)),
       logger_(layout_.root / L"logs"), initial_launch_id_(std::move(launch_id)) {}
 MainWindow::~MainWindow() {
+  CancelTreeDrag();
   if (window_ && IsWindow(window_)) DestroyWindow(window_);
   ClearContextMenuItems();
   for (const auto images : button_images_) if (images) ImageList_Destroy(images);
@@ -1035,7 +1053,16 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       return 0;
     }
     case WM_SETFOCUS: SetFocus(search_); return 0;
-    case WM_KEYDOWN: if (wparam == VK_F3) { LaunchSelected(domain::LaunchMode::enterprise); return 0; } if (wparam == VK_F4) { LaunchSelected(domain::LaunchMode::designer); return 0; } break;
+    case WM_KEYDOWN:
+      if (wparam == VK_ESCAPE && !dragging_name_.empty()) {
+        CancelTreeDrag();
+        if (GetCapture() == window_) ReleaseCapture();
+        SetStatus(L"Перемещение отменено.");
+        return 0;
+      }
+      if (wparam == VK_F3) { LaunchSelected(domain::LaunchMode::enterprise); return 0; }
+      if (wparam == VK_F4) { LaunchSelected(domain::LaunchMode::designer); return 0; }
+      break;
     case WM_COMMAND:
       if (reinterpret_cast<HWND>(lparam) == search_ && HIWORD(wparam) == EN_CHANGE) { PopulateTree(); return 0; }
       if (reinterpret_cast<HWND>(lparam) == tag_filter_ && HIWORD(wparam) == CBN_SELCHANGE) { PopulateTree(); return 0; }
@@ -1058,7 +1085,16 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
         const auto* notification = reinterpret_cast<NMHDR*>(lparam);
         if (notification->code == NM_CUSTOMDRAW) return DrawTreeSearchMatches(reinterpret_cast<NMTVCUSTOMDRAW*>(lparam));
         if (notification->code == TVN_SELCHANGEDW) { DisplaySelected(); return 0; }
-        if (notification->code == TVN_BEGINDRAGW) { const auto* drag = reinterpret_cast<NMTREEVIEWW*>(lparam); TreeView_SelectItem(tree_, drag->itemNew.hItem); dragging_name_ = SelectedName(); SetCapture(window_); return 0; }
+        if (notification->code == TVN_KEYDOWN) {
+          const auto* key = reinterpret_cast<NMTVKEYDOWN*>(lparam);
+          if (key->wVKey == VK_ESCAPE && !dragging_name_.empty()) {
+            CancelTreeDrag();
+            if (GetCapture() == window_) ReleaseCapture();
+            SetStatus(L"Перемещение отменено.");
+            return 0;
+          }
+        }
+        if (notification->code == TVN_BEGINDRAGW) { const auto* drag = reinterpret_cast<NMTREEVIEWW*>(lparam); BeginTreeDrag(drag->itemNew.hItem, drag->ptDrag); return 0; }
       }
       if (lparam && reinterpret_cast<NMHDR*>(lparam)->hwndFrom == details_) {
         const auto* notification = reinterpret_cast<NMHDR*>(lparam);
@@ -1098,25 +1134,16 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
     case WM_DRAWITEM:
       if (lparam && DrawContextMenuItem(reinterpret_cast<const DRAWITEMSTRUCT*>(lparam))) return TRUE;
       break;
+    case WM_MOUSEMOVE:
+      if (!dragging_name_.empty()) { UpdateTreeDrag({GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)}); return 0; }
+      break;
     case WM_LBUTTONUP:
-      if (!dragging_name_.empty() && catalog_) {
-        ReleaseCapture(); TVHITTESTINFO hit{}; hit.pt = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)}; MapWindowPoints(window_, tree_, &hit.pt, 1); TreeView_HitTest(tree_, &hit);
-        if (hit.hItem) {
-          TreeView_SelectItem(tree_, hit.hItem);
-          const auto target = SelectedName();
-          if (!target.empty() && target != dragging_name_) {
-            const auto* dragged = catalog_->Find(dragging_name_);
-            const auto* targetEntry = catalog_->Find(target);
-            if (dragged && targetEntry && targetEntry->IsGroup()) {
-              const bool manualSource = SortModeForFolder(catalog_->ParentOf(dragging_name_)) == storage::SortMode::catalog_order;
-              const bool manualTarget = SortModeForFolder(target) == storage::SortMode::catalog_order;
-              if (!manualSource || !manualTarget) SetStatus(L"Перетаскивание доступно только при исходном порядке списка.");
-              else if (catalog_->Move(dragging_name_, target, 0)) { SaveCatalog(); PopulateTree(); }
-            }
-          }
-        }
-        dragging_name_.clear(); return 0;
-      } break;
+      if (!dragging_name_.empty()) { EndTreeDrag({GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)}); return 0; }
+      break;
+    case WM_CANCELMODE:
+    case WM_CAPTURECHANGED:
+      if (!dragging_name_.empty()) CancelTreeDrag();
+      break;
     case WM_COPYDATA: {
       const auto* data = reinterpret_cast<const COPYDATASTRUCT*>(lparam);
       if (!data || data->dwData != kLaunchCopyData || !data->lpData || data->cbData < sizeof(wchar_t) || data->cbData % sizeof(wchar_t) != 0) return FALSE;
@@ -1445,6 +1472,18 @@ std::vector<catalog::TreeItem> MainWindow::SortedTree() const {
   SortTreeItems(items, L"");
   return items;
 }
+std::optional<size_t> MainWindow::CatalogPosition(std::wstring_view name, std::wstring_view parent) const {
+  if (!catalog_) return std::nullopt;
+  const auto find = [&](auto&& self, const std::vector<catalog::TreeItem>& items, std::wstring_view currentParent) -> std::optional<size_t> {
+    if (EqualNoCase(currentParent, parent)) {
+      for (size_t index = 0; index < items.size(); ++index) if (EqualNoCase(items[index].name, name)) return index;
+      return std::nullopt;
+    }
+    for (const auto& item : items) if (!item.database) if (const auto position = self(self, item.children, item.name)) return position;
+    return std::nullopt;
+  };
+  return find(find, catalog_->Tree(), L"");
+}
 void MainWindow::SetDefaultSortMode(storage::SortMode mode) {
   if (sort_settings_.default_mode == mode) return;
   const auto previous = sort_settings_;
@@ -1515,7 +1554,7 @@ void MainWindow::PopulateTree() {
       }
       if (any) TreeView_Expand(tree_, rootHandle, TVE_EXPAND); else TreeView_DeleteItem(tree_, rootHandle);
     };
-    addSpecialRoot(L"Избранное", storage::LoadFavorites(layout_), kFavoriteImage);
+    addSpecialRoot(L"Избранное", storage::LoadFavorites(layout_), kFavoriteImage, kFavoritesRootItemData);
     std::vector<std::wstring> recent;
     for (const auto& history : storage::LoadHistory(layout_)) for (const auto* entry : catalog_->Databases()) if (entry->ValueOr(L"ID", entry->name) == history.database_id) { recent.push_back(entry->name); break; }
     addSpecialRoot(L"Недавние", recent, kRecentImage, kRecentRootItemData);
@@ -1676,8 +1715,136 @@ void MainWindow::ClearContextMenuItems() noexcept {
   context_menu_items_.clear();
 }
 
-std::wstring MainWindow::SelectedName() const { const auto item = TreeView_GetSelection(tree_); if (!item) return {}; wchar_t text[512]{}; TVITEMW data{}; data.mask = TVIF_TEXT; data.hItem = item; data.pszText = text; data.cchTextMax = 512; return TreeView_GetItem(tree_, &data) ? text : L""; }
-bool MainWindow::SelectedItemIsRecentRoot() const { const auto item = TreeView_GetSelection(tree_); if (!item) return false; TVITEMW data{}; data.mask = TVIF_PARAM; data.hItem = item; return TreeView_GetItem(tree_, &data) && data.lParam == kRecentRootItemData; }
+std::wstring MainWindow::SelectedName() const { return TreeItemName(tree_, TreeView_GetSelection(tree_)); }
+bool MainWindow::SelectedItemIsRecentRoot() const { return TreeItemData(tree_, TreeView_GetSelection(tree_)) == kRecentRootItemData; }
+void MainWindow::BeginTreeDrag(HTREEITEM item, POINT treePoint) {
+  if (!tree_ || !catalog_ || !item || TreeItemData(tree_, item) != 0) return;
+  TreeView_SelectItem(tree_, item);
+  dragging_name_ = SelectedName();
+  if (dragging_name_.empty() || !catalog_->Find(dragging_name_)) { dragging_name_.clear(); return; }
+  drag_image_ = TreeView_CreateDragImage(tree_, item);
+  if (drag_image_) {
+    if (ImageList_BeginDrag(drag_image_, 0, 0, 0)) ImageList_DragEnter(tree_, treePoint.x, treePoint.y);
+    else { ImageList_Destroy(drag_image_); drag_image_ = nullptr; }
+  }
+  SetCapture(window_);
+  MapWindowPoints(tree_, window_, &treePoint, 1);
+  UpdateTreeDrag(treePoint);
+}
+void MainWindow::UpdateTreeDrag(POINT windowPoint) {
+  if (dragging_name_.empty() || !catalog_ || !tree_) return;
+  POINT treePoint = windowPoint;
+  MapWindowPoints(window_, tree_, &treePoint, 1);
+  if (drag_image_) ImageList_DragMove(treePoint.x, treePoint.y);
+
+  const auto* dragged = catalog_->Find(dragging_name_);
+  const bool manualSource = dragged && SortModeForFolder(catalog_->ParentOf(dragging_name_)) == storage::SortMode::catalog_order;
+  std::wstring targetName;
+  bool targetIsGroup = false;
+  bool insertAfter = false;
+  bool toRoot = false;
+  HTREEITEM targetItem{};
+
+  RECT bounds{};
+  if (dragged && GetClientRect(tree_, &bounds) && PtInRect(&bounds, treePoint)) {
+    TVHITTESTINFO hit{}; hit.pt = treePoint;
+    TreeView_HitTest(tree_, &hit);
+    if (!hit.hItem) {
+      toRoot = manualSource && SortModeForFolder(L"") == storage::SortMode::catalog_order;
+    } else if (!IsVirtualTreeBranch(tree_, hit.hItem)) {
+      targetName = TreeItemName(tree_, hit.hItem);
+      const auto* target = catalog_->Find(targetName);
+      if (!target || EqualNoCase(target->name, dragged->name)) targetName.clear();
+      else {
+        targetIsGroup = target->IsGroup();
+        const auto targetParent = targetIsGroup ? target->name : catalog_->ParentOf(target->name);
+        bool cycle = false;
+        if (dragged->IsGroup()) {
+          std::wstring ancestor = targetParent;
+          for (size_t depth = 0; !ancestor.empty() && depth != 1000; ++depth) {
+            if (EqualNoCase(ancestor, dragged->name)) { cycle = true; break; }
+            const auto next = catalog_->ParentOf(ancestor);
+            if (next.empty() || EqualNoCase(next, ancestor)) break;
+            ancestor = next;
+          }
+        }
+        if (!manualSource || SortModeForFolder(targetParent) != storage::SortMode::catalog_order || cycle) targetName.clear();
+        else {
+          targetItem = hit.hItem;
+          if (!targetIsGroup) {
+            RECT itemBounds{};
+            if (TreeView_GetItemRect(tree_, hit.hItem, &itemBounds, TRUE)) insertAfter = treePoint.y >= (itemBounds.top + itemBounds.bottom) / 2;
+          }
+        }
+      }
+    }
+  }
+
+  TreeView_SelectDropTarget(tree_, targetName.empty() || !targetIsGroup ? nullptr : targetItem);
+  TreeView_SetInsertMark(tree_, targetName.empty() || targetIsGroup ? nullptr : targetItem, insertAfter);
+  drag_target_name_ = std::move(targetName);
+  drag_insert_after_ = insertAfter;
+  drag_to_root_ = toRoot;
+  if (drag_to_root_) SetStatus(L"Отпустите мышь, чтобы переместить в корень списка.");
+  else if (!drag_target_name_.empty() && targetIsGroup) SetStatus(L"Отпустите мышь, чтобы переместить в группу: " + drag_target_name_);
+  else if (!drag_target_name_.empty()) SetStatus(L"Отпустите мышь, чтобы вставить " + std::wstring(drag_insert_after_ ? L"после: " : L"перед: ") + drag_target_name_);
+  else if (!manualSource) SetStatus(L"Перетаскивание доступно только при исходном порядке списка.");
+  else SetStatus(L"Наведите указатель на базу, группу или свободное место дерева.");
+}
+void MainWindow::EndTreeDrag(POINT windowPoint) {
+  if (dragging_name_.empty()) return;
+  UpdateTreeDrag(windowPoint);
+  const auto draggedName = std::move(dragging_name_);
+  const auto targetName = std::move(drag_target_name_);
+  const bool insertAfter = drag_insert_after_;
+  const bool toRoot = drag_to_root_;
+  CancelTreeDrag();
+  if (GetCapture() == window_) ReleaseCapture();
+  if (!catalog_ || (!toRoot && targetName.empty())) { SetStatus(L"Перемещение отменено."); return; }
+
+  const auto* dragged = catalog_->Find(draggedName);
+  if (!dragged) return;
+  const auto sourceParent = catalog_->ParentOf(draggedName);
+  if (SortModeForFolder(sourceParent) != storage::SortMode::catalog_order) { SetStatus(L"Перетаскивание доступно только при исходном порядке списка."); return; }
+
+  std::wstring targetParent;
+  size_t position = std::numeric_limits<size_t>::max();
+  if (!toRoot) {
+    const auto* target = catalog_->Find(targetName);
+    if (!target || EqualNoCase(target->name, draggedName)) { SetStatus(L"Перемещение отменено."); return; }
+    targetParent = target->IsGroup() ? target->name : catalog_->ParentOf(target->name);
+    if (!target->IsGroup()) {
+      const auto targetPosition = CatalogPosition(target->name, targetParent);
+      if (!targetPosition) { SetStatus(L"Не удалось определить место вставки."); return; }
+      position = *targetPosition + (insertAfter ? 1 : 0);
+    }
+  }
+  if (SortModeForFolder(targetParent) != storage::SortMode::catalog_order) { SetStatus(L"Перетаскивание доступно только при исходном порядке списка."); return; }
+  if (position != std::numeric_limits<size_t>::max() && EqualNoCase(sourceParent, targetParent)) {
+    if (const auto sourcePosition = CatalogPosition(draggedName, sourceParent); sourcePosition && *sourcePosition < position) --position;
+  }
+  if (!catalog_->Move(draggedName, targetParent, position)) { SetStatus(L"Перемещение невозможно: нельзя поместить группу внутрь самой себя."); return; }
+  SaveCatalog();
+  PopulateTree();
+  SelectTreeItem(draggedName);
+  SetStatus(targetParent.empty() ? L"Элемент перемещён в корень списка." : L"Элемент перемещён: " + draggedName);
+}
+void MainWindow::CancelTreeDrag() {
+  if (tree_ && IsWindow(tree_)) {
+    TreeView_SelectDropTarget(tree_, nullptr);
+    TreeView_SetInsertMark(tree_, nullptr, FALSE);
+  }
+  if (drag_image_) {
+    if (tree_ && IsWindow(tree_)) ImageList_DragLeave(tree_);
+    ImageList_EndDrag();
+    ImageList_Destroy(drag_image_);
+    drag_image_ = nullptr;
+  }
+  dragging_name_.clear();
+  drag_target_name_.clear();
+  drag_insert_after_ = false;
+  drag_to_root_ = false;
+}
 void MainWindow::CopySelectedDetail(bool include_name) {
   const int row = details_ ? ListView_GetNextItem(details_, -1, LVNI_SELECTED) : -1;
   if (row < 0) {
@@ -1762,8 +1929,10 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   }
 
   const auto name = SelectedName();
+  const auto selectedItem = TreeView_GetSelection(tree_);
+  const bool specialRoot = TreeItemData(tree_, selectedItem) != 0;
   const bool recentRoot = SelectedItemIsRecentRoot();
-  const auto* entry = recentRoot ? nullptr : catalog_->Find(name);
+  const auto* entry = specialRoot ? nullptr : catalog_->Find(name);
   const bool database = entry && entry->IsDatabase();
   const bool group = entry && entry->IsGroup();
   const bool editable = entry && !settings_.simple_mode;
@@ -1844,7 +2013,7 @@ void MainWindow::DisplaySelected() {
   if (!details_) return;
   ListView_DeleteAllItems(details_);
   const auto name = SelectedName();
-  const auto* entry = catalog_ ? catalog_->Find(name) : nullptr;
+  const auto* entry = catalog_ && TreeItemData(tree_, TreeView_GetSelection(tree_)) == 0 ? catalog_->Find(name) : nullptr;
   if (!entry) {
     SetWindowTextW(details_title_, name.empty() ? L"Выберите базу или группу" : name.c_str());
     SetWindowTextW(details_subtitle_, name.empty() ? L"Сведения появятся здесь" : L"Служебный раздел списка");

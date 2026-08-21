@@ -56,6 +56,11 @@ class MainWindow {
   void ClearContextMenuItems() noexcept;
   [[nodiscard]] std::wstring SelectedName() const;
   [[nodiscard]] bool SelectedItemIsRecentRoot() const;
+  void BeginTreeDrag(HTREEITEM item, POINT tree_point);
+  void UpdateTreeDrag(POINT window_point);
+  void EndTreeDrag(POINT window_point);
+  void CancelTreeDrag();
+  [[nodiscard]] std::optional<size_t> CatalogPosition(std::wstring_view name, std::wstring_view parent) const;
   bool SelectTreeItem(std::wstring_view name);
   void ShowTreeContextMenu(POINT screen);
   void ShowDetailsContextMenu(POINT screen);
@@ -106,6 +111,7 @@ class MainWindow {
   HFONT details_subtitle_font_{};
   HFONT details_key_font_{};
   HIMAGELIST tree_images_{};
+  HIMAGELIST drag_image_{};
   std::vector<HIMAGELIST> button_images_;
   std::vector<ContextMenuItem> context_menu_items_;
   std::filesystem::path executable_;
@@ -124,6 +130,9 @@ class MainWindow {
   std::optional<std::wstring> initial_launch_id_;
   std::wstring search_filter_;
   std::wstring dragging_name_;
+  std::wstring drag_target_name_;
+  bool drag_insert_after_{false};
+  bool drag_to_root_{false};
 };
 
 }  // namespace ibstart::ui
