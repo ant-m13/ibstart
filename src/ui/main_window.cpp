@@ -1816,7 +1816,10 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       if (wparam == VK_F4) { LaunchSelected(domain::LaunchMode::designer); return 0; }
       break;
     case WM_COMMAND:
-      if (reinterpret_cast<HWND>(lparam) == search_ && HIWORD(wparam) == EN_CHANGE) { PopulateTree(); return 0; }
+      if (reinterpret_cast<HWND>(lparam) == search_ && HIWORD(wparam) == EN_CHANGE) {
+        if (!suppress_search_refresh_) PopulateTree();
+        return 0;
+      }
       if (reinterpret_cast<HWND>(lparam) == connection_ && HIWORD(wparam) == EN_SETFOCUS) { SendMessageW(connection_, EM_SETSEL, 0, -1); return 0; }
       if (reinterpret_cast<HWND>(lparam) == tag_filter_ && HIWORD(wparam) == CBN_SELCHANGE) { PopulateTree(); return 0; }
       if (reinterpret_cast<HWND>(lparam) == sort_mode_ && HIWORD(wparam) == CBN_SELCHANGE) {
@@ -1926,7 +1929,9 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       const size_t length = data->cbData / sizeof(wchar_t);
       if (value[length - 1] != L'\0') return FALSE;
       initial_launch_id_ = std::wstring(value, length - 1);
+      suppress_search_refresh_ = true;
       SetWindowTextW(search_, L"");
+      suppress_search_refresh_ = false;
       PopulateTree();
       Activate();
       return TRUE;
