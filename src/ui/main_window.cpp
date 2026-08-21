@@ -2395,9 +2395,9 @@ void MainWindow::PopulateTree() {
     }
     AddTreeItems(SortedTree(), TVI_ROOT, filter);
   }
-  if (initial_launch_id_) {
+  if (initial_launch_id_ && catalog_) {
     auto wanted = *initial_launch_id_; initial_launch_id_.reset();
-    if (catalog_) for (const auto* entry : catalog_->Databases()) if (entry->ValueOr(L"ID", entry->name) == wanted) { wanted = entry->name; break; }
+    for (const auto* entry : catalog_->Databases()) if (entry->ValueOr(L"ID", entry->name) == wanted) { wanted = entry->name; break; }
     if (SelectTreeItem(wanted)) {
       logger_.Info(L"Выбрана база по ярлыку: " + wanted);
       // During application startup the main window receives focus after WM_CREATE.
