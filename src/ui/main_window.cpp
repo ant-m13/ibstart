@@ -226,11 +226,16 @@ std::wstring BuildConnection(DatabaseConnectionKind kind, std::wstring_view orig
     append(L"Srvr=" + QuoteConnectionValue(std::wstring(server)));
     append(L"Ref=" + QuoteConnectionValue(std::wstring(reference)));
   }
-  // A legacy direct URL (https://host/base) becomes WS="…" above.  It has no
-  // key, so treating it as an unknown fragment would append the original URL
-  // after the new WS field and produce an invalid Connect value.
-  if (kind == DatabaseConnectionKind::web && catalog::IsBareWebConnection(original)) return result;
+  bool firstFragment = true;
   for (const auto& part : SplitConnection(original)) {
+    // A legacy direct URL (https://host/base) becomes WS="…" above. It has no
+    // key, so it must not be copied as an unknown fragment. Keep every later
+    // fragment, including vendor-specific values such as Custom=keep.
+    if (kind == DatabaseConnectionKind::web && firstFragment && catalog::IsBareWebConnection(part)) {
+      firstFragment = false;
+      continue;
+    }
+    firstFragment = false;
     const size_t separator = part.find(L'=');
     const auto key = separator == std::wstring::npos ? std::wstring_view{} : std::wstring_view(part).substr(0, separator);
     if (EqualNoCase(TrimText(key), L"File") || EqualNoCase(TrimText(key), L"WS") ||
