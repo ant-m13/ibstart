@@ -350,6 +350,12 @@ void Catalog::Renumber(std::wstring_view parent) {
 
 std::optional<std::wstring> Catalog::WebUrl(std::wstring_view connect) {
   auto direct = Trim(connect);
+  // In the legacy form the URL is the first, unkeyed connection fragment.
+  // Later fragments still belong to Connect (for example, Custom=keep), not
+  // to the browser URL.
+  if (const size_t separator = direct.find(L';'); separator != std::wstring::npos) {
+    direct = Trim(std::wstring_view(direct).substr(0, separator));
+  }
   if (direct.size() >= 7 && (_wcsnicmp(direct.c_str(), L"http://", 7) == 0 ||
       (direct.size() >= 8 && _wcsnicmp(direct.c_str(), L"https://", 8) == 0))) return direct;
 

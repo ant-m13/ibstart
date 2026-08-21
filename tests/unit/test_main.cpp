@@ -135,6 +135,9 @@ void TestCatalogOrderingAndCycles() {
   const auto url = ibstart::catalog::Catalog::WebUrl(L"WS=\"https://example.test/base\";WA=1");
   CHECK(url && *url == L"https://example.test/base"); CHECK(!ibstart::catalog::Catalog::IsWebConnection(L"WS=not-a-url"));
   CHECK(ibstart::catalog::IsBareWebConnection(L" https://example.test/base "));
+  const auto legacyUrl = ibstart::catalog::Catalog::WebUrl(L"https://example.test/base;Custom=keep");
+  CHECK(legacyUrl && *legacyUrl == L"https://example.test/base");
+  CHECK(!ibstart::catalog::IsBareWebConnection(L"https://example.test/base;Custom=keep"));
   CHECK(!ibstart::catalog::IsBareWebConnection(L"WS=\"https://example.test/base\""));
 }
 
