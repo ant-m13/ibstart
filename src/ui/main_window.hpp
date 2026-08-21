@@ -41,6 +41,8 @@ class MainWindow {
   void PopulateTree();
   void AddTreeItems(const std::vector<catalog::TreeItem>& items, HTREEITEM parent, std::wstring_view filter);
   [[nodiscard]] bool ItemMatches(const catalog::TreeItem& item, std::wstring_view filter) const;
+  [[nodiscard]] bool ItemMatchesTagFilter(const catalog::TreeItem& item) const;
+  void RefreshTagFilter();
   LRESULT DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const;
   LRESULT DrawDetailsList(NMLVCUSTOMDRAW* draw) const;
   bool MeasureContextMenuItem(MEASUREITEMSTRUCT* measure) const;
@@ -58,6 +60,7 @@ class MainWindow {
   void AddServerDatabase(std::wstring parent = {});
   void AddGroup(std::wstring parent = {});
   void EditSelected();
+  void EditSelectedTags();
   void DeleteSelected();
   void MoveSelected(int offset);
   void ClearSelectedCache();
@@ -77,6 +80,7 @@ class MainWindow {
   HINSTANCE instance_{};
   HWND window_{};
   HWND search_{};
+  HWND tag_filter_{};
   HWND tree_{};
   HWND details_title_{};
   HWND details_subtitle_{};
@@ -102,7 +106,10 @@ class MainWindow {
   logging::Logger logger_;
   std::optional<v8i::V8iFileStore> store_;
   std::optional<catalog::Catalog> catalog_;
+  storage::DatabaseTags tags_;
   std::vector<domain::PlatformInstallation> platforms_;
+  std::vector<std::wstring> filter_tags_;
+  std::vector<std::wstring> filter_favorites_;
   std::optional<std::wstring> initial_launch_id_;
   std::wstring search_filter_;
   std::wstring dragging_name_;
