@@ -3,6 +3,7 @@
 #include "core/domain/utf.hpp"
 #include "core/launcher/command_builder.hpp"
 #include "core/logging/logging.hpp"
+#include "core/scanner/file_base_scanner.hpp"
 #include "core/storage/storage.hpp"
 #include "core/v8i/v8i_file_store.hpp"
 
@@ -199,6 +200,25 @@ void TestStandardFolderPaths() {
   CHECK(treeOrder.size() > 1 && treeOrder.front().name == L"Second");
 }
 
+void TestFileBaseScanRegistration() {
+  const auto root = Temp(L"scanner");
+  const auto quoted = root / L"quoted";
+  const auto plain = root / L"plain";
+  std::filesystem::create_directories(quoted);
+  std::filesystem::create_directories(plain);
+  WriteBytes(quoted / L"1Cv8.1CD", "");
+  WriteBytes(plain / L"1Cv8.1CD", "");
+  const auto contents = L"[Quoted]\nConnect= FILE = \"" + quoted.wstring() + L"\" ;\n" +
+      L"[Plain]\nConnect=File=" + plain.wstring() + L";\n";
+  ibstart::catalog::Catalog catalog(ibstart::v8i::V8iDocument::ParseUtf8(ibstart::utf::ToUtf8(contents)));
+  std::atomic_bool cancelled = false;
+  const auto found = ibstart::scanner::FindFileBases({root}, catalog, cancelled);
+  CHECK(found.size() == 2);
+  CHECK(std::all_of(found.begin(), found.end(), [](const auto& item) { return item.already_registered; }));
+  std::error_code error;
+  std::filesystem::remove_all(root, error);
+}
+
 void TestSecretMasking() {
   const auto masked = ibstart::logging::MaskSecrets(L"/N admin /P \"s3cret\" --token=abc password=xyz /Password hunter2");
   CHECK(masked.find(L"s3cret") == std::wstring::npos); CHECK(masked.find(L"abc") == std::wstring::npos); CHECK(masked.find(L"xyz") == std::wstring::npos); CHECK(masked.find(L"hunter2") == std::wstring::npos); CHECK(masked.find(L"admin") != std::wstring::npos);
@@ -231,6 +251,7 @@ int wmain() {
   run(L"CommandBuilderAndSelection", TestCommandBuilderAndSelection);
   run(L"CatalogOrderingAndCycles", TestCatalogOrderingAndCycles);
   run(L"StandardFolderPaths", TestStandardFolderPaths);
+  run(L"FileBaseScanRegistration", TestFileBaseScanRegistration);
   run(L"SecretMasking", TestSecretMasking);
   run(L"PortableMode", TestPortableMode);
   if (failures) { std::wcerr << failures << L" test(s) failed\n"; return 1; }
