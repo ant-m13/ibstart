@@ -43,6 +43,7 @@ constexpr wchar_t kTagAssignmentClass[] = L"IBStart.TagAssignment";
 constexpr wchar_t kFolderPickerClass[] = L"IBStart.FolderPicker";
 constexpr UINT kActivateMessage = WM_APP + 23;
 constexpr UINT kUpdateCheckFinishedMessage = WM_APP + 24;
+constexpr UINT kFocusShortcutSelectionMessage = WM_APP + 25;
 constexpr ULONG_PTR kLaunchCopyData = 0x49425354;
 constexpr int kMinimumWindowWidth = 940;
 constexpr int kMinimumSimpleWindowWidth = 520;
@@ -1932,6 +1933,9 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
     }
     case kActivateMessage: Activate(); return 0;
     case kUpdateCheckFinishedMessage: CompleteUpdateCheck(); return 0;
+    case kFocusShortcutSelectionMessage:
+      if (tree_) SetFocus(tree_);
+      return 0;
     case WM_CLOSE:
       settings_.selected_entry = SelectedName();
       DestroyWindow(window);
@@ -2389,7 +2393,15 @@ void MainWindow::PopulateTree() {
   if (initial_launch_id_) {
     auto wanted = *initial_launch_id_; initial_launch_id_.reset();
     if (catalog_) for (const auto* entry : catalog_->Databases()) if (entry->ValueOr(L"ID", entry->name) == wanted) { wanted = entry->name; break; }
-    SelectTreeItem(wanted);
+    if (SelectTreeItem(wanted)) {
+      logger_.Info(L"Выбрана база по ярлыку: " + wanted);
+      // During application startup the main window receives focus after WM_CREATE.
+      // Posting this message makes the shortcut target the active tree row both for
+      // a new instance and for an already running instance.
+      PostMessageW(window_, kFocusShortcutSelectionMessage, 0, 0);
+    } else {
+      logger_.Error(L"Не найдена база для ярлыка с идентификатором: " + wanted);
+    }
   }
   DisplaySelected();
 }
