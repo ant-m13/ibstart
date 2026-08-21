@@ -187,18 +187,6 @@ std::optional<SortMode> ParseSortMode(int value) {
   return static_cast<SortMode>(value);
 }
 
-void SaveLastLaunchTimes(const StorageLayout& layout, const LastLaunchTimes& launches) {
-  std::string json = "[\n";
-  size_t written = 0;
-  for (const auto& [id, timestamp] : launches) {
-    if (id.empty()) continue;
-    if (written++) json += ",\n";
-    json += "  {\"id\": \"" + Escape(id) + "\", \"time\": " + std::to_string(std::chrono::system_clock::to_time_t(timestamp)) + "}";
-  }
-  json += "\n]\n";
-  WriteAtomically(PathFor(layout, L"last-launches.json"), json);
-}
-
 }  // namespace
 
 StorageLayout ResolveLayout(const std::filesystem::path& executable_path) {
@@ -267,94 +255,38 @@ void SaveSettings(const StorageLayout& layout, const Settings& settings) {
   WriteAtomically(PathFor(layout, L"settings.json"), json);
 }
 
-std::vector<domain::HistoryItem> LoadHistory(const StorageLayout& layout) {
-  std::vector<domain::HistoryItem> result;
-  const std::regex item("\\{\\s*\\\"id\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"time\\\"\\s*:\\s*([0-9]+)\\s*,\\s*\\\"mode\\\"\\s*:\\s*([0-9]+)\\s*\\}");
-  const auto json = ReadFile(PathFor(layout, L"history.json"));
-  for (std::sregex_iterator it(json.begin(), json.end(), item), end; it != end; ++it) {
-    try {
+CatalogState LoadCatalogState(const StorageLayout& layout) {
+  CatalogState result;
+  const auto json = ReadFile(PathFor(layout, L"catalog-state.json"));
+  try {
+    const std::regex favorite("\\\"favorite\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"");
+    for (std::sregex_iterator it(json.begin(), json.end(), favorite), end; it != end; ++it) result.favorites.push_back(Unescape((*it)[1].str()));
+
+    const std::regex history("\\{\\s*\\\"history_id\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"time\\\"\\s*:\\s*([0-9]+)\\s*,\\s*\\\"mode\\\"\\s*:\\s*([0-9]+)\\s*\\}");
+    for (std::sregex_iterator it(json.begin(), json.end(), history), end; it != end; ++it) {
       const int mode = std::stoi((*it)[3].str());
-      if (mode < static_cast<int>(domain::LaunchMode::enterprise) || mode > static_cast<int>(domain::LaunchMode::web_client)) continue;
-      result.push_back({Unescape((*it)[1].str()), std::chrono::system_clock::from_time_t(std::stoll((*it)[2].str())), static_cast<domain::LaunchMode>(mode)});
-    } catch (...) {}
-  }
-  return result;
-}
+      if (mode >= static_cast<int>(domain::LaunchMode::enterprise) && mode <= static_cast<int>(domain::LaunchMode::web_client)) {
+        result.history.push_back({Unescape((*it)[1].str()), std::chrono::system_clock::from_time_t(std::stoll((*it)[2].str())), static_cast<domain::LaunchMode>(mode)});
+      }
+    }
 
-void AppendHistory(const StorageLayout& layout, domain::HistoryItem item) {
-  const auto id = item.database_id;
-  const auto timestamp = item.timestamp;
-  auto history = LoadHistory(layout);
-  history.erase(std::remove_if(history.begin(), history.end(), [&](const auto& existing) { return existing.database_id == item.database_id; }), history.end());
-  history.insert(history.begin(), std::move(item));
-  if (history.size() > 20) history.resize(20);
-  std::string json = "[\n";
-  for (size_t index = 0; index < history.size(); ++index) {
-    const auto& record = history[index];
-    json += "  {\"id\": \"" + Escape(record.database_id) + "\", \"time\": " + std::to_string(std::chrono::system_clock::to_time_t(record.timestamp)) + ", \"mode\": " + std::to_string(static_cast<int>(record.mode)) + "}";
-    json += index + 1 == history.size() ? "\n" : ",\n";
-  }
-  json += "]\n";
-  WriteAtomically(PathFor(layout, L"history.json"), json);
-  if (!id.empty()) {
-    auto launches = LoadLastLaunchTimes(layout);
-    launches[id] = timestamp;
-    SaveLastLaunchTimes(layout, launches);
-  }
-}
-
-void ClearHistory(const StorageLayout& layout) {
-  WriteAtomically(PathFor(layout, L"history.json"), "[]\n");
-}
-
-LastLaunchTimes LoadLastLaunchTimes(const StorageLayout& layout) {
-  LastLaunchTimes result;
-  const std::regex item("\\{\\s*\\\"id\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"time\\\"\\s*:\\s*([0-9]+)\\s*\\}");
-  const auto json = ReadFile(PathFor(layout, L"last-launches.json"));
-  for (std::sregex_iterator it(json.begin(), json.end(), item), end; it != end; ++it) {
-    try {
+    const std::regex launch("\\{\\s*\\\"last_launch_id\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"time\\\"\\s*:\\s*([0-9]+)\\s*\\}");
+    for (std::sregex_iterator it(json.begin(), json.end(), launch), end; it != end; ++it) {
       const auto id = Unescape((*it)[1].str());
-      if (!id.empty()) result[id] = std::chrono::system_clock::from_time_t(std::stoll((*it)[2].str()));
-    } catch (...) {}
-  }
-  for (const auto& history : LoadHistory(layout)) {
-    if (!history.database_id.empty() && !result.contains(history.database_id)) result[history.database_id] = history.timestamp;
-  }
-  return result;
-}
+      if (!id.empty()) result.last_launches[id] = std::chrono::system_clock::from_time_t(std::stoll((*it)[2].str()));
+    }
 
-std::vector<std::wstring> LoadFavorites(const StorageLayout& layout) {
-  std::vector<std::wstring> result;
-  const std::regex item("\\\"((?:\\\\.|[^\\\"])*)\\\"");
-  const auto json = ReadFile(PathFor(layout, L"favorites.json"));
-  for (std::sregex_iterator it(json.begin(), json.end(), item), end; it != end; ++it) {
-    try { result.push_back(Unescape((*it)[1].str())); } catch (...) {}
-  }
-  return result;
-}
-
-void SaveFavorites(const StorageLayout& layout, const std::vector<std::wstring>& favorites) {
-  std::string json = "[";
-  for (size_t index = 0; index < favorites.size(); ++index) { if (index) json += ", "; json += "\"" + Escape(favorites[index]) + "\""; }
-  json += "]\n";
-  WriteAtomically(PathFor(layout, L"favorites.json"), json);
-}
-
-DatabaseTags LoadTags(const StorageLayout& layout) {
-  DatabaseTags result;
-  const auto json = ReadFile(PathFor(layout, L"tags.json"));
-  size_t position = 0;
-  while (position < json.size()) {
-    while (position < json.size() && json[position] != '{') ++position;
-    if (position == json.size()) break;
-    ++position;
-    try {
+    size_t position = 0;
+    while (position < json.size()) {
+      while (position < json.size() && json[position] != '{') ++position;
+      if (position == json.size()) break;
+      ++position;
       const auto idKey = ReadJsonRawString(json, position);
-      if (!idKey || *idKey != "id" || !ConsumeJsonCharacter(json, position, ':')) continue;
+      if (!idKey || *idKey != "tag_id" || !ConsumeJsonCharacter(json, position, ':')) continue;
       const auto rawId = ReadJsonRawString(json, position);
       if (!rawId || !ConsumeJsonCharacter(json, position, ',')) continue;
-      const auto tagsKey = ReadJsonRawString(json, position);
-      if (!tagsKey || *tagsKey != "tags" || !ConsumeJsonCharacter(json, position, ':') || !ConsumeJsonCharacter(json, position, '[')) continue;
+      const auto valuesKey = ReadJsonRawString(json, position);
+      if (!valuesKey || *valuesKey != "values" || !ConsumeJsonCharacter(json, position, ':') || !ConsumeJsonCharacter(json, position, '[')) continue;
       std::vector<std::wstring> values;
       for (;;) {
         SkipJsonWhitespace(json, position);
@@ -370,86 +302,101 @@ DatabaseTags LoadTags(const StorageLayout& layout) {
       }
       if (!ConsumeJsonCharacter(json, position, '}')) continue;
       const auto id = Unescape(*rawId);
-      if (id.empty()) continue;
-      if (!values.empty()) result[id] = std::move(values);
-    } catch (...) {}
+      if (!id.empty() && !values.empty()) result.tags[id] = std::move(values);
+    }
+
+    const std::regex style("\\{\\s*\\\"tag_style\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"background\\\"\\s*:\\s*([0-9]+)\\s*,\\s*\\\"text\\\"\\s*:\\s*([0-9]+)\\s*\\}");
+    for (std::sregex_iterator it(json.begin(), json.end(), style), end; it != end; ++it) {
+      const auto tag = Unescape((*it)[1].str());
+      const auto background = std::stoul((*it)[2].str());
+      const auto text = std::stoul((*it)[3].str());
+      if (!tag.empty() && background <= 0xFFFFFFu && text <= 0xFFFFFFu) result.tag_styles[tag] = {static_cast<COLORREF>(background), static_cast<COLORREF>(text)};
+    }
+
+    if (const auto mode = JsonInteger(json, "default_sort_mode")) if (const auto parsed = ParseSortMode(*mode)) result.sorting.default_mode = *parsed;
+    const std::regex folder("\\{\\s*\\\"folder\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"mode\\\"\\s*:\\s*([0-9]+)\\s*\\}");
+    for (std::sregex_iterator it(json.begin(), json.end(), folder), end; it != end; ++it) {
+      const auto name = Unescape((*it)[1].str());
+      if (const auto mode = ParseSortMode(std::stoi((*it)[2].str())); !name.empty() && mode) result.sorting.folder_modes[name] = *mode;
+    }
+  } catch (...) {
+    return CatalogState{};
   }
+  for (const auto& history : result.history) if (!history.database_id.empty() && !result.last_launches.contains(history.database_id)) result.last_launches[history.database_id] = history.timestamp;
   return result;
 }
 
-void SaveTags(const StorageLayout& layout, const DatabaseTags& tags) {
-  std::string json = "[\n";
+void SaveCatalogState(const StorageLayout& layout, const CatalogState& state) {
+  std::string json = "{\n  \"schema_version\": 1,\n  \"favorites\": [";
+  for (size_t index = 0; index < state.favorites.size(); ++index) {
+    if (index) json += ", ";
+    json += "{\"favorite\": \"" + Escape(state.favorites[index]) + "\"}";
+  }
+  json += "],\n  \"history\": [";
+  for (size_t index = 0; index < state.history.size(); ++index) {
+    const auto& record = state.history[index];
+    if (index) json += ", ";
+    json += "{\"history_id\": \"" + Escape(record.database_id) + "\", \"time\": " + std::to_string(std::chrono::system_clock::to_time_t(record.timestamp)) + ", \"mode\": " + std::to_string(static_cast<int>(record.mode)) + "}";
+  }
+  json += "],\n  \"last_launches\": [";
   size_t written = 0;
-  for (const auto& [id, values] : tags) {
+  for (const auto& [id, timestamp] : state.last_launches) {
+    if (id.empty()) continue;
+    if (written++) json += ", ";
+    json += "{\"last_launch_id\": \"" + Escape(id) + "\", \"time\": " + std::to_string(std::chrono::system_clock::to_time_t(timestamp)) + "}";
+  }
+  json += "],\n  \"tags\": [";
+  written = 0;
+  for (const auto& [id, values] : state.tags) {
     if (id.empty() || values.empty()) continue;
-    if (written++) json += ",\n";
-    json += "  {\"id\": \"" + Escape(id) + "\", \"tags\": [";
+    if (written++) json += ", ";
+    json += "{\"tag_id\": \"" + Escape(id) + "\", \"values\": [";
     for (size_t index = 0; index < values.size(); ++index) {
       if (index) json += ", ";
       json += "\"" + Escape(values[index]) + "\"";
     }
     json += "]}";
   }
-  json += "\n]\n";
-  WriteAtomically(PathFor(layout, L"tags.json"), json);
-}
-
-TagStyles LoadTagStyles(const StorageLayout& layout) {
-  TagStyles result;
-  const std::regex item("\\{\\s*\\\"tag\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"background\\\"\\s*:\\s*([0-9]+)\\s*,\\s*\\\"text\\\"\\s*:\\s*([0-9]+)\\s*\\}");
-  const auto json = ReadFile(PathFor(layout, L"tag-styles.json"));
-  for (std::sregex_iterator it(json.begin(), json.end(), item), end; it != end; ++it) {
-    try {
-      const auto tag = Unescape((*it)[1].str());
-      const auto background = std::stoul((*it)[2].str());
-      const auto text = std::stoul((*it)[3].str());
-      if (!tag.empty() && background <= 0xFFFFFFu && text <= 0xFFFFFFu) {
-        result[tag] = {static_cast<COLORREF>(background), static_cast<COLORREF>(text)};
-      }
-    } catch (...) {}
-  }
-  return result;
-}
-
-void SaveTagStyles(const StorageLayout& layout, const TagStyles& styles) {
-  std::string json = "[\n";
-  size_t written = 0;
-  for (const auto& [tag, style] : styles) {
+  json += "],\n  \"tag_styles\": [";
+  written = 0;
+  for (const auto& [tag, style] : state.tag_styles) {
     if (tag.empty()) continue;
-    if (written++) json += ",\n";
-    json += "  {\"tag\": \"" + Escape(tag) + "\", \"background\": " + std::to_string(style.background) + ", \"text\": " + std::to_string(style.text) + "}";
+    if (written++) json += ", ";
+    json += "{\"tag_style\": \"" + Escape(tag) + "\", \"background\": " + std::to_string(style.background) + ", \"text\": " + std::to_string(style.text) + "}";
   }
-  json += "\n]\n";
-  WriteAtomically(PathFor(layout, L"tag-styles.json"), json);
-}
-
-SortSettings LoadSortSettings(const StorageLayout& layout) {
-  SortSettings result;
-  const auto json = ReadFile(PathFor(layout, L"sorting.json"));
-  try {
-    if (const auto mode = JsonInteger(json, "default_mode")) {
-      if (const auto parsed = ParseSortMode(*mode)) result.default_mode = *parsed;
-    }
-    const std::regex item("\\{\\s*\\\"folder\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"mode\\\"\\s*:\\s*([0-9]+)\\s*\\}");
-    for (std::sregex_iterator it(json.begin(), json.end(), item), end; it != end; ++it) {
-      const auto folder = Unescape((*it)[1].str());
-      const auto mode = ParseSortMode(std::stoi((*it)[2].str()));
-      if (!folder.empty() && mode) result.folder_modes[folder] = *mode;
-    }
-  } catch (...) {}
-  return result;
-}
-
-void SaveSortSettings(const StorageLayout& layout, const SortSettings& settings) {
-  std::string json = "{\n  \"default_mode\": " + std::to_string(static_cast<int>(settings.default_mode)) + ",\n  \"folders\": [";
-  size_t written = 0;
-  for (const auto& [folder, mode] : settings.folder_modes) {
+  json += "],\n  \"sorting\": {\"default_sort_mode\": " + std::to_string(static_cast<int>(state.sorting.default_mode)) + ", \"folders\": [";
+  written = 0;
+  for (const auto& [folder, mode] : state.sorting.folder_modes) {
     if (folder.empty()) continue;
     if (written++) json += ", ";
     json += "{\"folder\": \"" + Escape(folder) + "\", \"mode\": " + std::to_string(static_cast<int>(mode)) + "}";
   }
-  json += "]\n}\n";
-  WriteAtomically(PathFor(layout, L"sorting.json"), json);
+  json += "]}\n}\n";
+  WriteAtomically(PathFor(layout, L"catalog-state.json"), json);
 }
+
+std::vector<domain::HistoryItem> LoadHistory(const StorageLayout& layout) { return LoadCatalogState(layout).history; }
+
+void AppendHistory(const StorageLayout& layout, domain::HistoryItem item) {
+  auto state = LoadCatalogState(layout);
+  state.history.erase(std::remove_if(state.history.begin(), state.history.end(), [&](const auto& existing) { return existing.database_id == item.database_id; }), state.history.end());
+  const auto id = item.database_id;
+  const auto timestamp = item.timestamp;
+  state.history.insert(state.history.begin(), std::move(item));
+  if (state.history.size() > 20) state.history.resize(20);
+  if (!id.empty()) state.last_launches[id] = timestamp;
+  SaveCatalogState(layout, state);
+}
+
+void ClearHistory(const StorageLayout& layout) { auto state = LoadCatalogState(layout); state.history.clear(); SaveCatalogState(layout, state); }
+LastLaunchTimes LoadLastLaunchTimes(const StorageLayout& layout) { return LoadCatalogState(layout).last_launches; }
+std::vector<std::wstring> LoadFavorites(const StorageLayout& layout) { return LoadCatalogState(layout).favorites; }
+void SaveFavorites(const StorageLayout& layout, const std::vector<std::wstring>& favorites) { auto state = LoadCatalogState(layout); state.favorites = favorites; SaveCatalogState(layout, state); }
+DatabaseTags LoadTags(const StorageLayout& layout) { return LoadCatalogState(layout).tags; }
+void SaveTags(const StorageLayout& layout, const DatabaseTags& tags) { auto state = LoadCatalogState(layout); state.tags = tags; SaveCatalogState(layout, state); }
+TagStyles LoadTagStyles(const StorageLayout& layout) { return LoadCatalogState(layout).tag_styles; }
+void SaveTagStyles(const StorageLayout& layout, const TagStyles& styles) { auto state = LoadCatalogState(layout); state.tag_styles = styles; SaveCatalogState(layout, state); }
+SortSettings LoadSortSettings(const StorageLayout& layout) { return LoadCatalogState(layout).sorting; }
+void SaveSortSettings(const StorageLayout& layout, const SortSettings& settings) { auto state = LoadCatalogState(layout); state.sorting = settings; SaveCatalogState(layout, state); }
 
 }  // namespace ibstart::storage
