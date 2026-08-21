@@ -20,6 +20,7 @@ struct TreeItem {
 // connection key such as WS= and must not be preserved as an unknown field
 // when an editor rewrites it into the keyed form.
 [[nodiscard]] bool IsBareWebConnection(std::wstring_view connect);
+[[nodiscard]] bool MatchesSearchText(const domain::Entry& entry, std::wstring_view query);
 
 class Catalog {
  public:
