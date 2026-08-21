@@ -67,6 +67,7 @@ class MainWindow {
   void AddGroup(std::wstring parent = {});
   void EditSelected();
   void EditSelectedTags();
+  void ConfigureTagColors();
   void DeleteSelected();
   void MoveSelected(int offset);
   void ClearSelectedCache();
@@ -114,6 +115,7 @@ class MainWindow {
   std::optional<v8i::V8iFileStore> store_;
   std::optional<catalog::Catalog> catalog_;
   storage::DatabaseTags tags_;
+  storage::TagStyles tag_styles_;
   storage::SortSettings sort_settings_;
   storage::LastLaunchTimes last_launches_;
   std::vector<domain::PlatformInstallation> platforms_;

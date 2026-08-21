@@ -394,6 +394,35 @@ void SaveTags(const StorageLayout& layout, const DatabaseTags& tags) {
   WriteAtomically(PathFor(layout, L"tags.json"), json);
 }
 
+TagStyles LoadTagStyles(const StorageLayout& layout) {
+  TagStyles result;
+  const std::regex item("\\{\\s*\\\"tag\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"background\\\"\\s*:\\s*([0-9]+)\\s*,\\s*\\\"text\\\"\\s*:\\s*([0-9]+)\\s*\\}");
+  const auto json = ReadFile(PathFor(layout, L"tag-styles.json"));
+  for (std::sregex_iterator it(json.begin(), json.end(), item), end; it != end; ++it) {
+    try {
+      const auto tag = Unescape((*it)[1].str());
+      const auto background = std::stoul((*it)[2].str());
+      const auto text = std::stoul((*it)[3].str());
+      if (!tag.empty() && background <= 0xFFFFFFu && text <= 0xFFFFFFu) {
+        result[tag] = {static_cast<COLORREF>(background), static_cast<COLORREF>(text)};
+      }
+    } catch (...) {}
+  }
+  return result;
+}
+
+void SaveTagStyles(const StorageLayout& layout, const TagStyles& styles) {
+  std::string json = "[\n";
+  size_t written = 0;
+  for (const auto& [tag, style] : styles) {
+    if (tag.empty()) continue;
+    if (written++) json += ",\n";
+    json += "  {\"tag\": \"" + Escape(tag) + "\", \"background\": " + std::to_string(style.background) + ", \"text\": " + std::to_string(style.text) + "}";
+  }
+  json += "\n]\n";
+  WriteAtomically(PathFor(layout, L"tag-styles.json"), json);
+}
+
 SortSettings LoadSortSettings(const StorageLayout& layout) {
   SortSettings result;
   const auto json = ReadFile(PathFor(layout, L"sorting.json"));

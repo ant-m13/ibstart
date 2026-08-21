@@ -15,6 +15,7 @@
 #include <windowsx.h>
 
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cwctype>
 #include <filesystem>
@@ -35,7 +36,7 @@ constexpr UINT kActivateMessage = WM_APP + 23;
 constexpr ULONG_PTR kLaunchCopyData = 0x49425354;
 constexpr int kMinimumWindowWidth = 940;
 constexpr int kMinimumWindowHeight = 460;
-enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kCopyDetailValue, kCopyDetailPair, kEditTags, kFolderSortDefault, kFolderSortCatalog, kFolderSortName, kFolderSortLastLaunch, kFavorite1 = 200 };
+enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kCopyDetailValue, kCopyDetailPair, kEditTags, kConfigureTagColors, kFolderSortDefault, kFolderSortCatalog, kFolderSortName, kFolderSortLastLaunch, kFavorite1 = 200 };
 enum TreeImage : int { kFileDatabaseImage, kServerDatabaseImage, kFolderImage, kFavoriteImage, kRecentImage };
 constexpr LPARAM kRecentRootItemData = 1;
 
@@ -502,6 +503,21 @@ const std::vector<std::wstring>& TagsFor(const storage::DatabaseTags& tags, cons
   static const std::vector<std::wstring> empty;
   const auto found = tags.find(TagId(entry));
   return found == tags.end() ? empty : found->second;
+}
+const storage::TagStyle* TagStyleFor(const storage::TagStyles& styles, std::wstring_view tag) {
+  if (const auto exact = styles.find(std::wstring(tag)); exact != styles.end()) return &exact->second;
+  const auto found = std::find_if(styles.begin(), styles.end(), [&](const auto& item) { return EqualNoCase(item.first, tag); });
+  return found == styles.end() ? nullptr : &found->second;
+}
+std::optional<COLORREF> ChooseTagColor(HWND owner, COLORREF initial) {
+  std::array<COLORREF, 16> custom{};
+  CHOOSECOLORW dialog{};
+  dialog.lStructSize = sizeof(dialog);
+  dialog.hwndOwner = owner;
+  dialog.rgbResult = initial;
+  dialog.lpCustColors = custom.data();
+  dialog.Flags = CC_FULLOPEN | CC_RGBINIT;
+  return ChooseColorW(&dialog) ? std::optional<COLORREF>(dialog.rgbResult) : std::nullopt;
 }
 bool ContainsTag(const std::vector<std::wstring>& tags, std::wstring_view value) {
   return std::any_of(tags.begin(), tags.end(), [&](const auto& tag) { return EqualNoCase(tag, value); });
@@ -1032,7 +1048,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
         case kEnterprise: LaunchSelected(domain::LaunchMode::enterprise); break; case kDesigner: LaunchSelected(domain::LaunchMode::designer); break;
         case kAddFile: AddFileDatabase(); break; case kAddServer: AddServerDatabase(); break; case kAddGroup: AddGroup(); break; case kOpenList: OpenList(); break; case kRefresh: LoadCatalog(); break;
         case kEdit: EditSelected(); break; case kCache: ClearSelectedCache(); break; case kClearRecent: ClearRecentBases(); break; case kShortcut: CreateShortcut(); break; case kOpenFolder: OpenSelectedFolder(); break; case kDelete: DeleteSelected(); break;
-        case kCopyDetailValue: CopySelectedDetail(false); break; case kCopyDetailPair: CopySelectedDetail(true); break; case kEditTags: EditSelectedTags(); break;
+        case kCopyDetailValue: CopySelectedDetail(false); break; case kCopyDetailPair: CopySelectedDetail(true); break; case kEditTags: EditSelectedTags(); break; case kConfigureTagColors: ConfigureTagColors(); break;
         case kSimpleMode: SetSimpleMode(!settings_.simple_mode); break; case kToggleFavorite: ToggleFavorite(); break; case kFocusSearch: SetFocus(search_); break; case kAbout: ShowAbout(); break;
         case kMoveUp: MoveSelected(-1); break; case kMoveDown: MoveSelected(1); break;
         default: if (LOWORD(wparam) >= kFavorite1 && LOWORD(wparam) < kFavorite1 + 9) LaunchFavorite(LOWORD(wparam) - kFavorite1); break;
@@ -1212,7 +1228,7 @@ void MainWindow::CreateControls() {
   status_ = CreateWindowW(STATUSCLASSNAMEW, L"", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window_, nullptr, instance_, nullptr);
   HMENU menu = CreateMenu(), file = CreatePopupMenu(), view = CreatePopupMenu(), help = CreatePopupMenu();
   AppendMenuW(file, MF_STRING, kOpenList, L"Открыть список баз…\tCtrl+O"); AppendMenuW(file, MF_STRING, kAddFile, L"Добавить файловую базу…\tCtrl+Alt+F"); AppendMenuW(file, MF_STRING, kAddServer, L"Добавить серверную базу…\tCtrl+Alt+S"); AppendMenuW(file, MF_STRING, kAddGroup, L"Добавить группу…\tCtrl+Alt+G"); AppendMenuW(file, MF_STRING, kRefresh, L"Обновить список\tF5");
-  AppendMenuW(view, MF_STRING, kToggleFavorite, L"Добавить/убрать из избранного\tCtrl+Alt+I"); AppendMenuW(view, MF_STRING, kEditTags, L"Теги выбранной базы…"); AppendMenuW(view, MF_STRING, kClearRecent, L"Очистить недавние базы…");
+  AppendMenuW(view, MF_STRING, kToggleFavorite, L"Добавить/убрать из избранного\tCtrl+Alt+I"); AppendMenuW(view, MF_STRING, kEditTags, L"Теги выбранной базы…"); AppendMenuW(view, MF_STRING, kConfigureTagColors, L"Настроить цвета тегов…"); AppendMenuW(view, MF_STRING, kClearRecent, L"Очистить недавние базы…");
   AppendMenuW(view, MF_STRING, kSimpleMode, L"Простой режим\tCtrl+Alt+M"); AppendMenuW(help, MF_STRING, kAbout, L"О программе…\tF1"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(file), L"Файл"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(view), L"Вид"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(help), L"Справка"); SetMenu(window_, menu);
   SetSimpleMode(settings_.simple_mode);
   DisplaySelected();
@@ -1310,6 +1326,7 @@ void MainWindow::LoadCatalog(bool report_error) {
       logger_.Info(L"Загружен список баз: " + settings_.active_ibases.wstring() + L" | " + CatalogStatistics());
     }
     tags_ = storage::LoadTags(layout_);
+    tag_styles_ = storage::LoadTagStyles(layout_);
     sort_settings_ = storage::LoadSortSettings(layout_);
     last_launches_ = storage::LoadLastLaunchTimes(layout_);
     RefreshTagFilter();
@@ -1555,6 +1572,13 @@ LRESULT MainWindow::DrawDetailsList(NMLVCUSTOMDRAW* draw) const {
   if (draw->nmcd.dwDrawStage != (CDDS_ITEMPREPAINT | CDDS_SUBITEM)) return CDRF_DODEFAULT;
   const auto row = static_cast<int>(draw->nmcd.dwItemSpec);
   draw->clrTextBk = row % 2 == 0 ? RGB(242, 248, 249) : RGB(250, 252, 253);
+  if (draw->iSubItem == 1 && details_ && EqualNoCase(ListViewText(details_, row, 0), L"Тег")) {
+    if (const auto* style = TagStyleFor(tag_styles_, ListViewText(details_, row, 1))) {
+      draw->clrTextBk = style->background;
+      draw->clrText = style->text;
+      return CDRF_DODEFAULT;
+    }
+  }
   if (draw->iSubItem == 0) {
     draw->clrText = RGB(0, 111, 129);
     if (details_key_font_) {
@@ -1847,7 +1871,7 @@ void MainWindow::DisplaySelected() {
   }
   if (entry->IsDatabase()) {
     const auto& tags = TagsFor(tags_, *entry);
-    if (!tags.empty()) addRow(L"Теги", TagsText(tags));
+    for (const auto& tag : tags) addRow(L"Тег", tag);
     const auto connect = entry->ValueOr(L"Connect");
     if (!ConnectionValue(connect, L"File").empty()) {
       const auto passport = ReadFileDatabasePassport(connect);
@@ -2080,6 +2104,52 @@ void MainWindow::EditSelectedTags() {
   PopulateTree();
   SelectTreeItem(name);
   SetStatus(values.empty() ? L"Теги базы очищены." : L"Теги базы сохранены: " + TagsText(values));
+}
+void MainWindow::ConfigureTagColors() {
+  if (filter_tags_.empty()) {
+    Message(window_, L"Сначала назначьте хотя бы один тег информационной базе.", L"Цвета тегов", MB_OK | MB_ICONINFORMATION);
+    return;
+  }
+  std::wstring initial = filter_tags_.front();
+  if (catalog_) {
+    if (const auto* entry = catalog_->Find(SelectedName()); entry && entry->IsDatabase()) {
+      const auto& tags = TagsFor(tags_, *entry);
+      if (!tags.empty()) initial = tags.front();
+    }
+  }
+  const auto entered = InputBox(window_, L"Цвета тегов", L"Название тега:", initial);
+  if (!entered) return;
+  const auto requested = TrimText(*entered);
+  const auto found = std::find_if(filter_tags_.begin(), filter_tags_.end(), [&](const auto& tag) { return EqualNoCase(tag, requested); });
+  if (requested.empty() || found == filter_tags_.end()) {
+    Message(window_, L"Такого тега нет. Сначала назначьте его информационной базе.", L"Цвета тегов", MB_OK | MB_ICONWARNING);
+    return;
+  }
+  const auto* current = TagStyleFor(tag_styles_, *found);
+  const storage::TagStyle previousStyle = current ? *current : storage::TagStyle{};
+  Message(window_, L"В следующем окне выберите цвет фона тега «" + *found + L"».", L"Цвета тегов");
+  const auto background = ChooseTagColor(window_, previousStyle.background);
+  if (!background) return;
+  Message(window_, L"Теперь выберите цвет текста тега «" + *found + L"».", L"Цвета тегов");
+  const auto text = ChooseTagColor(window_, previousStyle.text);
+  if (!text) return;
+
+  const auto previousStyles = tag_styles_;
+  for (auto it = tag_styles_.begin(); it != tag_styles_.end();) {
+    if (EqualNoCase(it->first, *found)) it = tag_styles_.erase(it);
+    else ++it;
+  }
+  tag_styles_[*found] = {*background, *text};
+  try {
+    storage::SaveTagStyles(layout_, tag_styles_);
+  } catch (const std::exception& error) {
+    tag_styles_ = previousStyles;
+    logger_.Error(L"Ошибка сохранения цветов тега: " + ibstart::utf::FromUtf8(error.what()));
+    Message(window_, L"Не удалось сохранить цвета тега.", L"ИБ Старт", MB_OK | MB_ICONERROR);
+    return;
+  }
+  DisplaySelected();
+  SetStatus(L"Цвета тега сохранены: " + *found);
 }
 void MainWindow::DeleteSelected() {
   if (settings_.simple_mode || !catalog_) return;
