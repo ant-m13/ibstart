@@ -1992,8 +1992,9 @@ LRESULT MainWindow::DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const {
         if (font) SelectObject(draw->nmcd.hdc, font);
         SetBkMode(draw->nmcd.hdc, TRANSPARENT);
         int x = labelRect.right + 8;
-        const int height = std::max(16, labelRect.bottom - labelRect.top - 2);
-        const int y = labelRect.top + (labelRect.bottom - labelRect.top - height) / 2;
+        const int labelHeight = static_cast<int>(labelRect.bottom - labelRect.top);
+        const int height = std::max(16, labelHeight - 2);
+        const int y = static_cast<int>(labelRect.top) + (labelHeight - height) / 2;
         for (const auto& tag : tags) {
           SIZE textSize{};
           GetTextExtentPoint32W(draw->nmcd.hdc, tag.c_str(), static_cast<int>(tag.size()), &textSize);
