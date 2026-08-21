@@ -495,8 +495,8 @@ void CreateAdvancedDatabaseOptionsControls(HWND dialog, AdvancedDatabaseOptionsS
   create(0, L"STATIC", L"Локаль:", 0, 28, 370, 156, 20, 0, textFont);
   state.locale = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.locale, WS_TABSTOP | ES_AUTOHSCROLL, 192, 366, 380, 25, kAdvancedLocale, textFont);
   help(366, kAdvancedHelpLocale);
-  create(0, L"STATIC", L"Параметры командной строки:", 0, 28, 404, 164, 20, 0, textFont);
-  state.parameters = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.additional_parameters, WS_TABSTOP | ES_AUTOHSCROLL, 192, 400, 380, 25, kAdvancedParameters, textFont);
+  create(0, L"STATIC", L"Параметры командной строки:", 0, 28, 404, 184, 20, 0, textFont);
+  state.parameters = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.additional_parameters, WS_TABSTOP | ES_AUTOHSCROLL, 220, 400, 352, 25, kAdvancedParameters, textFont);
   help(400, kAdvancedHelpParameters);
   create(0, L"BUTTON", L"Сохранить", WS_TABSTOP | BS_DEFPUSHBUTTON, 450, 462, 90, 28, IDOK, buttonFont);
   create(0, L"BUTTON", L"Отмена", WS_TABSTOP, 550, 462, 84, 28, IDCANCEL, buttonFont);
