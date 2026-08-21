@@ -35,7 +35,7 @@ constexpr UINT kActivateMessage = WM_APP + 23;
 constexpr ULONG_PTR kLaunchCopyData = 0x49425354;
 constexpr int kMinimumWindowWidth = 940;
 constexpr int kMinimumWindowHeight = 460;
-enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kFavorite1 = 200 };
+enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kCopyDetailValue, kCopyDetailPair, kFavorite1 = 200 };
 enum TreeImage : int { kFileDatabaseImage, kServerDatabaseImage, kFolderImage, kFavoriteImage, kRecentImage };
 constexpr LPARAM kRecentRootItemData = 1;
 
@@ -457,6 +457,46 @@ void RestoreModalOwner(HWND owner) {
   EnableWindow(owner, TRUE);
   // The owner shares this UI thread; activation restores input without forcing the app to the foreground.
   SetActiveWindow(owner);
+}
+
+std::wstring ListViewText(HWND list, int row, int column) {
+  std::wstring text(256, L'\0');
+  for (;;) {
+    const int copied = ListView_GetItemText(list, row, column, text.data(), static_cast<int>(text.size()));
+    if (copied < static_cast<int>(text.size()) - 1) {
+      text.resize(std::max(0, copied));
+      return text;
+    }
+    text.resize(text.size() * 2);
+  }
+}
+
+bool CopyTextToClipboard(HWND owner, std::wstring_view text) {
+  const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
+  const HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
+  if (!memory) return false;
+  auto* destination = static_cast<wchar_t*>(GlobalLock(memory));
+  if (!destination) {
+    GlobalFree(memory);
+    return false;
+  }
+  std::copy(text.begin(), text.end(), destination);
+  destination[text.size()] = L'\0';
+  GlobalUnlock(memory);
+  if (!OpenClipboard(owner)) {
+    GlobalFree(memory);
+    return false;
+  }
+  struct ClipboardCloser {
+    ~ClipboardCloser() { CloseClipboard(); }
+  } closer;
+  if (!EmptyClipboard()) {
+    GlobalFree(memory);
+    return false;
+  }
+  if (SetClipboardData(CF_UNICODETEXT, memory)) return true;
+  GlobalFree(memory);
+  return false;
 }
 
 void CreateAdvancedDatabaseOptionsControls(HWND dialog, AdvancedDatabaseOptionsState& state) {
@@ -931,6 +971,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
         case kEnterprise: LaunchSelected(domain::LaunchMode::enterprise); break; case kDesigner: LaunchSelected(domain::LaunchMode::designer); break;
         case kAddFile: AddFileDatabase(); break; case kAddServer: AddServerDatabase(); break; case kAddGroup: AddGroup(); break; case kOpenList: OpenList(); break; case kRefresh: LoadCatalog(); break;
         case kEdit: EditSelected(); break; case kCache: ClearSelectedCache(); break; case kClearRecent: ClearRecentBases(); break; case kShortcut: CreateShortcut(); break; case kOpenFolder: OpenSelectedFolder(); break; case kDelete: DeleteSelected(); break;
+        case kCopyDetailValue: CopySelectedDetail(false); break; case kCopyDetailPair: CopySelectedDetail(true); break;
         case kSimpleMode: SetSimpleMode(!settings_.simple_mode); break; case kToggleFavorite: ToggleFavorite(); break; case kFocusSearch: SetFocus(search_); break; case kAbout: ShowAbout(); break;
         case kMoveUp: MoveSelected(-1); break; case kMoveDown: MoveSelected(1); break;
         default: if (LOWORD(wparam) >= kFavorite1 && LOWORD(wparam) < kFavorite1 + 9) LaunchFavorite(LOWORD(wparam) - kFavorite1); break;
@@ -942,14 +983,27 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
         if (notification->code == TVN_SELCHANGEDW) { DisplaySelected(); return 0; }
         if (notification->code == TVN_BEGINDRAGW) { const auto* drag = reinterpret_cast<NMTREEVIEWW*>(lparam); TreeView_SelectItem(tree_, drag->itemNew.hItem); dragging_name_ = SelectedName(); SetCapture(window_); return 0; }
       }
-      if (lparam && reinterpret_cast<NMHDR*>(lparam)->hwndFrom == details_ && reinterpret_cast<NMHDR*>(lparam)->code == NM_CUSTOMDRAW) {
-        return DrawDetailsList(reinterpret_cast<NMLVCUSTOMDRAW*>(lparam));
+      if (lparam && reinterpret_cast<NMHDR*>(lparam)->hwndFrom == details_) {
+        const auto* notification = reinterpret_cast<NMHDR*>(lparam);
+        if (notification->code == NM_CUSTOMDRAW) return DrawDetailsList(reinterpret_cast<NMLVCUSTOMDRAW*>(lparam));
+        if (notification->code == LVN_KEYDOWN) {
+          const auto* key = reinterpret_cast<NMLVKEYDOWN*>(lparam);
+          if (key->wVKey == 'C' && (GetKeyState(VK_CONTROL) & 0x8000)) {
+            CopySelectedDetail(false);
+            return 0;
+          }
+        }
       }
       break;
     case WM_CONTEXTMENU:
       if (reinterpret_cast<HWND>(wparam) == tree_) {
         POINT screen{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
         ShowTreeContextMenu(screen);
+        return 0;
+      }
+      if (reinterpret_cast<HWND>(wparam) == details_) {
+        POINT screen{GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)};
+        ShowDetailsContextMenu(screen);
         return 0;
       }
       break;
@@ -1377,6 +1431,51 @@ void MainWindow::ClearContextMenuItems() noexcept {
 
 std::wstring MainWindow::SelectedName() const { const auto item = TreeView_GetSelection(tree_); if (!item) return {}; wchar_t text[512]{}; TVITEMW data{}; data.mask = TVIF_TEXT; data.hItem = item; data.pszText = text; data.cchTextMax = 512; return TreeView_GetItem(tree_, &data) ? text : L""; }
 bool MainWindow::SelectedItemIsRecentRoot() const { const auto item = TreeView_GetSelection(tree_); if (!item) return false; TVITEMW data{}; data.mask = TVIF_PARAM; data.hItem = item; return TreeView_GetItem(tree_, &data) && data.lParam == kRecentRootItemData; }
+void MainWindow::CopySelectedDetail(bool include_name) {
+  const int row = details_ ? ListView_GetNextItem(details_, -1, LVNI_SELECTED) : -1;
+  if (row < 0) {
+    SetStatus(L"Выберите параметр для копирования.");
+    return;
+  }
+  const auto name = ListViewText(details_, row, 0);
+  const auto value = ListViewText(details_, row, 1);
+  const auto text = include_name ? name + L": " + value : value;
+  if (!CopyTextToClipboard(window_, text)) {
+    SetStatus(L"Не удалось скопировать параметр в буфер обмена.");
+    return;
+  }
+  SetStatus(include_name ? L"Скопирован параметр: " + name : L"Скопировано значение параметра: " + name);
+}
+void MainWindow::ShowDetailsContextMenu(POINT screen) {
+  if (!details_) return;
+  int row = ListView_GetNextItem(details_, -1, LVNI_SELECTED);
+  if (screen.x == -1 && screen.y == -1) {
+    if (row < 0) return;
+    RECT bounds{};
+    if (!ListView_GetItemRect(details_, row, &bounds, LVIR_BOUNDS)) return;
+    screen = {bounds.left, bounds.bottom};
+    ClientToScreen(details_, &screen);
+  } else {
+    POINT client = screen;
+    ScreenToClient(details_, &client);
+    LVHITTESTINFO hit{};
+    hit.pt = client;
+    row = ListView_HitTest(details_, &hit);
+    if (row < 0) return;
+    ListView_SetItemState(details_, -1, 0, LVIS_SELECTED | LVIS_FOCUSED);
+    ListView_SetItemState(details_, row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+    SetFocus(details_);
+  }
+
+  HMENU menu = CreatePopupMenu();
+  if (!menu) return;
+  AppendMenuW(menu, MF_STRING, kCopyDetailValue, L"Копировать значение\tCtrl+C");
+  AppendMenuW(menu, MF_STRING, kCopyDetailPair, L"Копировать параметр и значение");
+  const UINT command = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, window_, nullptr);
+  DestroyMenu(menu);
+  if (command == kCopyDetailValue) CopySelectedDetail(false);
+  else if (command == kCopyDetailPair) CopySelectedDetail(true);
+}
 bool MainWindow::SelectTreeItem(std::wstring_view name) {
   if (!tree_ || name.empty()) return false;
   const auto find = [&](auto&& self, HTREEITEM item) -> HTREEITEM {
