@@ -1085,7 +1085,20 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
     case WM_LBUTTONUP:
       if (!dragging_name_.empty() && catalog_) {
         ReleaseCapture(); TVHITTESTINFO hit{}; hit.pt = {GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)}; MapWindowPoints(window_, tree_, &hit.pt, 1); TreeView_HitTest(tree_, &hit);
-        if (hit.hItem) { TreeView_SelectItem(tree_, hit.hItem); const auto target = SelectedName(); if (!target.empty() && target != dragging_name_) { const auto* targetEntry = catalog_->Find(target); if (targetEntry && targetEntry->IsGroup()) { catalog_->Move(dragging_name_, target, 0); SaveCatalog(); PopulateTree(); } } }
+        if (hit.hItem) {
+          TreeView_SelectItem(tree_, hit.hItem);
+          const auto target = SelectedName();
+          if (!target.empty() && target != dragging_name_) {
+            const auto* dragged = catalog_->Find(dragging_name_);
+            const auto* targetEntry = catalog_->Find(target);
+            if (dragged && targetEntry && targetEntry->IsGroup()) {
+              const bool manualSource = SortModeForFolder(catalog_->ParentOf(dragging_name_)) == storage::SortMode::catalog_order;
+              const bool manualTarget = SortModeForFolder(target) == storage::SortMode::catalog_order;
+              if (!manualSource || !manualTarget) SetStatus(L"Перетаскивание доступно только при исходном порядке списка.");
+              else if (catalog_->Move(dragging_name_, target, 0)) { SaveCatalog(); PopulateTree(); }
+            }
+          }
+        }
         dragging_name_.clear(); return 0;
       } break;
     case WM_COPYDATA: {
@@ -1730,6 +1743,7 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   const bool database = entry && entry->IsDatabase();
   const bool group = entry && entry->IsGroup();
   const bool editable = entry && !settings_.simple_mode;
+  const bool manualOrder = entry && SortModeForFolder(catalog_->ParentOf(entry->name)) == storage::SortMode::catalog_order;
   const bool file = database && !ConnectionValue(entry->ValueOr(L"Connect"), L"File").empty();
   const std::wstring addParent = group ? entry->name : entry ? catalog_->ParentOf(entry->name) : std::wstring();
   const auto favorites = storage::LoadFavorites(layout_);
@@ -1762,8 +1776,8 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   append(file, false, kOpenFolder, IDI_TREE_FOLDER, L"Открыть папку", L"Ctrl+Shift+O");
   append(recentRoot, false, kClearRecent, IDI_ACTION_DELETE, L"Очистить недавние базы…");
   separator();
-  append(editable, false, kMoveUp, 0, L"Переместить вверх", L"Ctrl+Shift+Up");
-  append(editable, false, kMoveDown, 0, L"Переместить вниз", L"Ctrl+Shift+Down");
+  append(editable && manualOrder, false, kMoveUp, 0, L"Переместить вверх", L"Ctrl+Shift+Up");
+  append(editable && manualOrder, false, kMoveDown, 0, L"Переместить вниз", L"Ctrl+Shift+Down");
   append(editable, false, kDelete, IDI_ACTION_DELETE, L"Удалить…", L"Alt+Shift+Del");
   if (group) {
     separator();
@@ -2107,6 +2121,10 @@ void MainWindow::DeleteSelected() {
 void MainWindow::MoveSelected(int offset) {
   if (settings_.simple_mode || !catalog_) return;
   const auto name = SelectedName();
+  if (const auto* entry = catalog_->Find(name); entry && SortModeForFolder(catalog_->ParentOf(entry->name)) != storage::SortMode::catalog_order) {
+    SetStatus(L"Перестановка доступна только при исходном порядке списка.");
+    return;
+  }
   if (!catalog_->MoveBy(name, offset)) {
     SetStatus(offset < 0 ? L"Элемент уже находится первым в группе." : L"Элемент уже находится последним в группе.");
     return;
