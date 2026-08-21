@@ -213,6 +213,20 @@ void TestStandardFolderPaths() {
   const auto treeOrder = treeOrderCatalog.Tree();
   CHECK(treeOrder.size() == 2);
   CHECK(treeOrder.size() > 1 && treeOrder.front().name == L"Second");
+
+  auto dragDocument = ibstart::v8i::V8iDocument::ParseUtf8(
+      "[First]\nConnect=File=\"C:\\\\first\"\nOrderInList=1\n"
+      "[Second]\nConnect=File=\"C:\\\\second\"\nOrderInList=2\n"
+      "[Third]\nConnect=File=\"C:\\\\third\"\nOrderInList=3\n"
+      "[Grouped]\nConnect=File=\"C:\\\\grouped\"\nFolder=/Folder\n"
+      "[Folder]\nFolder=/\n");
+  ibstart::catalog::Catalog dragCatalog(std::move(dragDocument));
+  CHECK(dragCatalog.Move(L"Third", L"", 1));
+  const auto reordered = dragCatalog.Tree();
+  CHECK(reordered.size() == 4); CHECK(reordered.size() > 2 && reordered[0].name == L"First" && reordered[1].name == L"Third" && reordered[2].name == L"Second");
+  CHECK(dragCatalog.Move(L"Grouped", L"", 0));
+  const auto* movedToRoot = dragCatalog.Find(L"Grouped");
+  CHECK(movedToRoot && movedToRoot->ValueOr(L"Folder") == L"/");
 }
 
 void TestFileBaseScanRegistration() {
