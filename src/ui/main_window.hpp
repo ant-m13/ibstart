@@ -152,6 +152,7 @@ class MainWindow {
   std::vector<std::wstring> filter_tags_;
   std::vector<std::wstring> filter_favorites_;
   std::optional<std::wstring> initial_launch_id_;
+  bool suppress_search_refresh_{false};
   std::shared_ptr<UpdateCheckState> update_check_;
   std::wstring search_filter_;
   std::wstring dragging_name_;
