@@ -41,19 +41,75 @@ constexpr wchar_t kFolderPickerClass[] = L"IBStart.FolderPicker";
 constexpr UINT kActivateMessage = WM_APP + 23;
 constexpr ULONG_PTR kLaunchCopyData = 0x49425354;
 constexpr int kMinimumWindowWidth = 940;
+constexpr int kMinimumSimpleWindowWidth = 520;
 constexpr int kMinimumWindowHeight = 460;
 enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kCopyDetailValue, kCopyDetailPair, kEditTags, kConfigureTagColors, kFolderSortDefault, kFolderSortCatalog, kFolderSortName, kFolderSortLastLaunch, kMoveToFolder, kOpenStandardList, kShowTagsInList, kNewTagForSelected, kFavorite1 = 200 };
 constexpr UINT kRecentList1 = 300;
 constexpr UINT kQuickTag1 = 400;
 constexpr UINT kTagsContextMenu = 250;
 constexpr UINT kRecentListsMenu = 299;
-enum TreeImage : int { kFileDatabaseImage, kServerDatabaseImage, kFolderImage, kFavoriteImage, kRecentImage };
+enum TreeImage : int { kFileDatabaseImage, kServerDatabaseImage, kWebDatabaseImage, kFolderImage, kFavoriteImage, kRecentImage };
 constexpr LPARAM kRecentRootItemData = 1;
 constexpr LPARAM kFavoritesRootItemData = 2;
 
 void Message(HWND owner, std::wstring_view text, std::wstring_view title = L"ИБ Старт", UINT type = MB_OK | MB_ICONINFORMATION) { MessageBoxW(owner, std::wstring(text).c_str(), std::wstring(title).c_str(), type); }
 HICON LoadResourceIcon(HINSTANCE instance, int resource, int size) {
   return static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(resource), IMAGE_ICON, size, size, LR_DEFAULTCOLOR));
+}
+HICON CreateWebDatabaseIcon() {
+  constexpr int size = 20;
+  HDC screen = GetDC(nullptr);
+  HDC color = screen ? CreateCompatibleDC(screen) : nullptr;
+  HDC mask = screen ? CreateCompatibleDC(screen) : nullptr;
+  HBITMAP colorBitmap = screen ? CreateCompatibleBitmap(screen, size, size) : nullptr;
+  HBITMAP maskBitmap = CreateBitmap(size, size, 1, 1, nullptr);
+  HICON icon{};
+  if (color && mask && colorBitmap && maskBitmap) {
+    const auto previousColor = SelectObject(color, colorBitmap);
+    RECT bounds{0, 0, size, size};
+    FillRect(color, &bounds, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
+    const HBRUSH globeBrush = CreateSolidBrush(RGB(225, 245, 255));
+    const HPEN globePen = CreatePen(PS_SOLID, 2, RGB(0, 112, 156));
+    const auto previousBrush = SelectObject(color, globeBrush);
+    const auto previousPen = SelectObject(color, globePen);
+    Ellipse(color, 2, 2, 18, 18);
+    SelectObject(color, GetStockObject(HOLLOW_BRUSH));
+    Ellipse(color, 6, 2, 14, 18);
+    MoveToEx(color, 3, 10, nullptr);
+    LineTo(color, 17, 10);
+    MoveToEx(color, 5, 6, nullptr);
+    LineTo(color, 15, 6);
+    MoveToEx(color, 5, 14, nullptr);
+    LineTo(color, 15, 14);
+    SelectObject(color, previousBrush);
+    SelectObject(color, previousPen);
+    DeleteObject(globeBrush);
+    DeleteObject(globePen);
+    SelectObject(color, previousColor);
+
+    const auto previousMask = SelectObject(mask, maskBitmap);
+    PatBlt(mask, 0, 0, size, size, WHITENESS);
+    const HBRUSH maskBrush = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
+    const HPEN maskPen = static_cast<HPEN>(GetStockObject(BLACK_PEN));
+    const auto previousMaskBrush = SelectObject(mask, maskBrush);
+    const auto previousMaskPen = SelectObject(mask, maskPen);
+    Ellipse(mask, 1, 1, 19, 19);
+    SelectObject(mask, previousMaskBrush);
+    SelectObject(mask, previousMaskPen);
+    SelectObject(mask, previousMask);
+
+    ICONINFO info{};
+    info.fIcon = TRUE;
+    info.hbmColor = colorBitmap;
+    info.hbmMask = maskBitmap;
+    icon = CreateIconIndirect(&info);
+  }
+  if (color) DeleteDC(color);
+  if (mask) DeleteDC(mask);
+  if (colorBitmap) DeleteObject(colorBitmap);
+  if (maskBitmap) DeleteObject(maskBitmap);
+  if (screen) ReleaseDC(nullptr, screen);
+  return icon;
 }
 HFONT CreateUiFont(HWND window, int points, LONG weight) {
   return CreateFontW(-MulDiv(points, static_cast<int>(GetDpiForWindow(window)), 72), 0, 0, 0, weight, FALSE, FALSE, FALSE,
@@ -110,7 +166,10 @@ std::wstring ConnectionKind(std::wstring_view connect) {
   return L"Информационная база";
 }
 int DatabaseTreeImage(const domain::Entry* entry) {
-  if (entry && utf::FindNoCaseOrdinal(entry->ValueOr(L"Connect"), L"File=") != std::wstring_view::npos) return kFileDatabaseImage;
+  if (!entry) return kServerDatabaseImage;
+  const auto connect = entry->ValueOr(L"Connect");
+  if (catalog::Catalog::IsWebConnection(connect)) return kWebDatabaseImage;
+  if (utf::FindNoCaseOrdinal(connect, L"File=") != std::wstring_view::npos) return kFileDatabaseImage;
   return kServerDatabaseImage;
 }
 std::wstring SingleLine(std::wstring value) {
@@ -1630,7 +1689,10 @@ MainWindow::MainWindow(HINSTANCE instance, std::filesystem::path executable, sto
       logger_(layout_.root / L"logs"), initial_launch_id_(std::move(launch_id)) {}
 MainWindow::~MainWindow() {
   CancelTreeDrag();
-  if (window_ && IsWindow(window_)) DestroyWindow(window_);
+  if (window_ && IsWindow(window_)) {
+    settings_.selected_entry = SelectedName();
+    DestroyWindow(window_);
+  }
   ClearContextMenuItems();
   ClearMainMenuItems();
   for (const auto images : button_images_) if (images) ImageList_Destroy(images);
@@ -1649,7 +1711,8 @@ int MainWindow::Show(int show_command) {
   if (!RegisterClassExW(&klass) && GetLastError() != ERROR_CLASS_ALREADY_EXISTS) return 1;
   int windowX = settings_.window_x;
   int windowY = settings_.window_y;
-  const int windowWidth = std::max(settings_.window_width, ScaleForDpi(kMinimumWindowWidth, GetDpiForSystem()));
+  const int minimumWidth = settings_.simple_mode ? kMinimumSimpleWindowWidth : kMinimumWindowWidth;
+  const int windowWidth = std::max(settings_.window_width, ScaleForDpi(minimumWidth, GetDpiForSystem()));
   const int windowHeight = std::max(settings_.window_height, ScaleForDpi(kMinimumWindowHeight, GetDpiForSystem()));
   if (windowX != CW_USEDEFAULT && windowY != CW_USEDEFAULT) {
     const RECT saved{windowX, windowY, windowX + windowWidth, windowY + windowHeight};
@@ -1709,7 +1772,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       auto* limits = reinterpret_cast<MINMAXINFO*>(lparam);
       if (limits) {
         const UINT dpi = GetDpiForWindow(window);
-        limits->ptMinTrackSize.x = ScaleForDpi(kMinimumWindowWidth, dpi);
+        limits->ptMinTrackSize.x = ScaleForDpi(settings_.simple_mode ? kMinimumSimpleWindowWidth : kMinimumWindowWidth, dpi);
         limits->ptMinTrackSize.y = ScaleForDpi(kMinimumWindowHeight, dpi);
       }
       return 0;
@@ -1727,6 +1790,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       break;
     case WM_COMMAND:
       if (reinterpret_cast<HWND>(lparam) == search_ && HIWORD(wparam) == EN_CHANGE) { PopulateTree(); return 0; }
+      if (reinterpret_cast<HWND>(lparam) == connection_ && HIWORD(wparam) == EN_SETFOCUS) { SendMessageW(connection_, EM_SETSEL, 0, -1); return 0; }
       if (reinterpret_cast<HWND>(lparam) == tag_filter_ && HIWORD(wparam) == CBN_SELCHANGE) { PopulateTree(); return 0; }
       if (reinterpret_cast<HWND>(lparam) == sort_mode_ && HIWORD(wparam) == CBN_SELCHANGE) {
         const int selection = static_cast<int>(SendMessageW(sort_mode_, CB_GETCURSEL, 0, 0));
@@ -1841,10 +1905,14 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       return TRUE;
     }
     case kActivateMessage: Activate(); return 0;
-    case WM_CLOSE: DestroyWindow(window); return 0;
+    case WM_CLOSE:
+      settings_.selected_entry = SelectedName();
+      DestroyWindow(window);
+      return 0;
     case WM_DESTROY: {
       WINDOWPLACEMENT placement{sizeof(placement)};
       if (GetWindowPlacement(window, &placement)) { const RECT& rect = placement.rcNormalPosition; settings_.window_x = rect.left; settings_.window_y = rect.top; settings_.window_width = rect.right - rect.left; settings_.window_height = rect.bottom - rect.top; }
+      if (tree_ && IsWindow(tree_)) settings_.selected_entry = SelectedName();
       try { storage::SaveSettings(layout_, settings_); } catch (...) {}
       window_ = nullptr;
       PostQuitMessage(0); return 0;
@@ -1876,12 +1944,12 @@ void MainWindow::CreateControls() {
       390, 76, 460, 20, window_, nullptr, instance_, nullptr);
   details_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP |
       LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL, 380, 100, 480, 182, window_, nullptr, instance_, nullptr);
-  simple_connection_ = CreateWindowW(L"STATIC", L"", WS_CHILD | SS_LEFT | SS_NOPREFIX | SS_ENDELLIPSIS,
-      8, 0, 720, 20, window_, nullptr, instance_, nullptr);
+  connection_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL | ES_READONLY,
+      8, 0, 720, 22, window_, nullptr, instance_, nullptr);
   controls_font_ = CreateUiFont(window_, 9, FW_NORMAL);
   button_font_ = CreateUiFont(window_, 9, FW_NORMAL);
   if (controls_font_) {
-    for (const HWND control : {searchLabel, search_, tag_filter_label_, tag_filter_, sort_label_, sort_mode_, tree_, details_, simple_connection_}) {
+    for (const HWND control : {searchLabel, search_, tag_filter_label_, tag_filter_, sort_label_, sort_mode_, tree_, details_, connection_}) {
       if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(controls_font_), TRUE);
     }
   }
@@ -1897,14 +1965,21 @@ void MainWindow::CreateControls() {
   if (details_title_font_) SendMessageW(details_title_, WM_SETFONT, reinterpret_cast<WPARAM>(details_title_font_), TRUE);
   if (details_subtitle_font_) SendMessageW(details_subtitle_, WM_SETFONT, reinterpret_cast<WPARAM>(details_subtitle_font_), TRUE);
 
-  tree_images_ = ImageList_Create(20, 20, ILC_COLOR32 | ILC_MASK, 5, 1);
+  tree_images_ = ImageList_Create(20, 20, ILC_COLOR32 | ILC_MASK, 6, 1);
   if (tree_images_) {
-    constexpr int resources[] = {IDI_TREE_FILE_DATABASE, IDI_TREE_SERVER_DATABASE, IDI_TREE_FOLDER, IDI_ACTION_FAVORITE, IDI_ACTION_REFRESH};
     bool complete = true;
-    for (const int resource : resources) {
-      const auto icon = LoadResourceIcon(instance_, resource, 20);
+    const auto appendTreeIcon = [&](HICON icon) {
       if (!icon || ImageList_AddIcon(tree_images_, icon) < 0) complete = false;
       if (icon) DestroyIcon(icon);
+    };
+    for (const int resource : {IDI_TREE_FILE_DATABASE, IDI_TREE_SERVER_DATABASE}) {
+      appendTreeIcon(LoadResourceIcon(instance_, resource, 20));
+    }
+    HICON webIcon = CreateWebDatabaseIcon();
+    if (!webIcon) webIcon = LoadResourceIcon(instance_, IDI_TREE_SERVER_DATABASE, 20);
+    appendTreeIcon(webIcon);
+    for (const int resource : {IDI_TREE_FOLDER, IDI_ACTION_FAVORITE, IDI_ACTION_REFRESH}) {
+      appendTreeIcon(LoadResourceIcon(instance_, resource, 20));
     }
     if (complete) TreeView_SetImageList(tree_, tree_images_, TVSIL_NORMAL);
     else { ImageList_Destroy(tree_images_); tree_images_ = nullptr; }
@@ -1931,6 +2006,7 @@ void MainWindow::CreateControls() {
     AddButtonTooltip(tooltips, cache_, L"Очистить кэш выбранной базы — Ctrl+Shift+Del");
     AddButtonTooltip(tooltips, shortcut_, L"Создать ярлык выбранной базы — Ctrl+Shift+S");
     AddButtonTooltip(tooltips, remove_, L"Удалить выбранную запись — Alt+Shift+Del");
+    AddButtonTooltip(tooltips, connection_, L"Строку подключения можно выделить и скопировать — Ctrl+C");
   }
   AttachButtonIcon(enterprise_, instance_, IDI_ACTION_ENTERPRISE, button_images_);
   AttachButtonIcon(designer_, instance_, IDI_ACTION_DESIGNER, button_images_);
@@ -1961,7 +2037,7 @@ void MainWindow::Layout(int width, int height) {
     const int buttonWidth = std::max(1, (width - footerPadding * 2 - buttonGap) / 2);
     MoveWindow(search_, 58, 7, std::max(1, width - 66), 25, TRUE);
     MoveWindow(tree_, footerPadding, 42, std::max(1, width - footerPadding * 2), std::max(1, footerTop - 50), TRUE);
-    MoveWindow(simple_connection_, footerPadding, footerTop, std::max(1, width - footerPadding * 2), 20, TRUE);
+    MoveWindow(connection_, footerPadding, footerTop, std::max(1, width - footerPadding * 2), 22, TRUE);
     MoveWindow(enterprise_, footerPadding, footerTop + 28, buttonWidth, buttonHeight, TRUE);
     MoveWindow(designer_, footerPadding + buttonWidth + buttonGap, footerTop + 28, buttonWidth, buttonHeight, TRUE);
     RedrawWindow(window_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
@@ -2000,7 +2076,8 @@ void MainWindow::Layout(int width, int height) {
   }
   const int buttonsHeight = buttonRows * buttonHeight + (buttonRows - 1) * buttonRowGap;
   const int buttonsY = std::max(top + 100, height - bottom - buttonsHeight);
-  const int detailsY = top + 58;
+  const int connectionY = top + 58;
+  const int detailsY = connectionY + 28;
   const int detailsHeight = std::max(42, buttonsY - detailsY - 10);
   const int keyWidth = std::clamp(rightWidth * 35 / 100, 80, 190);
 
@@ -2017,7 +2094,7 @@ void MainWindow::Layout(int width, int height) {
   defer(details_title_, rightX + 10, top + 7, rightWidth - 20, 26);
   defer(details_subtitle_, rightX + 10, top + 34, rightWidth - 20, 20);
   defer(details_, rightX, detailsY, rightWidth, detailsHeight);
-  defer(simple_connection_, 0, 0, 1, 1);
+  defer(connection_, rightX, connectionY, rightWidth, 22);
   for (const auto& button : buttons) defer(button.window, rightX + button.x, buttonsY + button.y, button.width, buttonHeight);
   const bool positioned = positions && EndDeferWindowPos(positions) != FALSE;
   if (!positioned) {
@@ -2030,7 +2107,7 @@ void MainWindow::Layout(int width, int height) {
     MoveWindow(details_title_, rightX + 10, top + 7, std::max(1, rightWidth - 20), 26, TRUE);
     MoveWindow(details_subtitle_, rightX + 10, top + 34, std::max(1, rightWidth - 20), 20, TRUE);
     MoveWindow(details_, rightX, detailsY, rightWidth, detailsHeight, TRUE);
-    MoveWindow(simple_connection_, 0, 0, 1, 1, TRUE);
+    MoveWindow(connection_, rightX, connectionY, rightWidth, 22, TRUE);
     for (const auto& button : buttons) MoveWindow(button.window, rightX + button.x, buttonsY + button.y, button.width, buttonHeight, TRUE);
   }
   ListView_SetColumnWidth(details_, 0, keyWidth);
@@ -2043,6 +2120,8 @@ void MainWindow::Layout(int width, int height) {
 }
 
 void MainWindow::LoadCatalog(bool report_error) {
+  const std::wstring selected = SelectedName();
+  const bool hasInitialLaunch = initial_launch_id_.has_value();
   try {
     if (settings_.active_ibases.empty()) { if (const auto standard = storage::FindStandardIbases()) settings_.active_ibases = *standard; }
     auto discoveredPlatforms = platform::Discover(settings_.platform_search_paths);
@@ -2067,6 +2146,10 @@ void MainWindow::LoadCatalog(bool report_error) {
     RefreshTagFilter();
     RefreshSortControl();
     PopulateTree();
+    if (!hasInitialLaunch) {
+      const std::wstring& restore = selected.empty() ? settings_.selected_entry : selected;
+      if (!restore.empty()) SelectTreeItem(restore);
+    }
   } catch (const std::exception& error) { logger_.Error(L"Ошибка загрузки: " + ibstart::utf::FromUtf8(error.what())); if (report_error) Message(window_, L"Не удалось загрузить список баз. Проверьте путь и кодировку UTF-8.", L"ИБ Старт", MB_OK | MB_ICONERROR); }
 }
 
@@ -3001,7 +3084,7 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
 
 void MainWindow::DisplaySelected() {
   if (!details_) {
-    UpdateSimpleConnection();
+    UpdateConnection();
     return;
   }
   ListView_DeleteAllItems(details_);
@@ -3012,7 +3095,7 @@ void MainWindow::DisplaySelected() {
     SetWindowTextW(details_subtitle_, name.empty() ? L"Сведения появятся здесь" : L"Служебный раздел списка");
     EnableWindow(enterprise_, FALSE); EnableWindow(designer_, FALSE); EnableWindow(edit_, FALSE);
     EnableWindow(cache_, FALSE); EnableWindow(shortcut_, FALSE); EnableWindow(remove_, FALSE);
-    UpdateSimpleConnection();
+    UpdateConnection();
     return;
   }
 
@@ -3033,6 +3116,7 @@ void MainWindow::DisplaySelected() {
   };
   addRow(L"Тип", type);
   for (const auto& field : entry->fields) {
+    if (_wcsicmp(field.key.c_str(), L"Connect") == 0) continue;
     auto value = SingleLine(field.value);
     if (_wcsicmp(field.key.c_str(), L"Folder") == 0 && (value.empty() || value == L"/")) value = L"Корневой уровень";
     addRow(FriendlyFieldName(field.key), std::move(value));
@@ -3067,7 +3151,7 @@ void MainWindow::DisplaySelected() {
   EnableWindow(edit_, !settings_.simple_mode); EnableWindow(remove_, !settings_.simple_mode);
   EnableWindow(cache_, database && !settings_.simple_mode); EnableWindow(shortcut_, database && !settings_.simple_mode);
   InvalidateRect(details_, nullptr, TRUE);
-  UpdateSimpleConnection();
+  UpdateConnection();
 }
 
 void MainWindow::LaunchSelected(domain::LaunchMode mode) {
@@ -3570,6 +3654,8 @@ void MainWindow::OpenList() {
   dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
   if (!GetOpenFileNameW(&dialog)) return;
   settings_.active_ibases = filename;
+  settings_.selected_entry.clear();
+  TreeView_SelectItem(tree_, nullptr);
   RememberRecentList(settings_.active_ibases);
   storage::SaveSettings(layout_, settings_);
   RefreshFileMenu();
@@ -3583,6 +3669,8 @@ void MainWindow::OpenStandardList() {
     return;
   }
   settings_.active_ibases = *standard;
+  settings_.selected_entry.clear();
+  TreeView_SelectItem(tree_, nullptr);
   RememberRecentList(*standard);
   storage::SaveSettings(layout_, settings_);
   RefreshFileMenu();
@@ -3602,6 +3690,8 @@ void MainWindow::OpenRecentList(size_t index) {
     return;
   }
   settings_.active_ibases = path;
+  settings_.selected_entry.clear();
+  TreeView_SelectItem(tree_, nullptr);
   RememberRecentList(path);
   storage::SaveSettings(layout_, settings_);
   RefreshFileMenu();
@@ -3623,20 +3713,19 @@ void MainWindow::ToggleTagDisplay() {
   if (view_menu_) CheckMenuItem(view_menu_, kShowTagsInList, MF_BYCOMMAND | (settings_.show_tags_in_list ? MF_CHECKED : MF_UNCHECKED));
   RedrawWindow(tree_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
 }
-void MainWindow::UpdateSimpleConnection() {
-  if (!simple_connection_) return;
-  if (!settings_.simple_mode || !catalog_) {
-    SetWindowTextW(simple_connection_, L"");
+void MainWindow::UpdateConnection() {
+  if (!connection_) return;
+  if (!catalog_) {
+    SetWindowTextW(connection_, L"");
     return;
   }
   const auto* entry = catalog_->Find(SelectedName());
   if (!entry || !entry->IsDatabase()) {
-    SetWindowTextW(simple_connection_, L"");
+    SetWindowTextW(connection_, L"");
     return;
   }
   const std::wstring connect = entry->ValueOr(L"Connect");
-  const std::wstring text = connect.empty() ? L"Подключение не указано" : L"Подключение: " + connect;
-  SetWindowTextW(simple_connection_, text.c_str());
+  SetWindowTextW(connection_, connect.c_str());
 }
 void MainWindow::SetStatus(std::wstring text) { if (status_) SendMessageW(status_, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(text.c_str())); }
 std::wstring MainWindow::CatalogStatistics() const { return L"Баз: " + std::to_wstring(catalog_ ? catalog_->Databases().size() : 0) + L" | Платформ: " + std::to_wstring(platforms_.size()); }
@@ -3648,9 +3737,16 @@ void MainWindow::SetSimpleMode(bool enabled) {
                               edit_, cache_, shortcut_, remove_}) {
     if (control) ShowWindow(control, visible);
   }
-  if (simple_connection_) ShowWindow(simple_connection_, enabled ? SW_SHOW : SW_HIDE);
+  if (connection_) ShowWindow(connection_, SW_SHOW);
   if (enterprise_) ShowWindow(enterprise_, SW_SHOW);
   if (designer_) ShowWindow(designer_, SW_SHOW);
+  if (!enabled && window_) {
+    RECT bounds{};
+    const int minimumWidth = ScaleForDpi(kMinimumWindowWidth, GetDpiForWindow(window_));
+    if (GetWindowRect(window_, &bounds) && bounds.right - bounds.left < minimumWidth) {
+      SetWindowPos(window_, nullptr, 0, 0, minimumWidth, bounds.bottom - bounds.top, SWP_NOMOVE | SWP_NOZORDER | SWP_NOACTIVATE);
+    }
+  }
   RefreshFileMenu();
   RefreshMainMenuBar();
   PopulateTree();

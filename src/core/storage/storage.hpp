@@ -19,6 +19,7 @@ struct StorageLayout {
 
 struct Settings {
   std::filesystem::path active_ibases;
+  std::wstring selected_entry;
   bool simple_mode{false};
   bool show_tags_in_list{true};
   std::vector<std::filesystem::path> recent_ibases;

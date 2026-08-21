@@ -229,6 +229,7 @@ Settings LoadSettings(const StorageLayout& layout) {
   const auto json = ReadFile(PathFor(layout, L"settings.json"));
   try {
     if (const auto active = JsonString(json, "active_ibases")) result.active_ibases = *active;
+    if (const auto selected = JsonString(json, "selected_entry")) result.selected_entry = *selected;
     if (const auto simple = JsonInteger(json, "simple_mode")) result.simple_mode = *simple != 0;
     if (const auto showTags = JsonInteger(json, "show_tags_in_list")) result.show_tags_in_list = *showTags != 0;
     if (const auto x = JsonInteger(json, "window_x")) result.window_x = *x;
@@ -247,6 +248,7 @@ Settings LoadSettings(const StorageLayout& layout) {
 
 void SaveSettings(const StorageLayout& layout, const Settings& settings) {
   std::string json = "{\n  \"active_ibases\": \"" + Escape(settings.active_ibases.wstring()) + "\",\n";
+  json += "  \"selected_entry\": \"" + Escape(settings.selected_entry) + "\",\n";
   json += "  \"simple_mode\": " + std::string(settings.simple_mode ? "1" : "0") + ",\n";
   json += "  \"show_tags_in_list\": " + std::string(settings.show_tags_in_list ? "1" : "0") + ",\n";
   json += "  \"window_x\": " + std::to_string(settings.window_x) + ",\n  \"window_y\": " + std::to_string(settings.window_y);
