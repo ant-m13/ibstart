@@ -550,7 +550,11 @@ void RestoreModalOwner(HWND owner) {
 std::wstring ListViewText(HWND list, int row, int column) {
   std::wstring text(256, L'\0');
   for (;;) {
-    const int copied = ListView_GetItemText(list, row, column, text.data(), static_cast<int>(text.size()));
+    LVITEMW item{};
+    item.iSubItem = column;
+    item.pszText = text.data();
+    item.cchTextMax = static_cast<int>(text.size());
+    const int copied = static_cast<int>(SendMessageW(list, LVM_GETITEMTEXTW, static_cast<WPARAM>(row), reinterpret_cast<LPARAM>(&item)));
     if (copied < static_cast<int>(text.size()) - 1) {
       text.resize(std::max(0, copied));
       return text;
