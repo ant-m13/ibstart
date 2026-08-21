@@ -54,6 +54,7 @@ class MainWindow {
   bool MeasureContextMenuItem(MEASUREITEMSTRUCT* measure) const;
   bool DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const;
   void ClearContextMenuItems() noexcept;
+  void ClearMainMenuItems() noexcept;
   [[nodiscard]] std::wstring SelectedName() const;
   [[nodiscard]] bool SelectedItemIsRecentRoot() const;
   void BeginTreeDrag(HTREEITEM item, POINT tree_point);
@@ -124,6 +125,8 @@ class MainWindow {
   HMENU view_menu_{};
   std::vector<HIMAGELIST> button_images_;
   std::vector<ContextMenuItem> context_menu_items_;
+  std::vector<ContextMenuItem> main_menu_items_;
+  std::vector<ContextMenuItem> file_menu_items_;
   std::filesystem::path executable_;
   storage::StorageLayout layout_;
   storage::Settings settings_;

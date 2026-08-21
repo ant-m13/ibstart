@@ -44,6 +44,7 @@ enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDe
 constexpr UINT kRecentList1 = 300;
 constexpr UINT kQuickTag1 = 400;
 constexpr UINT kTagsContextMenu = 250;
+constexpr UINT kRecentListsMenu = 299;
 enum TreeImage : int { kFileDatabaseImage, kServerDatabaseImage, kFolderImage, kFavoriteImage, kRecentImage };
 constexpr LPARAM kRecentRootItemData = 1;
 constexpr LPARAM kFavoritesRootItemData = 2;
@@ -1629,6 +1630,7 @@ MainWindow::~MainWindow() {
   CancelTreeDrag();
   if (window_ && IsWindow(window_)) DestroyWindow(window_);
   ClearContextMenuItems();
+  ClearMainMenuItems();
   for (const auto images : button_images_) if (images) ImageList_Destroy(images);
   if (tree_images_) ImageList_Destroy(tree_images_);
   if (controls_font_) DeleteObject(controls_font_);
@@ -1731,7 +1733,13 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       }
       switch (LOWORD(wparam)) {
         case kEnterprise: LaunchSelected(domain::LaunchMode::enterprise); break; case kDesigner: LaunchSelected(domain::LaunchMode::designer); break;
-        case kAddFile: AddFileDatabase(); break; case kAddServer: AddServerDatabase(); break; case kAddGroup: AddGroup(); break; case kOpenList: OpenList(); break; case kOpenStandardList: OpenStandardList(); break; case kRefresh: LoadCatalog(); break;
+        case kAddFile: AddFileDatabase(); break; case kAddServer: AddServerDatabase(); break; case kAddGroup: AddGroup(); break; case kOpenList: OpenList(); break; case kOpenStandardList: OpenStandardList(); break;
+        case kRefresh: {
+          const std::wstring selected = SelectedName();
+          LoadCatalog();
+          if (!selected.empty()) SelectTreeItem(selected);
+          break;
+        }
         case kEdit: EditSelected(); break; case kCache: ClearSelectedCache(); break; case kClearRecent: ClearRecentBases(); break; case kShortcut: CreateShortcut(); break; case kOpenFolder: OpenSelectedFolder(); break; case kDelete: DeleteSelected(); break;
         case kCopyDetailValue: CopySelectedDetail(false); break; case kCopyDetailPair: CopySelectedDetail(true); break; case kEditTags: EditSelectedTags(); break; case kConfigureTagColors: ConfigureTagColors(); break;
         case kSimpleMode: SetSimpleMode(!settings_.simple_mode); break; case kToggleFavorite: ToggleFavorite(); break; case kShowTagsInList: ToggleTagDisplay(); break; case kFocusSearch: SetFocus(search_); break; case kAbout: ShowAbout(); break;
@@ -1918,9 +1926,27 @@ void MainWindow::CreateControls() {
   file_menu_ = CreatePopupMenu();
   view_menu_ = CreatePopupMenu();
   RefreshFileMenu();
-  AppendMenuW(view_menu_, MF_STRING, kToggleFavorite, L"Добавить/убрать из избранного\tCtrl+Alt+I"); AppendMenuW(view_menu_, MF_STRING, kEditTags, L"Изменить теги выбранной базы…"); AppendMenuW(view_menu_, MF_STRING, kConfigureTagColors, L"Настроить теги…");
-  AppendMenuW(view_menu_, MF_STRING | (settings_.show_tags_in_list ? MF_CHECKED : MF_UNCHECKED), kShowTagsInList, L"Показывать теги в списке баз"); AppendMenuW(view_menu_, MF_STRING, kClearRecent, L"Очистить недавние базы…");
-  AppendMenuW(view_menu_, MF_STRING, kSimpleMode, L"Простой режим\tCtrl+Alt+M"); AppendMenuW(help, MF_STRING, kAbout, L"О программе…\tF1"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(file_menu_), L"Файл"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(view_menu_), L"Вид"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(help), L"Справка"); SetMenu(window_, menu);
+  main_menu_items_.reserve(12);
+  const auto appendMainMenuItem = [&](HMENU target, bool enabled, bool checked, UINT command, int iconResource, std::wstring text, std::wstring shortcut = {}) {
+    ContextMenuItem visual{command, iconResource == 0 ? nullptr : LoadResourceIcon(instance_, iconResource, 20), std::move(text), std::move(shortcut)};
+    main_menu_items_.push_back(std::move(visual));
+    MENUITEMINFOW item{};
+    item.cbSize = sizeof(item);
+    item.fMask = MIIM_FTYPE | MIIM_ID | MIIM_STATE | MIIM_DATA;
+    item.fType = MFT_OWNERDRAW;
+    item.wID = command;
+    item.fState = (enabled ? MFS_ENABLED : MFS_DISABLED) | (checked ? MFS_CHECKED : 0);
+    item.dwItemData = reinterpret_cast<ULONG_PTR>(&main_menu_items_.back());
+    InsertMenuItemW(target, static_cast<UINT>(GetMenuItemCount(target)), TRUE, &item);
+  };
+  appendMainMenuItem(view_menu_, true, false, kToggleFavorite, IDI_ACTION_FAVORITE, L"Добавить/убрать из избранного", L"Ctrl+Alt+I");
+  appendMainMenuItem(view_menu_, true, false, kEditTags, 0, L"Управление тегами выбранной базы…");
+  appendMainMenuItem(view_menu_, true, false, kConfigureTagColors, 0, L"Настроить теги…");
+  AppendMenuW(view_menu_, MF_STRING | (settings_.show_tags_in_list ? MF_CHECKED : MF_UNCHECKED), kShowTagsInList, L"Показывать теги в списке баз");
+  appendMainMenuItem(view_menu_, true, false, kClearRecent, IDI_ACTION_DELETE, L"Очистить недавние базы…");
+  AppendMenuW(view_menu_, MF_STRING, kSimpleMode, L"Простой режим\tCtrl+Alt+M");
+  appendMainMenuItem(help, true, false, kAbout, IDI_IBSTART, L"О программе…", L"F1");
+  AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(file_menu_), L"Файл"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(view_menu_), L"Вид"); AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(help), L"Справка"); SetMenu(window_, menu);
   SetSimpleMode(settings_.simple_mode);
   DisplaySelected();
   RECT client{};
@@ -2397,8 +2423,10 @@ LRESULT MainWindow::DrawDetailsList(NMLVCUSTOMDRAW* draw) const {
 bool MainWindow::MeasureContextMenuItem(MEASUREITEMSTRUCT* measure) const {
   if (!measure || measure->CtlType != ODT_MENU) return false;
   const auto* item = reinterpret_cast<const ContextMenuItem*>(measure->itemData);
-  const auto found = std::find_if(context_menu_items_.begin(), context_menu_items_.end(), [item](const auto& candidate) { return &candidate == item; });
-  if (found == context_menu_items_.end()) return false;
+  const auto contains = [item](const auto& items) {
+    return std::any_of(items.begin(), items.end(), [item](const auto& candidate) { return &candidate == item; });
+  };
+  if (!contains(context_menu_items_) && !contains(main_menu_items_) && !contains(file_menu_items_)) return false;
 
   HDC context = GetDC(window_);
   if (!context) return false;
@@ -2420,11 +2448,15 @@ bool MainWindow::MeasureContextMenuItem(MEASUREITEMSTRUCT* measure) const {
 bool MainWindow::DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const {
   if (!draw || draw->CtlType != ODT_MENU) return false;
   const auto* item = reinterpret_cast<const ContextMenuItem*>(draw->itemData);
-  const auto found = std::find_if(context_menu_items_.begin(), context_menu_items_.end(), [item](const auto& candidate) { return &candidate == item; });
-  if (found == context_menu_items_.end()) return false;
+  const auto contains = [item](const auto& items) {
+    return std::any_of(items.begin(), items.end(), [item](const auto& candidate) { return &candidate == item; });
+  };
+  if (!contains(context_menu_items_) && !contains(main_menu_items_) && !contains(file_menu_items_)) return false;
 
   const bool disabled = (draw->itemState & ODS_DISABLED) != 0;
   const bool selected = (draw->itemState & ODS_SELECTED) != 0 && !disabled;
+  const bool tagIcon = item->command == kTagsContextMenu || item->command == kEditTags || item->command == kConfigureTagColors;
+  const bool hasSubmenuArrow = item->command == kTagsContextMenu || item->command == kRecentListsMenu;
   const int saved = SaveDC(draw->hDC);
   FillRect(draw->hDC, &draw->rcItem, GetSysColorBrush(selected ? COLOR_HIGHLIGHT : COLOR_MENU));
   const int iconX = draw->rcItem.left + 7;
@@ -2447,7 +2479,7 @@ bool MainWindow::DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const {
     SelectObject(draw->hDC, previousPen);
     DeleteObject(brush);
     DeleteObject(pen);
-  } else if (item->command == kTagsContextMenu) {
+  } else if (tagIcon) {
     const COLORREF color = disabled ? GetSysColor(COLOR_GRAYTEXT) : selected ? RGB(218, 242, 255) : RGB(0, 144, 162);
     const HBRUSH brush = CreateSolidBrush(color);
     const HPEN pen = CreatePen(PS_SOLID, 1, color);
@@ -2477,7 +2509,7 @@ bool MainWindow::DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const {
   RECT textRect = draw->rcItem;
   textRect.left += 35;
   textRect.right -= 10;
-  if (item->command == kTagsContextMenu) textRect.right -= 16;
+  if (hasSubmenuArrow) textRect.right -= 16;
   if (!item->shortcut.empty()) {
     SIZE shortcutSize{};
     GetTextExtentPoint32W(draw->hDC, item->shortcut.c_str(), static_cast<int>(item->shortcut.size()), &shortcutSize);
@@ -2491,7 +2523,7 @@ bool MainWindow::DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const {
   }
   SetTextColor(draw->hDC, GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : (disabled ? COLOR_GRAYTEXT : COLOR_MENUTEXT)));
   DrawTextW(draw->hDC, item->text.c_str(), static_cast<int>(item->text.size()), &textRect, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
-  if (item->command == kTagsContextMenu) {
+  if (hasSubmenuArrow) {
     const COLORREF arrowColor = disabled ? GetSysColor(COLOR_GRAYTEXT) : GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_MENUTEXT);
     const HPEN pen = CreatePen(PS_SOLID, 1, arrowColor);
     const auto previousPen = SelectObject(draw->hDC, pen);
@@ -2510,6 +2542,13 @@ bool MainWindow::DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const {
 void MainWindow::ClearContextMenuItems() noexcept {
   for (const auto& item : context_menu_items_) if (item.icon) DestroyIcon(item.icon);
   context_menu_items_.clear();
+}
+
+void MainWindow::ClearMainMenuItems() noexcept {
+  for (const auto& item : main_menu_items_) if (item.icon) DestroyIcon(item.icon);
+  main_menu_items_.clear();
+  for (const auto& item : file_menu_items_) if (item.icon) DestroyIcon(item.icon);
+  file_menu_items_.clear();
 }
 
 std::wstring MainWindow::SelectedName() const { return TreeItemName(tree_, TreeView_GetSelection(tree_)); }
@@ -2776,7 +2815,7 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   if (database && !settings_.simple_mode) {
     HMENU tagMenu = CreatePopupMenu();
     if (tagMenu) {
-      AppendMenuW(tagMenu, MF_STRING, kEditTags, L"Изменить назначение тегов…");
+      AppendMenuW(tagMenu, MF_STRING, kEditTags, L"Управление тегами…");
       AppendMenuW(tagMenu, MF_SEPARATOR, 0, nullptr);
       const auto& assigned = TagsFor(tags_, *entry);
       bool hasAvailableTags = false;
@@ -3294,8 +3333,36 @@ void MainWindow::RefreshFileMenu() {
     RemoveMenu(file_menu_, 0, MF_BYPOSITION);
     if (submenu) DestroyMenu(submenu);
   }
-  AppendMenuW(file_menu_, MF_STRING, kOpenList, L"Открыть список баз…\tCtrl+O");
-  AppendMenuW(file_menu_, MF_STRING, kOpenStandardList, L"Открыть стандартный список 1С");
+  for (const auto& item : file_menu_items_) if (item.icon) DestroyIcon(item.icon);
+  file_menu_items_.clear();
+  file_menu_items_.reserve(16);
+  const auto append = [&](bool enabled, bool checked, UINT command, int iconResource, std::wstring text, std::wstring shortcut = {}) {
+    ContextMenuItem visual{command, iconResource == 0 ? nullptr : LoadResourceIcon(instance_, iconResource, 20), std::move(text), std::move(shortcut)};
+    file_menu_items_.push_back(std::move(visual));
+    MENUITEMINFOW item{};
+    item.cbSize = sizeof(item);
+    item.fMask = MIIM_FTYPE | MIIM_ID | MIIM_STATE | MIIM_DATA;
+    item.fType = MFT_OWNERDRAW;
+    item.wID = command;
+    item.fState = (enabled ? MFS_ENABLED : MFS_DISABLED) | (checked ? MFS_CHECKED : 0);
+    item.dwItemData = reinterpret_cast<ULONG_PTR>(&file_menu_items_.back());
+    InsertMenuItemW(file_menu_, static_cast<UINT>(GetMenuItemCount(file_menu_)), TRUE, &item);
+  };
+  const auto appendPopup = [&](HMENU submenu, UINT identity, int iconResource, std::wstring text) {
+    ContextMenuItem visual{identity, iconResource == 0 ? nullptr : LoadResourceIcon(instance_, iconResource, 20), std::move(text), {}};
+    file_menu_items_.push_back(std::move(visual));
+    MENUITEMINFOW item{};
+    item.cbSize = sizeof(item);
+    item.fMask = MIIM_FTYPE | MIIM_ID | MIIM_STATE | MIIM_DATA | MIIM_SUBMENU;
+    item.fType = MFT_OWNERDRAW;
+    item.wID = identity;
+    item.fState = MFS_ENABLED;
+    item.hSubMenu = submenu;
+    item.dwItemData = reinterpret_cast<ULONG_PTR>(&file_menu_items_.back());
+    InsertMenuItemW(file_menu_, static_cast<UINT>(GetMenuItemCount(file_menu_)), TRUE, &item);
+  };
+  append(true, false, kOpenList, IDI_TREE_FOLDER, L"Открыть список баз…", L"Ctrl+O");
+  append(true, false, kOpenStandardList, IDI_TREE_FOLDER, L"Открыть стандартный список 1С");
   HMENU recent = CreatePopupMenu();
   if (recent) {
     size_t count = 0;
@@ -3305,14 +3372,14 @@ void MainWindow::RefreshFileMenu() {
       AppendMenuW(recent, MF_STRING, command, path.wstring().c_str());
     }
     if (count == 0) AppendMenuW(recent, MF_STRING | MF_GRAYED, 0, L"Нет недавно открытых списков");
-    AppendMenuW(file_menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(recent), L"Недавно открытые списки");
+    appendPopup(recent, kRecentListsMenu, IDI_ACTION_REFRESH, L"Недавно открытые списки");
   }
   AppendMenuW(file_menu_, MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(file_menu_, MF_STRING, kAddFile, L"Добавить файловую базу…\tCtrl+Alt+F");
-  AppendMenuW(file_menu_, MF_STRING, kAddServer, L"Добавить серверную базу…\tCtrl+Alt+S");
-  AppendMenuW(file_menu_, MF_STRING, kAddGroup, L"Добавить группу…\tCtrl+Alt+G");
+  append(true, false, kAddFile, IDI_ACTION_ADD, L"Добавить файловую базу…", L"Ctrl+Alt+F");
+  append(true, false, kAddServer, IDI_ACTION_ADD, L"Добавить серверную базу…", L"Ctrl+Alt+S");
+  append(true, false, kAddGroup, IDI_TREE_FOLDER, L"Добавить группу…", L"Ctrl+Alt+G");
   AppendMenuW(file_menu_, MF_SEPARATOR, 0, nullptr);
-  AppendMenuW(file_menu_, MF_STRING, kRefresh, L"Обновить список\tF5");
+  append(true, false, kRefresh, IDI_ACTION_REFRESH, L"Обновить список", L"F5");
 }
 void MainWindow::RememberRecentList(const std::filesystem::path& path) {
   if (path.empty()) return;
