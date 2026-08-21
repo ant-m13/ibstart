@@ -82,7 +82,7 @@ set(IBSTART_ICON_FILES
   "${IBSTART_RESOURCE_DIR}/icons/server_database.ico"
 )
 set_property(SOURCE "${IBSTART_GENERATED_DIR}/IBStart.rc" PROPERTY OBJECT_DEPENDS "${IBSTART_ICON_FILES}")
-target_link_libraries(IBStart PRIVATE ibstart_core Comctl32)
+target_link_libraries(IBStart PRIVATE ibstart_core Comctl32 Comdlg32)
 target_compile_definitions(IBStart PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
 target_compile_options(IBStart PRIVATE /W4 /permissive- /EHsc /Zc:__cplusplus /utf-8)
 

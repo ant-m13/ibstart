@@ -258,6 +258,8 @@ void TestPortableMode() {
   const std::vector<std::wstring> favorites = {L"База 😀", L"Строка\nс переводом"}; ibstart::storage::SaveFavorites(layout, favorites); CHECK(ibstart::storage::LoadFavorites(layout) == favorites);
   const ibstart::storage::DatabaseTags tags = {{L"id-😀", {L"Продуктив", L"[Клиент] \"А\""}}, {L"id-2", {L"Тест"}}};
   ibstart::storage::SaveTags(layout, tags); CHECK(ibstart::storage::LoadTags(layout) == tags);
+  const ibstart::storage::TagStyles tagStyles = {{L"[Клиент] \"А\"", {RGB(236, 217, 245), RGB(75, 20, 95)}}};
+  ibstart::storage::SaveTagStyles(layout, tagStyles); CHECK(ibstart::storage::LoadTagStyles(layout) == tagStyles);
   ibstart::storage::SortSettings sorting;
   sorting.default_mode = ibstart::storage::SortMode::name;
   sorting.folder_modes = {{L"Группа А", ibstart::storage::SortMode::last_launch}};

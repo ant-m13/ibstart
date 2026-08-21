@@ -29,6 +29,15 @@ struct Settings {
 
 using DatabaseTags = std::map<std::wstring, std::vector<std::wstring>>;
 
+struct TagStyle {
+  COLORREF background{RGB(226, 242, 244)};
+  COLORREF text{RGB(0, 86, 102)};
+
+  bool operator==(const TagStyle&) const = default;
+};
+
+using TagStyles = std::map<std::wstring, TagStyle>;
+
 enum class SortMode { catalog_order, name, last_launch };
 
 struct SortSettings {
@@ -51,6 +60,8 @@ void ClearHistory(const StorageLayout& layout);
 void SaveFavorites(const StorageLayout& layout, const std::vector<std::wstring>& favorites);
 [[nodiscard]] DatabaseTags LoadTags(const StorageLayout& layout);
 void SaveTags(const StorageLayout& layout, const DatabaseTags& tags);
+[[nodiscard]] TagStyles LoadTagStyles(const StorageLayout& layout);
+void SaveTagStyles(const StorageLayout& layout, const TagStyles& styles);
 [[nodiscard]] SortSettings LoadSortSettings(const StorageLayout& layout);
 void SaveSortSettings(const StorageLayout& layout, const SortSettings& settings);
 
