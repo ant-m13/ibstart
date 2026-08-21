@@ -2487,7 +2487,9 @@ bool MainWindow::DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const {
 
   const bool disabled = (draw->itemState & ODS_DISABLED) != 0;
   const bool selected = (draw->itemState & ODS_SELECTED) != 0 && !disabled;
-  const bool tagIcon = item->command == kTagsContextMenu || item->command == kEditTags || item->command == kConfigureTagColors;
+  const bool checked = (draw->itemState & ODS_CHECKED) != 0;
+  const bool tagIcon = item->command == kTagsContextMenu || item->command == kEditTags || item->command == kConfigureTagColors || item->command == kShowTagsInList;
+  const bool simpleModeIcon = item->command == kSimpleMode;
   const bool hasSubmenuArrow = item->command == kTagsContextMenu || item->command == kRecentListsMenu;
   const int saved = SaveDC(draw->hDC);
   FillRect(draw->hDC, &draw->rcItem, GetSysColorBrush(selected ? COLOR_HIGHLIGHT : COLOR_MENU));
@@ -2510,6 +2512,26 @@ bool MainWindow::DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const {
     SelectObject(draw->hDC, previousBrush);
     SelectObject(draw->hDC, previousPen);
     DeleteObject(brush);
+    DeleteObject(pen);
+  } else if (simpleModeIcon) {
+    const COLORREF outline = disabled ? GetSysColor(COLOR_GRAYTEXT) : selected ? RGB(218, 242, 255) : RGB(0, 144, 162);
+    const COLORREF background = selected ? GetSysColor(COLOR_HIGHLIGHT) : RGB(231, 246, 248);
+    const HBRUSH brush = CreateSolidBrush(background);
+    const HPEN pen = CreatePen(PS_SOLID, 1, outline);
+    const auto previousBrush = SelectObject(draw->hDC, brush);
+    const auto previousPen = SelectObject(draw->hDC, pen);
+    RoundRect(draw->hDC, iconX + 2, iconY + 3, iconX + 19, iconY + 17, 4, 4);
+    SelectObject(draw->hDC, previousBrush);
+    SelectObject(draw->hDC, previousPen);
+    DeleteObject(brush);
+    if (!disabled) {
+      const auto previousLinePen = SelectObject(draw->hDC, pen);
+      MoveToEx(draw->hDC, iconX + 6, iconY + 8, nullptr);
+      LineTo(draw->hDC, iconX + 15, iconY + 8);
+      MoveToEx(draw->hDC, iconX + 6, iconY + 12, nullptr);
+      LineTo(draw->hDC, iconX + 12, iconY + 12);
+      SelectObject(draw->hDC, previousLinePen);
+    }
     DeleteObject(pen);
   } else if (tagIcon) {
     const COLORREF color = disabled ? GetSysColor(COLOR_GRAYTEXT) : selected ? RGB(218, 242, 255) : RGB(0, 144, 162);
@@ -2534,6 +2556,15 @@ bool MainWindow::DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const {
   } else if (item->icon) {
     if (disabled) DrawStateW(draw->hDC, nullptr, nullptr, reinterpret_cast<LPARAM>(item->icon), 0, iconX, iconY, 20, 20, DST_ICON | DSS_DISABLED);
     else DrawIconEx(draw->hDC, iconX, iconY, item->icon, 20, 20, 0, nullptr, DI_NORMAL);
+  }
+  if (checked) {
+    const COLORREF color = selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : RGB(0, 103, 117);
+    const HPEN pen = CreatePen(PS_SOLID, 2, color);
+    const auto previousPen = SelectObject(draw->hDC, pen);
+    POINT check[] = {{iconX + 4, iconY + 11}, {iconX + 8, iconY + 15}, {iconX + 17, iconY + 6}};
+    Polyline(draw->hDC, check, 3);
+    SelectObject(draw->hDC, previousPen);
+    DeleteObject(pen);
   }
   const HFONT font = controls_font_ ? controls_font_ : static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
   SelectObject(draw->hDC, font);
@@ -2776,7 +2807,7 @@ bool MainWindow::SelectTreeItem(std::wstring_view name) {
 }
 
 void MainWindow::ShowTreeContextMenu(POINT screen) {
-  if (settings_.simple_mode || !tree_ || !catalog_) return;
+  if (!tree_ || !catalog_) return;
   ClearContextMenuItems();
   if (screen.x == -1 && screen.y == -1) {
     const auto selected = TreeView_GetSelection(tree_);
@@ -2840,6 +2871,26 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
     InsertMenuItemW(menu, static_cast<UINT>(GetMenuItemCount(menu)), TRUE, &item);
   };
   const auto separator = [&] { AppendMenuW(menu, MF_SEPARATOR, 0, nullptr); };
+  if (settings_.simple_mode) {
+    if (database) {
+      append(true, false, kEnterprise, IDI_ACTION_ENTERPRISE, L"Предприятие", L"F3");
+      append(true, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор", L"F4");
+      separator();
+      append(true, false, kEdit, IDI_ACTION_EDIT, L"Изменить…", L"F2");
+      append(true, false, kDelete, IDI_ACTION_DELETE, L"Удалить…", L"Alt+Shift+Del");
+    }
+    if (!database) {
+      DestroyMenu(menu);
+      ClearContextMenuItems();
+      return;
+    }
+    SetForegroundWindow(window_);
+    const UINT command = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, window_, nullptr);
+    DestroyMenu(menu);
+    ClearContextMenuItems();
+    if (command) SendMessageW(window_, WM_COMMAND, MAKEWPARAM(command, 0), 0);
+    return;
+  }
   append(database, false, kEnterprise, IDI_ACTION_ENTERPRISE, L"Предприятие", L"F3");
   append(database, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор", L"F4");
   separator();
@@ -3092,10 +3143,11 @@ void MainWindow::AddGroup(std::wstring parent) {
   }
 }
 void MainWindow::EditSelected() {
-  if (settings_.simple_mode || !catalog_) return;
+  if (!catalog_) return;
   const auto selected = SelectedName();
   auto* entry = catalog_->Find(selected);
   if (!entry) return;
+  if (settings_.simple_mode && !entry->IsDatabase()) return;
   if (!entry->IsDatabase()) {
     const auto changed = InputBox(window_, L"Изменить группу", L"Название группы:", entry->name);
     if (!changed || TrimText(*changed).empty()) return;
@@ -3243,10 +3295,11 @@ void MainWindow::AddNewTagToSelected() {
   AddTagToSelected(found == known.end() ? requested : *found);
 }
 void MainWindow::DeleteSelected() {
-  if (settings_.simple_mode || !catalog_) return;
+  if (!catalog_) return;
   const auto name = SelectedName();
   const auto* entry = catalog_->Find(name);
   if (!entry) return;
+  if (settings_.simple_mode && !entry->IsDatabase()) return;
   const auto tagId = entry->IsDatabase() ? TagId(*entry) : std::wstring();
   const bool group = entry->IsGroup();
   const auto item = entry->IsDatabase() ? L"информационную базу" : L"группу";
@@ -3425,7 +3478,7 @@ void MainWindow::RefreshMainMenuBar() {
   for (const auto& item : main_menu_items_) if (item.icon) DestroyIcon(item.icon);
   main_menu_items_.clear();
   main_menu_items_.reserve(12);
-  const auto append = [&](HMENU target, UINT command, int iconResource, std::wstring text, std::wstring shortcut = {}) {
+  const auto append = [&](HMENU target, UINT command, int iconResource, std::wstring text, std::wstring shortcut = {}, bool checked = false) {
     ContextMenuItem visual{command, iconResource == 0 ? nullptr : LoadResourceIcon(instance_, iconResource, 20), std::move(text), std::move(shortcut)};
     main_menu_items_.push_back(std::move(visual));
     MENUITEMINFOW item{};
@@ -3433,19 +3486,19 @@ void MainWindow::RefreshMainMenuBar() {
     item.fMask = MIIM_FTYPE | MIIM_ID | MIIM_STATE | MIIM_DATA;
     item.fType = MFT_OWNERDRAW;
     item.wID = command;
-    item.fState = MFS_ENABLED;
+    item.fState = MFS_ENABLED | (checked ? MFS_CHECKED : 0);
     item.dwItemData = reinterpret_cast<ULONG_PTR>(&main_menu_items_.back());
     InsertMenuItemW(target, static_cast<UINT>(GetMenuItemCount(target)), TRUE, &item);
   };
   if (settings_.simple_mode) {
-    AppendMenuW(view_menu_, MF_STRING, kSimpleMode, L"Выйти из простого режима\tCtrl+Alt+M");
+    append(view_menu_, kSimpleMode, 0, L"Выйти из простого режима", L"Ctrl+Alt+M", true);
   } else {
     append(view_menu_, kToggleFavorite, IDI_ACTION_FAVORITE, L"Добавить/убрать из избранного", L"Ctrl+Alt+I");
     append(view_menu_, kEditTags, 0, L"Управление тегами выбранной базы…");
     append(view_menu_, kConfigureTagColors, 0, L"Настроить теги…");
-    AppendMenuW(view_menu_, MF_STRING | (settings_.show_tags_in_list ? MF_CHECKED : MF_UNCHECKED), kShowTagsInList, L"Показывать теги в списке баз");
+    append(view_menu_, kShowTagsInList, 0, L"Показывать теги в списке баз", {}, settings_.show_tags_in_list);
     append(view_menu_, kClearRecent, IDI_ACTION_DELETE, L"Очистить недавние базы…");
-    AppendMenuW(view_menu_, MF_STRING, kSimpleMode, L"Простой режим\tCtrl+Alt+M");
+    append(view_menu_, kSimpleMode, 0, L"Простой режим", L"Ctrl+Alt+M");
     append(help_menu_, kAbout, IDI_IBSTART, L"О программе…", L"F1");
   }
   clearMenu(menu_);
