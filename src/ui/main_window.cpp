@@ -1876,10 +1876,12 @@ void MainWindow::CreateControls() {
       390, 76, 460, 20, window_, nullptr, instance_, nullptr);
   details_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP |
       LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL, 380, 100, 480, 182, window_, nullptr, instance_, nullptr);
+  simple_connection_ = CreateWindowW(L"STATIC", L"", WS_CHILD | SS_LEFT | SS_NOPREFIX | SS_ENDELLIPSIS,
+      8, 0, 720, 20, window_, nullptr, instance_, nullptr);
   controls_font_ = CreateUiFont(window_, 9, FW_NORMAL);
   button_font_ = CreateUiFont(window_, 9, FW_NORMAL);
   if (controls_font_) {
-    for (const HWND control : {searchLabel, search_, tag_filter_label_, tag_filter_, sort_label_, sort_mode_, tree_, details_}) {
+    for (const HWND control : {searchLabel, search_, tag_filter_label_, tag_filter_, sort_label_, sort_mode_, tree_, details_, simple_connection_}) {
       if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(controls_font_), TRUE);
     }
   }
@@ -1951,8 +1953,17 @@ void MainWindow::CreateControls() {
 
 void MainWindow::Layout(int width, int height) {
   if (settings_.simple_mode) {
+    constexpr int footerHeight = 72;
+    constexpr int footerPadding = 8;
+    constexpr int buttonGap = 8;
+    constexpr int buttonHeight = 30;
+    const int footerTop = std::max(42, height - footerHeight);
+    const int buttonWidth = std::max(1, (width - footerPadding * 2 - buttonGap) / 2);
     MoveWindow(search_, 58, 7, std::max(1, width - 66), 25, TRUE);
-    MoveWindow(tree_, 8, 42, std::max(1, width - 16), std::max(1, height - 50), TRUE);
+    MoveWindow(tree_, footerPadding, 42, std::max(1, width - footerPadding * 2), std::max(1, footerTop - 50), TRUE);
+    MoveWindow(simple_connection_, footerPadding, footerTop, std::max(1, width - footerPadding * 2), 20, TRUE);
+    MoveWindow(enterprise_, footerPadding, footerTop + 28, buttonWidth, buttonHeight, TRUE);
+    MoveWindow(designer_, footerPadding + buttonWidth + buttonGap, footerTop + 28, buttonWidth, buttonHeight, TRUE);
     RedrawWindow(window_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
     return;
   }
@@ -2006,6 +2017,7 @@ void MainWindow::Layout(int width, int height) {
   defer(details_title_, rightX + 10, top + 7, rightWidth - 20, 26);
   defer(details_subtitle_, rightX + 10, top + 34, rightWidth - 20, 20);
   defer(details_, rightX, detailsY, rightWidth, detailsHeight);
+  defer(simple_connection_, 0, 0, 1, 1);
   for (const auto& button : buttons) defer(button.window, rightX + button.x, buttonsY + button.y, button.width, buttonHeight);
   const bool positioned = positions && EndDeferWindowPos(positions) != FALSE;
   if (!positioned) {
@@ -2018,6 +2030,7 @@ void MainWindow::Layout(int width, int height) {
     MoveWindow(details_title_, rightX + 10, top + 7, std::max(1, rightWidth - 20), 26, TRUE);
     MoveWindow(details_subtitle_, rightX + 10, top + 34, std::max(1, rightWidth - 20), 20, TRUE);
     MoveWindow(details_, rightX, detailsY, rightWidth, detailsHeight, TRUE);
+    MoveWindow(simple_connection_, 0, 0, 1, 1, TRUE);
     for (const auto& button : buttons) MoveWindow(button.window, rightX + button.x, buttonsY + button.y, button.width, buttonHeight, TRUE);
   }
   ListView_SetColumnWidth(details_, 0, keyWidth);
@@ -2558,10 +2571,27 @@ bool MainWindow::DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const {
     else DrawIconEx(draw->hDC, iconX, iconY, item->icon, 20, 20, 0, nullptr, DI_NORMAL);
   }
   if (checked) {
-    const COLORREF color = selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : RGB(0, 103, 117);
+    if (tagIcon) {
+      const COLORREF border = selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : RGB(0, 103, 117);
+      const HBRUSH badgeBrush = CreateSolidBrush(RGB(255, 255, 255));
+      const HPEN badgePen = CreatePen(PS_SOLID, 1, border);
+      const auto previousBrush = SelectObject(draw->hDC, badgeBrush);
+      const auto previousPen = SelectObject(draw->hDC, badgePen);
+      Ellipse(draw->hDC, iconX + 11, iconY + 10, iconX + 22, iconY + 21);
+      SelectObject(draw->hDC, previousBrush);
+      SelectObject(draw->hDC, previousPen);
+      DeleteObject(badgeBrush);
+      DeleteObject(badgePen);
+    }
+    const COLORREF color = tagIcon ? RGB(0, 103, 117) : selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : RGB(0, 103, 117);
     const HPEN pen = CreatePen(PS_SOLID, 2, color);
     const auto previousPen = SelectObject(draw->hDC, pen);
     POINT check[] = {{iconX + 4, iconY + 11}, {iconX + 8, iconY + 15}, {iconX + 17, iconY + 6}};
+    if (tagIcon) {
+      check[0] = {iconX + 13, iconY + 15};
+      check[1] = {iconX + 16, iconY + 18};
+      check[2] = {iconX + 20, iconY + 13};
+    }
     Polyline(draw->hDC, check, 3);
     SelectObject(draw->hDC, previousPen);
     DeleteObject(pen);
@@ -2970,7 +3000,10 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
 }
 
 void MainWindow::DisplaySelected() {
-  if (!details_) return;
+  if (!details_) {
+    UpdateSimpleConnection();
+    return;
+  }
   ListView_DeleteAllItems(details_);
   const auto name = SelectedName();
   const auto* entry = catalog_ && TreeItemData(tree_, TreeView_GetSelection(tree_)) == 0 ? catalog_->Find(name) : nullptr;
@@ -2979,6 +3012,7 @@ void MainWindow::DisplaySelected() {
     SetWindowTextW(details_subtitle_, name.empty() ? L"Сведения появятся здесь" : L"Служебный раздел списка");
     EnableWindow(enterprise_, FALSE); EnableWindow(designer_, FALSE); EnableWindow(edit_, FALSE);
     EnableWindow(cache_, FALSE); EnableWindow(shortcut_, FALSE); EnableWindow(remove_, FALSE);
+    UpdateSimpleConnection();
     return;
   }
 
@@ -3033,6 +3067,7 @@ void MainWindow::DisplaySelected() {
   EnableWindow(edit_, !settings_.simple_mode); EnableWindow(remove_, !settings_.simple_mode);
   EnableWindow(cache_, database && !settings_.simple_mode); EnableWindow(shortcut_, database && !settings_.simple_mode);
   InvalidateRect(details_, nullptr, TRUE);
+  UpdateSimpleConnection();
 }
 
 void MainWindow::LaunchSelected(domain::LaunchMode mode) {
@@ -3588,6 +3623,21 @@ void MainWindow::ToggleTagDisplay() {
   if (view_menu_) CheckMenuItem(view_menu_, kShowTagsInList, MF_BYCOMMAND | (settings_.show_tags_in_list ? MF_CHECKED : MF_UNCHECKED));
   RedrawWindow(tree_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
 }
+void MainWindow::UpdateSimpleConnection() {
+  if (!simple_connection_) return;
+  if (!settings_.simple_mode || !catalog_) {
+    SetWindowTextW(simple_connection_, L"");
+    return;
+  }
+  const auto* entry = catalog_->Find(SelectedName());
+  if (!entry || !entry->IsDatabase()) {
+    SetWindowTextW(simple_connection_, L"");
+    return;
+  }
+  const std::wstring connect = entry->ValueOr(L"Connect");
+  const std::wstring text = connect.empty() ? L"Подключение не указано" : L"Подключение: " + connect;
+  SetWindowTextW(simple_connection_, text.c_str());
+}
 void MainWindow::SetStatus(std::wstring text) { if (status_) SendMessageW(status_, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(text.c_str())); }
 std::wstring MainWindow::CatalogStatistics() const { return L"Баз: " + std::to_wstring(catalog_ ? catalog_->Databases().size() : 0) + L" | Платформ: " + std::to_wstring(platforms_.size()); }
 void MainWindow::SetSimpleMode(bool enabled) {
@@ -3595,9 +3645,12 @@ void MainWindow::SetSimpleMode(bool enabled) {
   settings_.simple_mode = enabled;
   const int visible = enabled ? SW_HIDE : SW_SHOW;
   for (const HWND control : {tag_filter_label_, tag_filter_, sort_label_, sort_mode_, details_title_, details_subtitle_, details_, status_,
-                              enterprise_, designer_, edit_, cache_, shortcut_, remove_}) {
+                              edit_, cache_, shortcut_, remove_}) {
     if (control) ShowWindow(control, visible);
   }
+  if (simple_connection_) ShowWindow(simple_connection_, enabled ? SW_SHOW : SW_HIDE);
+  if (enterprise_) ShowWindow(enterprise_, SW_SHOW);
+  if (designer_) ShowWindow(designer_, SW_SHOW);
   RefreshFileMenu();
   RefreshMainMenuBar();
   PopulateTree();
