@@ -88,6 +88,7 @@ class MainWindow {
   void OpenRecentList(size_t index);
   void RememberRecentList(const std::filesystem::path& path);
   void RefreshFileMenu();
+  void RefreshMainMenuBar();
   void ToggleTagDisplay();
   void SetStatus(std::wstring text);
   [[nodiscard]] std::wstring CatalogStatistics() const;
@@ -101,7 +102,9 @@ class MainWindow {
   HINSTANCE instance_{};
   HWND window_{};
   HWND search_{};
+  HWND tag_filter_label_{};
   HWND tag_filter_{};
+  HWND sort_label_{};
   HWND sort_mode_{};
   HWND tree_{};
   HWND details_title_{};
@@ -121,8 +124,10 @@ class MainWindow {
   HFONT details_key_font_{};
   HIMAGELIST tree_images_{};
   HIMAGELIST drag_image_{};
+  HMENU menu_{};
   HMENU file_menu_{};
   HMENU view_menu_{};
+  HMENU help_menu_{};
   std::vector<HIMAGELIST> button_images_;
   std::vector<ContextMenuItem> context_menu_items_;
   std::vector<ContextMenuItem> main_menu_items_;
