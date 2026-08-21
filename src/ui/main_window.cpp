@@ -1241,7 +1241,13 @@ void MainWindow::SaveCatalog() {
   catch (const std::exception& error) { logger_.Error(L"Ошибка записи: " + ibstart::utf::FromUtf8(error.what())); Message(window_, L"Не удалось сохранить ibases.v8i. Исходный файл не изменён.", L"ИБ Старт", MB_OK | MB_ICONERROR); }
 }
 
-bool MainWindow::ItemMatches(const catalog::TreeItem& item, std::wstring_view filter) const { if (filter.empty() || utf::FindNoCaseOrdinal(item.name, filter) != std::wstring_view::npos) return true; return std::any_of(item.children.begin(), item.children.end(), [&](const auto& child) { return ItemMatches(child, filter); }); }
+bool MainWindow::ItemMatches(const catalog::TreeItem& item, std::wstring_view filter) const {
+  if (filter.empty()) return true;
+  if (catalog_) {
+    if (const auto* entry = catalog_->Find(item.name); entry && catalog::MatchesSearchText(*entry, filter)) return true;
+  }
+  return std::any_of(item.children.begin(), item.children.end(), [&](const auto& child) { return ItemMatches(child, filter); });
+}
 void MainWindow::AddTreeItems(const std::vector<catalog::TreeItem>& items, HTREEITEM parent, std::wstring_view filter) {
   for (const auto& item : items) {
     if (!ItemMatches(item, filter)) continue;

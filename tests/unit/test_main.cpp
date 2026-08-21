@@ -143,6 +143,20 @@ void TestCatalogOrderingAndCycles() {
   CHECK(!ibstart::catalog::IsBareWebConnection(L"WS=\"https://example.test/base\""));
 }
 
+void TestCatalogSearch() {
+  const auto document = ibstart::v8i::V8iDocument::ParseUtf8(
+      "[Бухгалтерия]\nConnect=Srvr=cluster-01;Ref=Accounting\nFolder=/Рабочие\nCustom=клиент-А\n");
+  const auto* entry = document.Find(L"Бухгалтерия");
+  CHECK(entry != nullptr);
+  CHECK(entry && ibstart::catalog::MatchesSearchText(entry->entry, L"бух"));
+  CHECK(entry && ibstart::catalog::MatchesSearchText(entry->entry, L"CLUSTER-01"));
+  CHECK(entry && ibstart::catalog::MatchesSearchText(entry->entry, L"accounting"));
+  CHECK(entry && ibstart::catalog::MatchesSearchText(entry->entry, L"Рабочие"));
+  CHECK(entry && ibstart::catalog::MatchesSearchText(entry->entry, L"клиент-а"));
+  CHECK(entry && ibstart::catalog::MatchesSearchText(entry->entry, L"custom"));
+  CHECK(entry && !ibstart::catalog::MatchesSearchText(entry->entry, L"не найдено"));
+}
+
 void TestStandardFolderPaths() {
   auto document = ibstart::v8i::V8iDocument::ParseUtf8(
       "[Root database]\nConnect=File=\"C:\\\\root\"\nFolder=/\n"
@@ -258,6 +272,7 @@ int wmain() {
   run(L"V8iRoundTrip", TestV8iRoundTrip);
   run(L"ProductVersion", TestProductVersion);
   run(L"UnicodeCaseInsensitiveSearch", TestUnicodeCaseInsensitiveSearch);
+  run(L"CatalogSearch", TestCatalogSearch);
   run(L"NoBomAndCatalog", TestNoBomAndCatalog);
   run(L"SafeStore", TestSafeStore);
   run(L"CommandBuilderAndSelection", TestCommandBuilderAndSelection);

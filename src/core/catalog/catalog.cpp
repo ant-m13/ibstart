@@ -1,5 +1,7 @@
 #include "core/catalog/catalog.hpp"
 
+#include "core/domain/utf.hpp"
+
 #include <objbase.h>
 
 #include <algorithm>
@@ -131,6 +133,15 @@ bool ValidParent(const v8i::V8iDocument& document, std::wstring_view parent) {
   return section != nullptr && section->entry.IsGroup();
 }
 }  // namespace
+
+bool MatchesSearchText(const domain::Entry& entry, std::wstring_view query) {
+  if (query.empty()) return true;
+  const auto matches = [query](std::wstring_view text) { return utf::FindNoCaseOrdinal(text, query) != std::wstring_view::npos; };
+  if (matches(entry.name)) return true;
+  return std::any_of(entry.fields.begin(), entry.fields.end(), [&](const auto& field) {
+    return matches(field.key) || matches(field.value);
+  });
+}
 
 Catalog::Catalog(v8i::V8iDocument document) : document_(std::move(document)) {}
 
