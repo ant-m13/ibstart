@@ -153,6 +153,35 @@ std::optional<int> JsonInteger(std::string_view json, std::string_view key) {
   try { return std::stoi(match[1].str()); } catch (...) { return std::nullopt; }
 }
 
+void SkipJsonWhitespace(std::string_view json, size_t& position) {
+  while (position < json.size() && (json[position] == ' ' || json[position] == '\t' || json[position] == '\r' || json[position] == '\n')) ++position;
+}
+
+std::optional<std::string> ReadJsonRawString(std::string_view json, size_t& position) {
+  SkipJsonWhitespace(json, position);
+  if (position >= json.size() || json[position++] != '"') return std::nullopt;
+  std::string result;
+  while (position < json.size()) {
+    const char character = json[position++];
+    if (character == '"') return result;
+    if (character == '\\') {
+      if (position >= json.size()) return std::nullopt;
+      result.push_back(character);
+      result.push_back(json[position++]);
+    } else {
+      result.push_back(character);
+    }
+  }
+  return std::nullopt;
+}
+
+bool ConsumeJsonCharacter(std::string_view json, size_t& position, char expected) {
+  SkipJsonWhitespace(json, position);
+  if (position >= json.size() || json[position] != expected) return false;
+  ++position;
+  return true;
+}
+
 std::optional<SortMode> ParseSortMode(int value) {
   if (value < static_cast<int>(SortMode::catalog_order) || value > static_cast<int>(SortMode::last_launch)) return std::nullopt;
   return static_cast<SortMode>(value);
@@ -313,16 +342,35 @@ void SaveFavorites(const StorageLayout& layout, const std::vector<std::wstring>&
 
 DatabaseTags LoadTags(const StorageLayout& layout) {
   DatabaseTags result;
-  const std::regex item("\\{\\s*\\\"id\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"tags\\\"\\s*:\\s*\\[([^\\]]*)\\]\\s*\\}");
-  const std::regex tag("\\\"((?:\\\\.|[^\\\"])*)\\\"");
   const auto json = ReadFile(PathFor(layout, L"tags.json"));
-  for (std::sregex_iterator it(json.begin(), json.end(), item), end; it != end; ++it) {
+  size_t position = 0;
+  while (position < json.size()) {
+    while (position < json.size() && json[position] != '{') ++position;
+    if (position == json.size()) break;
+    ++position;
     try {
-      const auto id = Unescape((*it)[1].str());
-      if (id.empty()) continue;
+      const auto idKey = ReadJsonRawString(json, position);
+      if (!idKey || *idKey != "id" || !ConsumeJsonCharacter(json, position, ':')) continue;
+      const auto rawId = ReadJsonRawString(json, position);
+      if (!rawId || !ConsumeJsonCharacter(json, position, ',')) continue;
+      const auto tagsKey = ReadJsonRawString(json, position);
+      if (!tagsKey || *tagsKey != "tags" || !ConsumeJsonCharacter(json, position, ':') || !ConsumeJsonCharacter(json, position, '[')) continue;
       std::vector<std::wstring> values;
-      const auto list = (*it)[2].str();
-      for (std::sregex_iterator tagIt(list.begin(), list.end(), tag), tagEnd; tagIt != tagEnd; ++tagIt) values.push_back(Unescape((*tagIt)[1].str()));
+      for (;;) {
+        SkipJsonWhitespace(json, position);
+        if (position < json.size() && json[position] == ']') { ++position; break; }
+        const auto rawTag = ReadJsonRawString(json, position);
+        if (!rawTag) { values.clear(); break; }
+        values.push_back(Unescape(*rawTag));
+        SkipJsonWhitespace(json, position);
+        if (position < json.size() && json[position] == ',') { ++position; continue; }
+        if (position < json.size() && json[position] == ']') { ++position; break; }
+        values.clear();
+        break;
+      }
+      if (!ConsumeJsonCharacter(json, position, '}')) continue;
+      const auto id = Unescape(*rawId);
+      if (id.empty()) continue;
       if (!values.empty()) result[id] = std::move(values);
     } catch (...) {}
   }
