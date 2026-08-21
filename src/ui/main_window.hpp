@@ -90,6 +90,7 @@ class MainWindow {
   void RefreshFileMenu();
   void RefreshMainMenuBar();
   void ToggleTagDisplay();
+  void UpdateSimpleConnection();
   void SetStatus(std::wstring text);
   [[nodiscard]] std::wstring CatalogStatistics() const;
   void SetSimpleMode(bool enabled);
@@ -110,6 +111,7 @@ class MainWindow {
   HWND details_title_{};
   HWND details_subtitle_{};
   HWND details_{};
+  HWND simple_connection_{};
   HWND status_{};
   HWND enterprise_{};
   HWND designer_{};
