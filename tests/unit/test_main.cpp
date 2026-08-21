@@ -1,4 +1,5 @@
 #include "core/catalog/catalog.hpp"
+#include "core/cache/cache_service.hpp"
 #include "core/domain/version.hpp"
 #include "core/domain/utf.hpp"
 #include "core/launcher/command_builder.hpp"
@@ -224,6 +225,16 @@ void TestSecretMasking() {
   CHECK(masked.find(L"s3cret") == std::wstring::npos); CHECK(masked.find(L"abc") == std::wstring::npos); CHECK(masked.find(L"xyz") == std::wstring::npos); CHECK(masked.find(L"hunter2") == std::wstring::npos); CHECK(masked.find(L"admin") != std::wstring::npos);
 }
 
+void TestCacheSizeFormatting() {
+  CHECK(ibstart::cache::FormatSize(0) == L"0 Б");
+  CHECK(ibstart::cache::FormatSize(1023) == L"1023 Б");
+  CHECK(ibstart::cache::FormatSize(1024) == L"1 КБ");
+  CHECK(ibstart::cache::FormatSize(1536) == L"1,5 КБ");
+  CHECK(ibstart::cache::FormatSize(284097) == L"277,4 КБ");
+  CHECK(ibstart::cache::FormatSize(1024ULL * 1024ULL) == L"1 МБ");
+  CHECK(ibstart::cache::FormatSize(1024ULL * 1024ULL * 1024ULL) == L"1 ГБ");
+}
+
 void TestPortableMode() {
   const auto directory = Temp(L"portable"); const auto executable = directory / L"IBStart.exe"; WriteBytes(executable, ""); WriteBytes(directory / L"IBStart.portable", "");
   const auto layout = ibstart::storage::ResolveLayout(executable); CHECK(layout.portable); CHECK(layout.root == directory / L"data"); ibstart::storage::EnsureWritable(layout);
@@ -254,6 +265,7 @@ int wmain() {
   run(L"StandardFolderPaths", TestStandardFolderPaths);
   run(L"FileBaseScanRegistration", TestFileBaseScanRegistration);
   run(L"SecretMasking", TestSecretMasking);
+  run(L"CacheSizeFormatting", TestCacheSizeFormatting);
   run(L"PortableMode", TestPortableMode);
   if (failures) { std::wcerr << failures << L" test(s) failed\n"; return 1; }
   std::wcout << L"All IBStart unit tests passed\n"; return 0;
