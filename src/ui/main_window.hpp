@@ -99,6 +99,7 @@ class MainWindow {
   void LaunchFavorite(size_t slot);
   void CheckForUpdates();
   void CompleteUpdateCheck();
+  void ShowUpdateCheckError();
   void ShowAbout() const;
   [[nodiscard]] std::wstring NextName(std::wstring_view stem) const;
   void ReportUnhandledError(std::string_view message) noexcept;
