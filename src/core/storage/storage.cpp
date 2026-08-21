@@ -230,12 +230,15 @@ Settings LoadSettings(const StorageLayout& layout) {
   try {
     if (const auto active = JsonString(json, "active_ibases")) result.active_ibases = *active;
     if (const auto simple = JsonInteger(json, "simple_mode")) result.simple_mode = *simple != 0;
+    if (const auto showTags = JsonInteger(json, "show_tags_in_list")) result.show_tags_in_list = *showTags != 0;
     if (const auto x = JsonInteger(json, "window_x")) result.window_x = *x;
     if (const auto y = JsonInteger(json, "window_y")) result.window_y = *y;
     if (const auto width = JsonInteger(json, "window_width")) result.window_width = std::clamp(*width, 480, 10000);
     if (const auto height = JsonInteger(json, "window_height")) result.window_height = std::clamp(*height, 320, 10000);
     const std::regex pathExpression("\\\"platform_path\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"");
     for (std::sregex_iterator it(json.begin(), json.end(), pathExpression), end; it != end; ++it) result.platform_search_paths.emplace_back(Unescape((*it)[1].str()));
+    const std::regex recentExpression("\\\"recent_list\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"");
+    for (std::sregex_iterator it(json.begin(), json.end(), recentExpression), end; it != end; ++it) result.recent_ibases.emplace_back(Unescape((*it)[1].str()));
   } catch (...) {
     return Settings{};
   }
@@ -245,8 +248,14 @@ Settings LoadSettings(const StorageLayout& layout) {
 void SaveSettings(const StorageLayout& layout, const Settings& settings) {
   std::string json = "{\n  \"active_ibases\": \"" + Escape(settings.active_ibases.wstring()) + "\",\n";
   json += "  \"simple_mode\": " + std::string(settings.simple_mode ? "1" : "0") + ",\n";
+  json += "  \"show_tags_in_list\": " + std::string(settings.show_tags_in_list ? "1" : "0") + ",\n";
   json += "  \"window_x\": " + std::to_string(settings.window_x) + ",\n  \"window_y\": " + std::to_string(settings.window_y);
-  json += ",\n  \"window_width\": " + std::to_string(settings.window_width) + ",\n  \"window_height\": " + std::to_string(settings.window_height) + ",\n  \"platform_paths\": [";
+  json += ",\n  \"window_width\": " + std::to_string(settings.window_width) + ",\n  \"window_height\": " + std::to_string(settings.window_height) + ",\n  \"recent_lists\": [";
+  for (size_t index = 0; index < settings.recent_ibases.size(); ++index) {
+    if (index) json += ", ";
+    json += "{\"recent_list\": \"" + Escape(settings.recent_ibases[index].wstring()) + "\"}";
+  }
+  json += "],\n  \"platform_paths\": [";
   for (size_t index = 0; index < settings.platform_search_paths.size(); ++index) {
     if (index) json += ", ";
     json += "{\"platform_path\": \"" + Escape(settings.platform_search_paths[index].wstring()) + "\"}";
@@ -396,6 +405,12 @@ DatabaseTags LoadTags(const StorageLayout& layout) { return LoadCatalogState(lay
 void SaveTags(const StorageLayout& layout, const DatabaseTags& tags) { auto state = LoadCatalogState(layout); state.tags = tags; SaveCatalogState(layout, state); }
 TagStyles LoadTagStyles(const StorageLayout& layout) { return LoadCatalogState(layout).tag_styles; }
 void SaveTagStyles(const StorageLayout& layout, const TagStyles& styles) { auto state = LoadCatalogState(layout); state.tag_styles = styles; SaveCatalogState(layout, state); }
+void SaveTagsAndStyles(const StorageLayout& layout, const DatabaseTags& tags, const TagStyles& styles) {
+  auto state = LoadCatalogState(layout);
+  state.tags = tags;
+  state.tag_styles = styles;
+  SaveCatalogState(layout, state);
+}
 SortSettings LoadSortSettings(const StorageLayout& layout) { return LoadCatalogState(layout).sorting; }
 void SaveSortSettings(const StorageLayout& layout, const SortSettings& settings) { auto state = LoadCatalogState(layout); state.sorting = settings; SaveCatalogState(layout, state); }
 

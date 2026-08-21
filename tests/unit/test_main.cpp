@@ -302,14 +302,15 @@ void TestPortableMode() {
   WriteBytes(layout.root / L"favorites.json", "[\"Устаревшее избранное\"]\n");
   CHECK(ibstart::storage::LoadFavorites(layout).empty());
   std::error_code removeLegacyError; std::filesystem::remove(layout.root / L"favorites.json", removeLegacyError);
-  ibstart::storage::Settings settings; settings.active_ibases = directory / L"База 😀.v8i"; settings.simple_mode = true; settings.platform_search_paths = {directory / L"Платформа"}; settings.window_width = 1234;
+  ibstart::storage::Settings settings; settings.active_ibases = directory / L"База 😀.v8i"; settings.simple_mode = true; settings.show_tags_in_list = false; settings.recent_ibases = {directory / L"Недавняя 1.v8i", directory / L"Недавняя 2.v8i"}; settings.platform_search_paths = {directory / L"Платформа"}; settings.window_width = 1234;
   ibstart::storage::SaveSettings(layout, settings); const auto loaded = ibstart::storage::LoadSettings(layout);
-  CHECK(loaded.active_ibases == settings.active_ibases); CHECK(loaded.simple_mode); CHECK(loaded.platform_search_paths == settings.platform_search_paths); CHECK(loaded.window_width == 1234);
+  CHECK(loaded.active_ibases == settings.active_ibases); CHECK(loaded.simple_mode); CHECK(!loaded.show_tags_in_list); CHECK(loaded.recent_ibases == settings.recent_ibases); CHECK(loaded.platform_search_paths == settings.platform_search_paths); CHECK(loaded.window_width == 1234);
   const std::vector<std::wstring> favorites = {L"База 😀", L"Строка\nс переводом"}; ibstart::storage::SaveFavorites(layout, favorites); CHECK(ibstart::storage::LoadFavorites(layout) == favorites);
   const ibstart::storage::DatabaseTags tags = {{L"id-😀", {L"Продуктив", L"[Клиент] \"А\""}}, {L"id-2", {L"Тест"}}};
   ibstart::storage::SaveTags(layout, tags); CHECK(ibstart::storage::LoadTags(layout) == tags);
   const ibstart::storage::TagStyles tagStyles = {{L"[Клиент] \"А\"", {RGB(236, 217, 245), RGB(75, 20, 95)}}};
   ibstart::storage::SaveTagStyles(layout, tagStyles); CHECK(ibstart::storage::LoadTagStyles(layout) == tagStyles);
+  ibstart::storage::SaveTagsAndStyles(layout, tags, tagStyles); CHECK(ibstart::storage::LoadTags(layout) == tags); CHECK(ibstart::storage::LoadTagStyles(layout) == tagStyles);
   ibstart::storage::SortSettings sorting;
   sorting.default_mode = ibstart::storage::SortMode::name;
   sorting.folder_modes = {{L"Группа А", ibstart::storage::SortMode::last_launch}};
