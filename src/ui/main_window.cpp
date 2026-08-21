@@ -2878,6 +2878,10 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
       separator();
       append(true, false, kEdit, IDI_ACTION_EDIT, L"Изменить…", L"F2");
       append(true, false, kDelete, IDI_ACTION_DELETE, L"Удалить…", L"Alt+Shift+Del");
+      separator();
+      append(true, false, kMoveToFolder, IDI_TREE_FOLDER, L"Переместить в папку…");
+      append(true, false, kMoveUp, 0, L"Переместить вверх", L"Ctrl+Shift+Up");
+      append(true, false, kMoveDown, 0, L"Переместить вниз", L"Ctrl+Shift+Down");
     }
     if (!database) {
       DestroyMenu(menu);
@@ -3333,11 +3337,13 @@ void MainWindow::DeleteSelected() {
   PopulateTree();
 }
 void MainWindow::MoveSelected(int offset) {
-  if (settings_.simple_mode || !catalog_) return;
+  if (!catalog_) return;
   const auto name = SelectedName();
-  if (const auto* entry = catalog_->Find(name); entry && SortModeForFolder(catalog_->ParentOf(entry->name)) != storage::SortMode::catalog_order) {
-    SetStatus(L"Перестановка доступна только при исходном порядке списка.");
-    return;
+  if (!settings_.simple_mode) {
+    if (const auto* entry = catalog_->Find(name); entry && SortModeForFolder(catalog_->ParentOf(entry->name)) != storage::SortMode::catalog_order) {
+      SetStatus(L"Перестановка доступна только при исходном порядке списка.");
+      return;
+    }
   }
   if (!catalog_->MoveBy(name, offset)) {
     SetStatus(offset < 0 ? L"Элемент уже находится первым в группе." : L"Элемент уже находится последним в группе.");
@@ -3346,7 +3352,7 @@ void MainWindow::MoveSelected(int offset) {
   SaveCatalog(); PopulateTree(); SelectTreeItem(name);
 }
 void MainWindow::MoveSelectedToFolder() {
-  if (settings_.simple_mode || !catalog_) return;
+  if (!catalog_) return;
   const auto name = SelectedName();
   const auto* entry = catalog_->Find(name);
   if (!entry || !entry->IsDatabase()) {
