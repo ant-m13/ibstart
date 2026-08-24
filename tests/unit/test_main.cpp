@@ -96,6 +96,10 @@ void TestProductVersion() {
   const auto file = core + L"." + std::to_wstring(ibstart::version::revision);
   CHECK(ibstart::version::value.starts_with(core));
   CHECK(ibstart::version::file_value == file);
+  const auto releasePath = L"/repos/" + std::wstring(ibstart::version::github_owner) + L"/" + std::wstring(ibstart::version::github_repository) + L"/releases/latest";
+  const auto releasePage = L"https://github.com/" + std::wstring(ibstart::version::github_owner) + L"/" + std::wstring(ibstart::version::github_repository) + L"/releases/";
+  CHECK(ibstart::version::github_latest_release_path == releasePath);
+  CHECK(ibstart::version::github_release_page_prefix == releasePage);
 }
 
 void TestUnicodeCaseInsensitiveSearch() {
@@ -333,10 +337,13 @@ void TestUpdateVersionsAndReleaseResponse() {
   catch (const std::invalid_argument&) { invalidVersion = true; }
   CHECK(invalidVersion);
 
+  const auto expectedPageUrl = std::wstring(ibstart::version::github_release_page_prefix) + L"tag/v0.6.0";
+  auto escapedPageUrl = ibstart::utf::ToUtf8(expectedPageUrl);
+  for (size_t position = 0; (position = escapedPageUrl.find('/', position)) != std::string::npos; position += 2) escapedPageUrl.insert(position, "\\");
   const auto release = ibstart::update::ParseLatestReleaseResponse(
-      R"({"html_url":"https:\/\/github.com\/ant-m13\/ibstart\/releases\/tag\/v0.6.0","tag_name":"v0.6.0"})");
+      "{\"html_url\":\"" + escapedPageUrl + "\",\"tag_name\":\"v0.6.0\"}");
   CHECK(release.version == L"0.6.0");
-  CHECK(release.page_url == L"https://github.com/ant-m13/ibstart/releases/tag/v0.6.0");
+  CHECK(release.page_url == expectedPageUrl);
   bool invalidPage = false;
   try {
     static_cast<void>(ibstart::update::ParseLatestReleaseResponse(

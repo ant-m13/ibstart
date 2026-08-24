@@ -12,5 +12,9 @@ inline constexpr unsigned major = @IBSTART_VERSION_MAJOR@;
 inline constexpr unsigned minor = @IBSTART_VERSION_MINOR@;
 inline constexpr unsigned patch = @IBSTART_VERSION_PATCH@;
 inline constexpr unsigned revision = @IBSTART_VERSION_REVISION@;
+inline constexpr std::wstring_view github_owner = L"@IBSTART_GITHUB_OWNER@";
+inline constexpr std::wstring_view github_repository = L"@IBSTART_GITHUB_REPOSITORY@";
+inline constexpr std::wstring_view github_latest_release_path = L"@IBSTART_GITHUB_LATEST_RELEASE_PATH@";
+inline constexpr std::wstring_view github_release_page_prefix = L"@IBSTART_GITHUB_RELEASE_PAGE_PREFIX@";
 
 }  // namespace ibstart::version

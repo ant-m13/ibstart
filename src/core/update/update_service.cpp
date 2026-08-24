@@ -1,6 +1,7 @@
 #include "core/update/update_service.hpp"
 
 #include "core/domain/utf.hpp"
+#include "core/domain/version.hpp"
 
 #include <Windows.h>
 #include <winhttp.h>
@@ -17,8 +18,6 @@ namespace ibstart::update {
 namespace {
 
 constexpr wchar_t kApiHost[] = L"api.github.com";
-constexpr wchar_t kLatestReleasePath[] = L"/repos/ant-m13/ibstart/releases/latest";
-constexpr wchar_t kReleasePagePrefix[] = L"https://github.com/ant-m13/ibstart/releases/";
 constexpr wchar_t kRequestHeaders[] =
     L"Accept: application/vnd.github+json\r\n"
     L"X-GitHub-Api-Version: 2026-03-10\r\n";
@@ -232,13 +231,13 @@ Release ParseLatestReleaseResponse(std::string_view response) {
   const auto tag = JsonStringValue(response, "tag_name");
   const auto pageUrl = JsonStringValue(response, "html_url");
   if (!tag || !pageUrl) throw std::invalid_argument("GitHub release response does not contain tag_name or html_url.");
-  const std::wstring version = utf::FromUtf8(*tag);
+  const std::wstring releaseVersion = utf::FromUtf8(*tag);
   const std::wstring page = utf::FromUtf8(*pageUrl);
-  static_cast<void>(ParseVersion(version));
-  if (!page.starts_with(kReleasePagePrefix)) {
+  static_cast<void>(ParseVersion(releaseVersion));
+  if (!page.starts_with(version::github_release_page_prefix)) {
     throw std::invalid_argument("GitHub release page URL does not belong to the IBStart repository.");
   }
-  return {version.starts_with(L'v') ? version.substr(1) : version, page};
+  return {releaseVersion.starts_with(L'v') ? releaseVersion.substr(1) : releaseVersion, page};
 }
 
 std::optional<Release> FetchLatestRelease() {
@@ -249,7 +248,7 @@ std::optional<Release> FetchLatestRelease() {
 
   InternetHandle connection(WinHttpConnect(session.get(), kApiHost, INTERNET_DEFAULT_HTTPS_PORT, 0));
   if (!connection) ThrowWinHttpError("WinHttpConnect");
-  InternetHandle request(WinHttpOpenRequest(connection.get(), L"GET", kLatestReleasePath, nullptr, WINHTTP_NO_REFERER,
+  InternetHandle request(WinHttpOpenRequest(connection.get(), L"GET", version::github_latest_release_path.data(), nullptr, WINHTTP_NO_REFERER,
       WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE));
   if (!request) ThrowWinHttpError("WinHttpOpenRequest");
   if (!WinHttpAddRequestHeaders(request.get(), kRequestHeaders, -1L, WINHTTP_ADDREQ_FLAG_ADD)) {
