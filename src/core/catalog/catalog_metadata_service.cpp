@@ -16,7 +16,7 @@ bool EqualNoCase(std::wstring_view left, std::wstring_view right) {
 
 CatalogMetadataService::CatalogMetadataService(storage::StorageLayout layout) : repository_(std::move(layout)) {}
 
-const storage::CatalogState& CatalogMetadataService::Read() { return repository_.Read(); }
+const storage::CatalogState& CatalogMetadataService::Read() const { return repository_.Read(); }
 
 const storage::CatalogState& CatalogMetadataService::Reload() { return repository_.Reload(); }
 
