@@ -2191,6 +2191,12 @@ void MainWindow::LoadCatalog(bool report_error) {
 
 void MainWindow::SaveCatalog() {
   if (!catalog_) return;
+  const auto logMaintenanceWarnings = [&] {
+    if (!store_) return;
+    for (const auto& warning : store_->maintenance_warnings()) {
+      logger_.Error(L"Обслуживание резервных копий: " + WideErrorText(warning));
+    }
+  };
   try {
     if (!store_) {
       if (settings_.active_ibases.empty()) {
@@ -2202,13 +2208,14 @@ void MainWindow::SaveCatalog() {
       store_.emplace(settings_.active_ibases);
     }
     store_->Save(catalog_->document());
+    logMaintenanceWarnings();
     RememberRecentList(settings_.active_ibases);
     storage::SaveSettings(layout_, settings_);
     RefreshFileMenu();
     DrawMenuBar(window_);
     SetStatus(L"Сохранено: " + settings_.active_ibases.wstring() + L" | " + CatalogStatistics());
-  } catch (const v8i::ExternalModificationError&) { const int answer = MessageBoxW(window_, L"Файл ibases.v8i был изменён другой программой. Перечитать его?", L"ИБ Старт", MB_YESNO | MB_ICONWARNING); if (answer == IDYES) LoadCatalog(); }
-  catch (const std::exception& error) { logger_.Error(L"Ошибка записи: " + ibstart::utf::FromUtf8(error.what())); Message(window_, L"Не удалось сохранить ibases.v8i. Исходный файл не изменён.", L"ИБ Старт", MB_OK | MB_ICONERROR); }
+  } catch (const v8i::ExternalModificationError&) { logMaintenanceWarnings(); const int answer = MessageBoxW(window_, L"Файл ibases.v8i был изменён другой программой. Перечитать его?", L"ИБ Старт", MB_YESNO | MB_ICONWARNING); if (answer == IDYES) LoadCatalog(); }
+  catch (const std::exception& error) { logMaintenanceWarnings(); logger_.Error(L"Ошибка записи: " + ibstart::utf::FromUtf8(error.what())); Message(window_, L"Не удалось сохранить ibases.v8i. Исходный файл не изменён.", L"ИБ Старт", MB_OK | MB_ICONERROR); }
 }
 
 bool MainWindow::ItemMatches(const catalog::TreeItem& item, std::wstring_view filter) const {
