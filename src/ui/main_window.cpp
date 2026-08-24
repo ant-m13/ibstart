@@ -2301,9 +2301,7 @@ std::optional<size_t> MainWindow::CatalogPosition(std::wstring_view name, std::w
 void MainWindow::SortFolder(std::wstring_view folder, catalog::SortDirection direction) {
   if (!catalog_ || !catalog_->SortChildrenByName(folder, direction, settings_.folders_first_when_sorting)) return;
   if (!SaveCatalog()) return;
-  PopulateTree();
-  if (folder.empty()) SelectCatalogRoot();
-  else SelectTreeItem(folder);
+  PopulateTreeWithoutFlicker(folder, folder.empty());
   if (folder.empty()) {
     SetStatus(direction == catalog::SortDirection::ascending ? L"Корень списка отсортирован по возрастанию и сохранён в ibases.v8i." :
         L"Корень списка отсортирован по убыванию и сохранён в ibases.v8i.");
@@ -2394,6 +2392,24 @@ void MainWindow::PopulateTree() {
     }
   }
   DisplaySelected();
+}
+void MainWindow::PopulateTreeWithoutFlicker(std::wstring_view selected, bool select_catalog_root) {
+  const bool canSuspendDrawing = tree_ && IsWindow(tree_);
+  if (canSuspendDrawing) SendMessageW(tree_, WM_SETREDRAW, FALSE, 0);
+  const auto resumeDrawing = [&] {
+    if (!canSuspendDrawing) return;
+    SendMessageW(tree_, WM_SETREDRAW, TRUE, 0);
+    RedrawWindow(tree_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+  };
+  try {
+    PopulateTree();
+    if (select_catalog_root) SelectCatalogRoot();
+    else if (!selected.empty()) SelectTreeItem(selected);
+  } catch (...) {
+    resumeDrawing();
+    throw;
+  }
+  resumeDrawing();
 }
 LRESULT MainWindow::DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const {
   if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
@@ -2888,8 +2904,7 @@ void MainWindow::EndTreeDrag(POINT windowPoint) {
   }
   if (!catalog_->Move(draggedName, targetParent, position)) { SetStatus(L"Перемещение невозможно: нельзя поместить группу внутрь самой себя."); return; }
   if (!SaveCatalog()) return;
-  PopulateTree();
-  SelectTreeItem(draggedName);
+  PopulateTreeWithoutFlicker(draggedName);
   SetStatus(targetParent.empty() ? L"Элемент перемещён в корень списка." : L"Элемент перемещён: " + draggedName);
 }
 void MainWindow::CancelTreeDrag() {
@@ -3514,7 +3529,8 @@ void MainWindow::MoveSelected(int offset) {
     SetStatus(offset < 0 ? L"Элемент уже находится первым в группе." : L"Элемент уже находится последним в группе.");
     return;
   }
-  SaveCatalog(); PopulateTree(); SelectTreeItem(name);
+  if (!SaveCatalog()) return;
+  PopulateTreeWithoutFlicker(name);
 }
 void MainWindow::MoveSelectedToFolder() {
   if (!catalog_) return;
@@ -3535,9 +3551,8 @@ void MainWindow::MoveSelectedToFolder() {
     Message(window_, L"Не удалось переместить базу в выбранную папку.", L"Перемещение базы", MB_OK | MB_ICONWARNING);
     return;
   }
-  SaveCatalog();
-  PopulateTree();
-  SelectTreeItem(name);
+  if (!SaveCatalog()) return;
+  PopulateTreeWithoutFlicker(name);
   SetStatus(target->empty() ? L"База перемещена в корневой уровень." : L"База перемещена в папку: " + *target);
 }
 void MainWindow::ClearSelectedCache() {
