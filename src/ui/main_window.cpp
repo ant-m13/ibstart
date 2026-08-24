@@ -1955,6 +1955,10 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       if (tree_) SetFocus(tree_);
       return 0;
     case WM_CLOSE:
+      if (IsClearingCache()) {
+        Message(window_, L"Дождитесь завершения очистки кэша перед закрытием приложения.", L"Очистка кэша", MB_OK | MB_ICONINFORMATION);
+        return 0;
+      }
       settings_.selected_entry = SelectedName();
       DestroyWindow(window);
       return 0;
@@ -3607,6 +3611,12 @@ void MainWindow::ClearSelectedCache() {
     DisplaySelected();
     Message(window_, L"Выберите базу для очистки кэша.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
   }
+}
+bool MainWindow::IsClearingCache() const {
+  const auto state = cache_operation_;
+  if (!state) return false;
+  std::lock_guard lock(state->mutex);
+  return state->stage == CacheOperationState::Stage::clearing;
 }
 void MainWindow::ClearRecentBases() {
   try {
