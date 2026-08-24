@@ -65,7 +65,8 @@ std::wstring Unescape(std::string_view value) {
     return static_cast<wchar_t>(unit);
   };
   for (size_t index = 0; index < value.size(); ++index) {
-    if (value[index] == '\\' && index + 1 < value.size()) {
+    if (value[index] == '\\') {
+      if (index + 1 >= value.size()) throw std::invalid_argument("Truncated JSON escape.");
       flushRaw();
       const char next = value[++index];
       if (next == 'n') result.push_back(L'\n');
@@ -92,10 +93,21 @@ std::wstring Unescape(std::string_view value) {
       } else {
         throw std::invalid_argument("Invalid JSON escape.");
       }
-    } else raw.push_back(value[index]);
+    } else {
+      if (static_cast<unsigned char>(value[index]) < 0x20) throw std::invalid_argument("Unescaped JSON control character.");
+      raw.push_back(value[index]);
+    }
   }
   flushRaw();
   return result;
+}
+
+std::optional<std::wstring> TryUnescape(std::string_view value) {
+  try {
+    return Unescape(value);
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
 }
 
 void WriteAtomically(const std::filesystem::path& path, std::string_view contents) {
@@ -142,7 +154,7 @@ std::optional<std::wstring> JsonString(std::string_view json, std::string_view k
   std::smatch match;
   const std::string body(json);
   if (!std::regex_search(body, match, expression)) return std::nullopt;
-  return Unescape(match[1].str());
+  return TryUnescape(match[1].str());
 }
 
 std::optional<int> JsonInteger(std::string_view json, std::string_view key) {
@@ -227,21 +239,21 @@ void EnsureWritable(const StorageLayout& layout) {
 Settings LoadSettings(const StorageLayout& layout) {
   Settings result;
   const auto json = ReadFile(PathFor(layout, L"settings.json"));
-  try {
-    if (const auto active = JsonString(json, "active_ibases")) result.active_ibases = *active;
-    if (const auto selected = JsonString(json, "selected_entry")) result.selected_entry = *selected;
-    if (const auto simple = JsonInteger(json, "simple_mode")) result.simple_mode = *simple != 0;
-    if (const auto showTags = JsonInteger(json, "show_tags_in_list")) result.show_tags_in_list = *showTags != 0;
-    if (const auto x = JsonInteger(json, "window_x")) result.window_x = *x;
-    if (const auto y = JsonInteger(json, "window_y")) result.window_y = *y;
-    if (const auto width = JsonInteger(json, "window_width")) result.window_width = std::clamp(*width, 480, 10000);
-    if (const auto height = JsonInteger(json, "window_height")) result.window_height = std::clamp(*height, 320, 10000);
-    const std::regex pathExpression("\\\"platform_path\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"");
-    for (std::sregex_iterator it(json.begin(), json.end(), pathExpression), end; it != end; ++it) result.platform_search_paths.emplace_back(Unescape((*it)[1].str()));
-    const std::regex recentExpression("\\\"recent_list\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"");
-    for (std::sregex_iterator it(json.begin(), json.end(), recentExpression), end; it != end; ++it) result.recent_ibases.emplace_back(Unescape((*it)[1].str()));
-  } catch (...) {
-    return Settings{};
+  if (const auto active = JsonString(json, "active_ibases")) result.active_ibases = *active;
+  if (const auto selected = JsonString(json, "selected_entry")) result.selected_entry = *selected;
+  if (const auto simple = JsonInteger(json, "simple_mode")) result.simple_mode = *simple != 0;
+  if (const auto showTags = JsonInteger(json, "show_tags_in_list")) result.show_tags_in_list = *showTags != 0;
+  if (const auto x = JsonInteger(json, "window_x")) result.window_x = *x;
+  if (const auto y = JsonInteger(json, "window_y")) result.window_y = *y;
+  if (const auto width = JsonInteger(json, "window_width")) result.window_width = std::clamp(*width, 480, 10000);
+  if (const auto height = JsonInteger(json, "window_height")) result.window_height = std::clamp(*height, 320, 10000);
+  const std::regex pathExpression("\\\"platform_path\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"");
+  for (std::sregex_iterator it(json.begin(), json.end(), pathExpression), end; it != end; ++it) {
+    if (const auto path = TryUnescape((*it)[1].str())) result.platform_search_paths.emplace_back(*path);
+  }
+  const std::regex recentExpression("\\\"recent_list\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"");
+  for (std::sregex_iterator it(json.begin(), json.end(), recentExpression), end; it != end; ++it) {
+    if (const auto recent = TryUnescape((*it)[1].str())) result.recent_ibases.emplace_back(*recent);
   }
   return result;
 }
@@ -269,69 +281,81 @@ void SaveSettings(const StorageLayout& layout, const Settings& settings) {
 CatalogState LoadCatalogState(const StorageLayout& layout) {
   CatalogState result;
   const auto json = ReadFile(PathFor(layout, L"catalog-state.json"));
-  try {
-    const std::regex favorite("\\\"favorite\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"");
-    for (std::sregex_iterator it(json.begin(), json.end(), favorite), end; it != end; ++it) result.favorites.push_back(Unescape((*it)[1].str()));
+  const std::regex favorite("\\\"favorite\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"");
+  for (std::sregex_iterator it(json.begin(), json.end(), favorite), end; it != end; ++it) {
+    if (const auto value = TryUnescape((*it)[1].str())) result.favorites.push_back(*value);
+  }
 
-    const std::regex history("\\{\\s*\\\"history_id\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"time\\\"\\s*:\\s*([0-9]+)\\s*,\\s*\\\"mode\\\"\\s*:\\s*([0-9]+)\\s*\\}");
-    for (std::sregex_iterator it(json.begin(), json.end(), history), end; it != end; ++it) {
+  const std::regex history("\\{\\s*\\\"history_id\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"time\\\"\\s*:\\s*([0-9]+)\\s*,\\s*\\\"mode\\\"\\s*:\\s*([0-9]+)\\s*\\}");
+  for (std::sregex_iterator it(json.begin(), json.end(), history), end; it != end; ++it) {
+    try {
       const int mode = std::stoi((*it)[3].str());
-      if (mode >= static_cast<int>(domain::LaunchMode::enterprise) && mode <= static_cast<int>(domain::LaunchMode::web_client)) {
-        result.history.push_back({Unescape((*it)[1].str()), std::chrono::system_clock::from_time_t(std::stoll((*it)[2].str())), static_cast<domain::LaunchMode>(mode)});
+      const auto id = TryUnescape((*it)[1].str());
+      if (id && mode >= static_cast<int>(domain::LaunchMode::enterprise) && mode <= static_cast<int>(domain::LaunchMode::web_client)) {
+        result.history.push_back({*id, std::chrono::system_clock::from_time_t(std::stoll((*it)[2].str())), static_cast<domain::LaunchMode>(mode)});
       }
+    } catch (const std::exception&) {
     }
+  }
 
-    const std::regex launch("\\{\\s*\\\"last_launch_id\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"time\\\"\\s*:\\s*([0-9]+)\\s*\\}");
-    for (std::sregex_iterator it(json.begin(), json.end(), launch), end; it != end; ++it) {
-      const auto id = Unescape((*it)[1].str());
-      if (!id.empty()) result.last_launches[id] = std::chrono::system_clock::from_time_t(std::stoll((*it)[2].str()));
+  const std::regex launch("\\{\\s*\\\"last_launch_id\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"time\\\"\\s*:\\s*([0-9]+)\\s*\\}");
+  for (std::sregex_iterator it(json.begin(), json.end(), launch), end; it != end; ++it) {
+    try {
+      const auto id = TryUnescape((*it)[1].str());
+      if (id && !id->empty()) result.last_launches[*id] = std::chrono::system_clock::from_time_t(std::stoll((*it)[2].str()));
+    } catch (const std::exception&) {
     }
+  }
 
-    size_t position = 0;
-    while (position < json.size()) {
-      while (position < json.size() && json[position] != '{') ++position;
-      if (position == json.size()) break;
-      ++position;
-      const auto idKey = ReadJsonRawString(json, position);
-      if (!idKey || *idKey != "tag_id" || !ConsumeJsonCharacter(json, position, ':')) continue;
-      const auto rawId = ReadJsonRawString(json, position);
-      if (!rawId || !ConsumeJsonCharacter(json, position, ',')) continue;
-      const auto valuesKey = ReadJsonRawString(json, position);
-      if (!valuesKey || *valuesKey != "values" || !ConsumeJsonCharacter(json, position, ':') || !ConsumeJsonCharacter(json, position, '[')) continue;
-      std::vector<std::wstring> values;
-      for (;;) {
-        SkipJsonWhitespace(json, position);
-        if (position < json.size() && json[position] == ']') { ++position; break; }
-        const auto rawTag = ReadJsonRawString(json, position);
-        if (!rawTag) { values.clear(); break; }
-        values.push_back(Unescape(*rawTag));
-        SkipJsonWhitespace(json, position);
-        if (position < json.size() && json[position] == ',') { ++position; continue; }
-        if (position < json.size() && json[position] == ']') { ++position; break; }
-        values.clear();
-        break;
-      }
-      if (!ConsumeJsonCharacter(json, position, '}')) continue;
-      const auto id = Unescape(*rawId);
-      if (!id.empty() && !values.empty()) result.tags[id] = std::move(values);
+  size_t position = 0;
+  while (position < json.size()) {
+    while (position < json.size() && json[position] != '{') ++position;
+    if (position == json.size()) break;
+    ++position;
+    const auto idKey = ReadJsonRawString(json, position);
+    if (!idKey || *idKey != "tag_id" || !ConsumeJsonCharacter(json, position, ':')) continue;
+    const auto rawId = ReadJsonRawString(json, position);
+    if (!rawId || !ConsumeJsonCharacter(json, position, ',')) continue;
+    const auto valuesKey = ReadJsonRawString(json, position);
+    if (!valuesKey || *valuesKey != "values" || !ConsumeJsonCharacter(json, position, ':') || !ConsumeJsonCharacter(json, position, '[')) continue;
+    std::vector<std::wstring> values;
+    for (;;) {
+      SkipJsonWhitespace(json, position);
+      if (position < json.size() && json[position] == ']') { ++position; break; }
+      const auto rawTag = ReadJsonRawString(json, position);
+      const auto tag = rawTag ? TryUnescape(*rawTag) : std::nullopt;
+      if (!tag) { values.clear(); break; }
+      values.push_back(*tag);
+      SkipJsonWhitespace(json, position);
+      if (position < json.size() && json[position] == ',') { ++position; continue; }
+      if (position < json.size() && json[position] == ']') { ++position; break; }
+      values.clear();
+      break;
     }
+    if (!ConsumeJsonCharacter(json, position, '}')) continue;
+    const auto id = TryUnescape(*rawId);
+    if (id && !id->empty() && !values.empty()) result.tags[*id] = std::move(values);
+  }
 
-    const std::regex style("\\{\\s*\\\"tag_style\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"background\\\"\\s*:\\s*([0-9]+)\\s*,\\s*\\\"text\\\"\\s*:\\s*([0-9]+)\\s*\\}");
-    for (std::sregex_iterator it(json.begin(), json.end(), style), end; it != end; ++it) {
-      const auto tag = Unescape((*it)[1].str());
+  const std::regex style("\\{\\s*\\\"tag_style\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"background\\\"\\s*:\\s*([0-9]+)\\s*,\\s*\\\"text\\\"\\s*:\\s*([0-9]+)\\s*\\}");
+  for (std::sregex_iterator it(json.begin(), json.end(), style), end; it != end; ++it) {
+    try {
+      const auto tag = TryUnescape((*it)[1].str());
       const auto background = std::stoul((*it)[2].str());
       const auto text = std::stoul((*it)[3].str());
-      if (!tag.empty() && background <= 0xFFFFFFu && text <= 0xFFFFFFu) result.tag_styles[tag] = {static_cast<COLORREF>(background), static_cast<COLORREF>(text)};
+      if (tag && !tag->empty() && background <= 0xFFFFFFu && text <= 0xFFFFFFu) result.tag_styles[*tag] = {static_cast<COLORREF>(background), static_cast<COLORREF>(text)};
+    } catch (const std::exception&) {
     }
+  }
 
-    if (const auto mode = JsonInteger(json, "default_sort_mode")) if (const auto parsed = ParseSortMode(*mode)) result.sorting.default_mode = *parsed;
-    const std::regex folder("\\{\\s*\\\"folder\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"mode\\\"\\s*:\\s*([0-9]+)\\s*\\}");
-    for (std::sregex_iterator it(json.begin(), json.end(), folder), end; it != end; ++it) {
-      const auto name = Unescape((*it)[1].str());
-      if (const auto mode = ParseSortMode(std::stoi((*it)[2].str())); !name.empty() && mode) result.sorting.folder_modes[name] = *mode;
+  if (const auto mode = JsonInteger(json, "default_sort_mode")) if (const auto parsed = ParseSortMode(*mode)) result.sorting.default_mode = *parsed;
+  const std::regex folder("\\{\\s*\\\"folder\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"mode\\\"\\s*:\\s*([0-9]+)\\s*\\}");
+  for (std::sregex_iterator it(json.begin(), json.end(), folder), end; it != end; ++it) {
+    try {
+      const auto name = TryUnescape((*it)[1].str());
+      if (const auto mode = ParseSortMode(std::stoi((*it)[2].str())); name && !name->empty() && mode) result.sorting.folder_modes[*name] = *mode;
+    } catch (const std::exception&) {
     }
-  } catch (...) {
-    return CatalogState{};
   }
   for (const auto& history : result.history) if (!history.database_id.empty() && !result.last_launches.contains(history.database_id)) result.last_launches[history.database_id] = history.timestamp;
   return result;
