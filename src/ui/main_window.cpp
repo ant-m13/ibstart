@@ -3851,24 +3851,39 @@ void MainWindow::CheckForUpdates() {
   DrawMenuBar(window_);
   SetStatus(L"Проверяем наличие обновлений…");
   const HWND owner = window_;
-  std::thread([state, owner] {
-    std::optional<update::Release> release;
-    std::wstring error;
-    try {
-      release = update::FetchLatestRelease();
-    } catch (const std::exception& exception) {
-      error = WideErrorText(exception.what());
-    } catch (...) {
-      error = L"Неизвестная ошибка проверки обновлений.";
-    }
-    {
-      std::lock_guard lock(state->mutex);
-      state->release = std::move(release);
-      state->error = std::move(error);
-      state->completed = true;
-    }
-    PostMessageW(owner, kUpdateCheckFinishedMessage, 0, 0);
-  }).detach();
+  try {
+    std::thread([state, owner] {
+      std::optional<update::Release> release;
+      std::wstring error;
+      try {
+        release = update::FetchLatestRelease();
+      } catch (const std::exception& exception) {
+        error = WideErrorText(exception.what());
+      } catch (...) {
+        error = L"Неизвестная ошибка проверки обновлений.";
+      }
+      {
+        std::lock_guard lock(state->mutex);
+        state->release = std::move(release);
+        state->error = std::move(error);
+        state->completed = true;
+      }
+      PostMessageW(owner, kUpdateCheckFinishedMessage, 0, 0);
+    }).detach();
+  } catch (const std::exception& error) {
+    update_check_.reset();
+    EnableMenuItem(help_menu_, kCheckForUpdates, MF_BYCOMMAND | MF_ENABLED);
+    DrawMenuBar(window_);
+    logger_.Error(L"Не удалось запустить проверку обновлений: " + WideErrorText(error.what()));
+    SetStatus(L"Не удалось запустить проверку обновлений.");
+    Message(window_, L"Не удалось запустить фоновую проверку обновлений.", L"Проверка обновлений", MB_OK | MB_ICONERROR);
+  } catch (...) {
+    update_check_.reset();
+    EnableMenuItem(help_menu_, kCheckForUpdates, MF_BYCOMMAND | MF_ENABLED);
+    DrawMenuBar(window_);
+    SetStatus(L"Не удалось запустить проверку обновлений.");
+    Message(window_, L"Не удалось запустить фоновую проверку обновлений.", L"Проверка обновлений", MB_OK | MB_ICONERROR);
+  }
 }
 void MainWindow::CompleteUpdateCheck() {
   auto state = std::move(update_check_);
@@ -3976,24 +3991,37 @@ void MainWindow::CompleteCacheOperation() {
     }
     SetStatus(L"Очищаем кэш…");
     const HWND owner = window_;
-    std::thread([state, owner, candidates = std::move(candidates)] {
-      cache::ClearResult result;
-      std::wstring error;
-      try {
-        result = cache::Clear(candidates);
-      } catch (const std::exception& exception) {
-        error = WideErrorText(exception.what());
-      } catch (...) {
-        error = L"Неизвестная ошибка очистки кэша.";
-      }
-      {
-        std::lock_guard lock(state->mutex);
-        state->result = std::move(result);
-        state->error = std::move(error);
-        state->completed = true;
-      }
-      PostMessageW(owner, kCacheOperationFinishedMessage, 0, 0);
-    }).detach();
+    try {
+      std::thread([state, owner, candidates = std::move(candidates)] {
+        cache::ClearResult result;
+        std::wstring error;
+        try {
+          result = cache::Clear(candidates);
+        } catch (const std::exception& exception) {
+          error = WideErrorText(exception.what());
+        } catch (...) {
+          error = L"Неизвестная ошибка очистки кэша.";
+        }
+        {
+          std::lock_guard lock(state->mutex);
+          state->result = std::move(result);
+          state->error = std::move(error);
+          state->completed = true;
+        }
+        PostMessageW(owner, kCacheOperationFinishedMessage, 0, 0);
+      }).detach();
+    } catch (const std::exception& exception) {
+      cache_operation_.reset();
+      DisplaySelected();
+      logger_.Error(L"Не удалось запустить очистку кэша: " + WideErrorText(exception.what()));
+      SetStatus(L"Не удалось запустить очистку кэша.");
+      Message(window_, L"Не удалось запустить фоновую очистку кэша.", L"Очистка кэша", MB_OK | MB_ICONERROR);
+    } catch (...) {
+      cache_operation_.reset();
+      DisplaySelected();
+      SetStatus(L"Не удалось запустить очистку кэша.");
+      Message(window_, L"Не удалось запустить фоновую очистку кэша.", L"Очистка кэша", MB_OK | MB_ICONERROR);
+    }
     return;
   }
 
