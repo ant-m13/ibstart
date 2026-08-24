@@ -664,7 +664,8 @@ void TestStorageSkipsMalformedRecords() {
     "selected_entry": "Valid database",
     "simple_mode": 1,
     "recent_lists": [{"recent_list": "bad\q"}, {"recent_list": "C:\\recent.v8i"}],
-    "platform_paths": [{"platform_path": "C:\\platform"}]
+    "platform_paths": [{"platform_path": "C:\\platform"}],
+    "unknown_settings": {"recent_list": "C:\\unexpected.v8i", "platform_path": "C:\\unexpected-platform"}
   })");
   const auto settings = ibstart::storage::LoadSettings(layout);
   CHECK(settings.active_ibases == L"C:\\valid.v8i");
@@ -685,12 +686,25 @@ void TestStorageSkipsMalformedRecords() {
       {"values": ["First", "Second"], "tag_id": "valid-tags"}
     ],
     "tag_styles": [{"tag_style": "bad\q", "background": 1, "text": 2}, {"text": 4, "tag_style": "valid-style", "background": 3}],
+    "unknown_metadata": {
+      "favorite": "unexpected-favorite",
+      "history_id": "unexpected-history",
+      "time": 5,
+      "mode": 0,
+      "last_launch_id": "unexpected-launch",
+      "tag_id": "unexpected-tags",
+      "values": ["unexpected"],
+      "tag_style": "unexpected-style",
+      "background": 1,
+      "text": 2
+    },
     "sorting": {"default_sort_mode": 2, "folders": [{"folder": "valid-folder", "mode": 2}]}
   })");
   const auto state = ibstart::storage::LoadCatalogState(layout);
   CHECK(state.favorites == std::vector<std::wstring>{L"preserved"});
   CHECK(state.history.size() == 1 && state.history[0].database_id == L"valid-history");
   CHECK(state.last_launches.contains(L"valid-launch"));
+  CHECK(!state.last_launches.contains(L"unexpected-launch"));
   CHECK(state.tags.size() == 1 && state.tags.contains(L"valid-tags"));
   CHECK(state.tags.at(L"valid-tags") == std::vector<std::wstring>{L"First", L"Second"});
   CHECK(state.tag_styles.size() == 1 && state.tag_styles.contains(L"valid-style"));

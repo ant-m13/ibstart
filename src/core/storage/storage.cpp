@@ -319,19 +319,22 @@ std::optional<std::vector<std::wstring>> StringArray(const JsonValue* value) {
 }
 
 template <typename Visitor>
-void ForEachJsonObject(std::string_view json, Visitor visitor) {
-  bool quoted = false;
-  for (size_t position = 0; position < json.size(); ++position) {
-    const char character = json[position];
-    if (quoted) {
-      if (character == '\\' && position + 1 < json.size()) ++position;
-      else if (character == '"') quoted = false;
-      continue;
+void ForEachArrayObject(const JsonObject& root, std::string_view array_key, Visitor visitor) {
+  const auto* array = ObjectValue(root, array_key);
+  if (!array || array->kind != JsonValueKind::array || array->raw.size() < 2) return;
+  size_t position = 1;
+  for (;;) {
+    SkipJsonWhitespace(array->raw, position);
+    if (position >= array->raw.size() || array->raw[position] == ']') return;
+    const auto item = ReadJsonValue(array->raw, position);
+    if (!item) return;
+    if (item->kind == JsonValueKind::object) {
+      size_t object_position = 0;
+      if (const auto object = ReadJsonObject(item->raw, object_position)) visitor(*object);
     }
-    if (character == '"') quoted = true;
-    else if (character == '{') {
-      if (const auto object = ReadJsonObject(json, position)) visitor(*object);
-    }
+    SkipJsonWhitespace(array->raw, position);
+    if (position >= array->raw.size() || array->raw[position] == ']') return;
+    if (array->raw[position++] != ',') return;
   }
 }
 
@@ -402,11 +405,13 @@ Settings LoadSettings(const StorageLayout& layout) {
     if (const auto y = ObjectInt(*root, "window_y")) result.window_y = *y;
     if (const auto width = ObjectInt(*root, "window_width")) result.window_width = std::clamp(*width, 480, 10000);
     if (const auto height = ObjectInt(*root, "window_height")) result.window_height = std::clamp(*height, 320, 10000);
+    ForEachArrayObject(*root, "platform_paths", [&](const JsonObject& object) {
+      if (const auto path = ObjectString(object, "platform_path")) result.platform_search_paths.emplace_back(*path);
+    });
+    ForEachArrayObject(*root, "recent_lists", [&](const JsonObject& object) {
+      if (const auto recent = ObjectString(object, "recent_list")) result.recent_ibases.emplace_back(*recent);
+    });
   }
-  ForEachJsonObject(json, [&](const JsonObject& object) {
-    if (const auto path = ObjectString(object, "platform_path")) result.platform_search_paths.emplace_back(*path);
-    if (const auto recent = ObjectString(object, "recent_list")) result.recent_ibases.emplace_back(*recent);
-  });
   return result;
 }
 
@@ -434,37 +439,43 @@ void SaveSettings(const StorageLayout& layout, const Settings& settings) {
 CatalogState LoadCatalogState(const StorageLayout& layout) {
   CatalogState result;
   const auto json = ReadFile(PathFor(layout, L"catalog-state.json"));
-  ForEachJsonObject(json, [&](const JsonObject& object) {
-    if (const auto favorite = ObjectString(object, "favorite")) result.favorites.push_back(*favorite);
-
-    const auto historyId = ObjectString(object, "history_id");
-    const auto historyTime = ObjectInteger(object, "time");
-    const auto historyMode = ObjectInt(object, "mode");
-    if (historyId && historyTime && historyMode &&
-        *historyMode >= static_cast<int>(domain::LaunchMode::enterprise) &&
-        *historyMode <= static_cast<int>(domain::LaunchMode::web_client)) {
-      result.history.push_back({*historyId, std::chrono::system_clock::from_time_t(static_cast<std::time_t>(*historyTime)),
-          static_cast<domain::LaunchMode>(*historyMode)});
-    }
-
-    const auto launchId = ObjectString(object, "last_launch_id");
-    const auto launchTime = ObjectInteger(object, "time");
-    if (launchId && launchTime && !launchId->empty()) {
-      result.last_launches[*launchId] = std::chrono::system_clock::from_time_t(static_cast<std::time_t>(*launchTime));
-    }
-
-    const auto tagId = ObjectString(object, "tag_id");
-    const auto tags = StringArray(ObjectValue(object, "values"));
-    if (tagId && !tagId->empty() && tags && !tags->empty()) result.tags[*tagId] = *tags;
-
-    const auto styleName = ObjectString(object, "tag_style");
-    const auto background = ObjectInteger(object, "background");
-    const auto text = ObjectInteger(object, "text");
-    if (styleName && !styleName->empty() && background && text && *background >= 0 && *text >= 0 &&
-        *background <= 0xFFFFFF && *text <= 0xFFFFFF) {
-      result.tag_styles[*styleName] = {static_cast<COLORREF>(*background), static_cast<COLORREF>(*text)};
-    }
-  });
+  if (const auto root = RootJsonObject(json)) {
+    ForEachArrayObject(*root, "favorites", [&](const JsonObject& object) {
+      if (const auto favorite = ObjectString(object, "favorite")) result.favorites.push_back(*favorite);
+    });
+    ForEachArrayObject(*root, "history", [&](const JsonObject& object) {
+      const auto historyId = ObjectString(object, "history_id");
+      const auto historyTime = ObjectInteger(object, "time");
+      const auto historyMode = ObjectInt(object, "mode");
+      if (historyId && historyTime && historyMode &&
+          *historyMode >= static_cast<int>(domain::LaunchMode::enterprise) &&
+          *historyMode <= static_cast<int>(domain::LaunchMode::web_client)) {
+        result.history.push_back({*historyId, std::chrono::system_clock::from_time_t(static_cast<std::time_t>(*historyTime)),
+            static_cast<domain::LaunchMode>(*historyMode)});
+      }
+    });
+    ForEachArrayObject(*root, "last_launches", [&](const JsonObject& object) {
+      const auto launchId = ObjectString(object, "last_launch_id");
+      const auto launchTime = ObjectInteger(object, "time");
+      if (launchId && launchTime && !launchId->empty()) {
+        result.last_launches[*launchId] = std::chrono::system_clock::from_time_t(static_cast<std::time_t>(*launchTime));
+      }
+    });
+    ForEachArrayObject(*root, "tags", [&](const JsonObject& object) {
+      const auto tagId = ObjectString(object, "tag_id");
+      const auto tags = StringArray(ObjectValue(object, "values"));
+      if (tagId && !tagId->empty() && tags && !tags->empty()) result.tags[*tagId] = *tags;
+    });
+    ForEachArrayObject(*root, "tag_styles", [&](const JsonObject& object) {
+      const auto styleName = ObjectString(object, "tag_style");
+      const auto background = ObjectInteger(object, "background");
+      const auto text = ObjectInteger(object, "text");
+      if (styleName && !styleName->empty() && background && text && *background >= 0 && *text >= 0 &&
+          *background <= 0xFFFFFF && *text <= 0xFFFFFF) {
+        result.tag_styles[*styleName] = {static_cast<COLORREF>(*background), static_cast<COLORREF>(*text)};
+      }
+    });
+  }
 
   for (const auto& history : result.history) if (!history.database_id.empty() && !result.last_launches.contains(history.database_id)) result.last_launches[history.database_id] = history.timestamp;
   return result;
