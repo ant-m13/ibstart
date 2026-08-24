@@ -6,6 +6,7 @@
 #include "core/launcher/command_builder.hpp"
 #include "core/logging/logging.hpp"
 #include "core/platform/platform_discovery.hpp"
+#include "core/platform/platform_version.hpp"
 #include "core/scanner/file_base_scanner.hpp"
 #include "core/storage/storage.hpp"
 #include "core/update/update_service.hpp"
@@ -150,6 +151,13 @@ void TestCommandBuilderAndSelection() {
       {L"C:\\1cv8\\8.3.100000000000000000000\\bin\\1cv8.exe", L"8.3.100000000000000000000", ibstart::domain::ClientBitness::x64, true}};
   const auto largestVersion = ibstart::launcher::SelectPlatform(largeVersions, options);
   CHECK(largestVersion && largestVersion->version == L"8.3.100000000000000000000");
+  CHECK(!ibstart::platform::IsNewerVersion(L"8.3.027", L"8.3.27"));
+  CHECK(!ibstart::platform::IsNewerVersion(L"8.3.27", L"8.3.027"));
+  const std::vector<ibstart::domain::PlatformInstallation> equivalentVersions = {
+      {L"C:\\1cv8\\8.3.027\\bin\\1cv8.exe", L"8.3.027", ibstart::domain::ClientBitness::x64, true},
+      {L"C:\\1cv8\\8.3.27\\bin\\1cv8.exe", L"8.3.27", ibstart::domain::ClientBitness::x86, true}};
+  const auto preferredEquivalentVersion = ibstart::launcher::SelectPlatform(equivalentVersions, options);
+  CHECK(preferredEquivalentVersion && preferredEquivalentVersion->bitness == ibstart::domain::ClientBitness::x86);
   CHECK(ibstart::launcher::ParseAppArchitecture(L"x86_64_prt") == ibstart::domain::ClientArchitecture::x64_priority);
   CHECK(ibstart::launcher::ParseAppArchitecture(L"x86") == ibstart::domain::ClientArchitecture::x86);
   CHECK(!ibstart::launcher::ParseAppArchitecture(L"x64"));

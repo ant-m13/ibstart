@@ -53,7 +53,7 @@ inline bool IsNewerVersion(std::wstring_view left, std::wstring_view right) {
     const int compared = detail::CompareNumericParts(leftPart, rightPart);
     if (compared != 0) return compared > 0;
   }
-  return left > right;
+  return false;
 }
 
 }  // namespace ibstart::platform

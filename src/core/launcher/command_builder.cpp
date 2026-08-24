@@ -156,7 +156,10 @@ std::optional<domain::PlatformInstallation> SelectPlatform(
     filtered.push_back(candidate);
   }
   std::sort(filtered.begin(), filtered.end(), [architecture](const auto& left, const auto& right) {
-    if (left.version != right.version) return platform::IsNewerVersion(left.version, right.version);
+    if (left.version != right.version) {
+      if (platform::IsNewerVersion(left.version, right.version)) return true;
+      if (platform::IsNewerVersion(right.version, left.version)) return false;
+    }
     const bool prefer64 = architecture == domain::ClientArchitecture::x64_priority;
     const int leftRank = left.bitness == (prefer64 ? domain::ClientBitness::x64 : domain::ClientBitness::x86) ? 0 : 1;
     const int rightRank = right.bitness == (prefer64 ? domain::ClientBitness::x64 : domain::ClientBitness::x86) ? 0 : 1;
