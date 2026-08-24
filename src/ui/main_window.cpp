@@ -2704,7 +2704,7 @@ bool MainWindow::DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const {
     SetBkMode(draw->hDC, TRANSPARENT);
     const bool ascending = item->command == kSortAscending;
     TextOutW(draw->hDC, iconX + 2, iconY + 1, ascending ? L"А" : L"Я", 1);
-    TextOutW(draw->hDC, iconX + 11, iconY + 10, ascending ? L"Я" : L"А", 1);
+    TextOutW(draw->hDC, iconX + 2, iconY + 10, ascending ? L"Я" : L"А", 1);
     MoveToEx(draw->hDC, iconX + 17, iconY + 3, nullptr);
     LineTo(draw->hDC, iconX + 17, iconY + 16);
     MoveToEx(draw->hDC, iconX + 14, iconY + 13, nullptr);
