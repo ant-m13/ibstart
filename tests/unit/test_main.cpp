@@ -163,6 +163,27 @@ void TestCommandBuilderAndSelection() {
   bool invalidThinDesigner = false; try { (void)ibstart::launcher::BuildCommand(file, *chosen, options); } catch (const std::invalid_argument&) { invalidThinDesigner = true; } CHECK(invalidThinDesigner);
 }
 
+void TestWindowsArgumentQuoting() {
+  const std::vector<std::wstring> expected = {
+      L"", L"plain", L"with spaces", L"with\ttab", L"embedded\"quote", L"slash-before-quote\\\"",
+      L"two-slashes-before-quote\\\\\"", L"trailing slash with space\\", L"two trailing slashes with space\\\\",
+      L"\"surrounded by quotes\"", L"русский 😀", L"line\nbreak"};
+  std::wstring command = L"IBStart.exe";
+  for (const auto& argument : expected) {
+    command.push_back(L' ');
+    command += ibstart::launcher::QuoteWindowsArgument(argument);
+  }
+  int count{};
+  LPWSTR* values = CommandLineToArgvW(command.c_str(), &count);
+  CHECK(values != nullptr);
+  if (!values) return;
+  CHECK(count == static_cast<int>(expected.size() + 1));
+  for (size_t index = 0; index < expected.size() && static_cast<int>(index + 1) < count; ++index) {
+    CHECK(values[index + 1] == expected[index]);
+  }
+  LocalFree(values);
+}
+
 void TestCatalogOrderingAndCycles() {
   auto document = ibstart::v8i::V8iDocument::ParseUtf8("[Ten]\nOrderInList=10\n[Two]\nOrderInList=2\n");
   ibstart::catalog::Catalog catalog(std::move(document));
@@ -399,6 +420,7 @@ int wmain() {
   run(L"NoBomAndCatalog", TestNoBomAndCatalog);
   run(L"SafeStore", TestSafeStore);
   run(L"CommandBuilderAndSelection", TestCommandBuilderAndSelection);
+  run(L"WindowsArgumentQuoting", TestWindowsArgumentQuoting);
   run(L"CatalogOrderingAndCycles", TestCatalogOrderingAndCycles);
   run(L"StandardFolderPaths", TestStandardFolderPaths);
   run(L"FileBaseScanRegistration", TestFileBaseScanRegistration);
