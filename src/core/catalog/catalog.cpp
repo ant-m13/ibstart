@@ -349,6 +349,27 @@ bool Catalog::MoveBy(std::wstring_view name, int offset) {
   return Move(name, parent, static_cast<size_t>(targetIndex));
 }
 
+bool Catalog::SetChildOrder(std::wstring_view parent, const std::vector<std::wstring>& names) {
+  const auto children = ChildrenOf(parent);
+  if (children.size() != names.size()) return false;
+
+  std::vector<domain::Entry*> ordered;
+  ordered.reserve(names.size());
+  for (const auto& name : names) {
+    auto* entry = Find(name);
+    if (entry == nullptr || !EqualNoCase(ParentName(entry->ValueOr(L"Folder")), parent) ||
+        std::find(ordered.begin(), ordered.end(), entry) != ordered.end()) return false;
+    ordered.push_back(entry);
+  }
+
+  for (size_t index = 0; index < ordered.size(); ++index) {
+    const auto order = std::to_wstring(index + 1);
+    ordered[index]->Set(L"OrderInList", order);
+    ordered[index]->Set(L"OrderInTree", order);
+  }
+  return true;
+}
+
 void Catalog::Renumber(std::wstring_view parent) {
   const auto children = ChildrenOf(parent);
   for (size_t index = 0; index < children.size(); ++index) {

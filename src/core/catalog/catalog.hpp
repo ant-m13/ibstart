@@ -43,6 +43,10 @@ class Catalog {
   bool Remove(std::wstring_view name);
   bool Move(std::wstring_view name, std::wstring parent, size_t position);
   bool MoveBy(std::wstring_view name, int offset);
+  // Replaces the saved order of every direct child of parent.  The caller must
+  // supply each child exactly once; this prevents a partial reorder from
+  // silently changing the placement of entries that are not currently shown.
+  bool SetChildOrder(std::wstring_view parent, const std::vector<std::wstring>& names);
   void Renumber(std::wstring_view parent);
   [[nodiscard]] static std::optional<std::wstring> WebUrl(std::wstring_view connect);
   [[nodiscard]] static bool IsWebConnection(std::wstring_view connect);

@@ -234,6 +234,31 @@ void TestCatalogOrderingAndCycles() {
   CHECK(!ibstart::catalog::IsBareWebConnection(L"WS=\"https://example.test/base\""));
 }
 
+void TestCatalogSetChildOrder() {
+  auto document = ibstart::v8i::V8iDocument::ParseUtf8(
+      "[Zulu database]\nConnect=File=\"C:\\\\zulu\"\nOrderInList=1\nOrderInTree=1\n"
+      "[Alpha folder]\nFolder=/\nOrderInList=2\nOrderInTree=2\n"
+      "[Bravo database]\nConnect=File=\"C:\\\\bravo\"\nOrderInList=3\nOrderInTree=3\n"
+      "[Nested zulu]\nConnect=File=\"C:\\\\nested-zulu\"\nFolder=/Alpha folder\nOrderInList=1\nOrderInTree=1\n"
+      "[Nested alpha]\nConnect=File=\"C:\\\\nested-alpha\"\nFolder=/Alpha folder\nOrderInList=2\nOrderInTree=2\n");
+  ibstart::catalog::Catalog catalog(std::move(document));
+
+  CHECK(catalog.SetChildOrder(L"", {L"Alpha folder", L"Bravo database", L"Zulu database"}));
+  CHECK(catalog.SetChildOrder(L"Alpha folder", {L"Nested alpha", L"Nested zulu"}));
+  const auto tree = catalog.Tree();
+  CHECK(tree.size() == 3);
+  CHECK(tree.size() > 2 && tree[0].name == L"Alpha folder" && tree[1].name == L"Bravo database" && tree[2].name == L"Zulu database");
+  CHECK(!tree.empty() && tree[0].children.size() == 2 && tree[0].children[0].name == L"Nested alpha" && tree[0].children[1].name == L"Nested zulu");
+  const auto* nestedAlpha = catalog.Find(L"Nested alpha");
+  const auto* nestedZulu = catalog.Find(L"Nested zulu");
+  CHECK(nestedAlpha && nestedAlpha->ValueOr(L"OrderInList") == L"1" && nestedAlpha->ValueOr(L"OrderInTree") == L"1");
+  CHECK(nestedZulu && nestedZulu->ValueOr(L"OrderInList") == L"2" && nestedZulu->ValueOr(L"OrderInTree") == L"2");
+
+  CHECK(!catalog.SetChildOrder(L"Alpha folder", {L"Nested alpha"}));
+  CHECK(!catalog.SetChildOrder(L"Alpha folder", {L"Nested alpha", L"Nested alpha"}));
+  CHECK(!catalog.SetChildOrder(L"Alpha folder", {L"Nested alpha", L"Zulu database"}));
+}
+
 void TestInstanceActivationPayload() {
   const wchar_t valid[] = L"database-id";
   COPYDATASTRUCT data{};
@@ -548,6 +573,7 @@ int wmain() {
   run(L"PlatformDiscoveryLargeVersions", TestPlatformDiscoveryLargeVersions);
   run(L"WindowsArgumentQuoting", TestWindowsArgumentQuoting);
   run(L"CatalogOrderingAndCycles", TestCatalogOrderingAndCycles);
+  run(L"CatalogSetChildOrder", TestCatalogSetChildOrder);
   run(L"StandardFolderPaths", TestStandardFolderPaths);
   run(L"FileBaseScanRegistration", TestFileBaseScanRegistration);
   run(L"SecretMasking", TestSecretMasking);
