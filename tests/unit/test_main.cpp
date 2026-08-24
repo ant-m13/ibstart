@@ -254,6 +254,12 @@ void TestCatalogSetChildOrder() {
   CHECK(nestedAlpha && nestedAlpha->ValueOr(L"OrderInList") == L"1" && nestedAlpha->ValueOr(L"OrderInTree") == L"1");
   CHECK(nestedZulu && nestedZulu->ValueOr(L"OrderInList") == L"2" && nestedZulu->ValueOr(L"OrderInTree") == L"2");
 
+  // Manual catalog order can deliberately place a database before a folder.
+  CHECK(catalog.SetChildOrder(L"", {L"Zulu database", L"Alpha folder", L"Bravo database"}));
+  const auto manuallyReordered = catalog.Tree();
+  CHECK(manuallyReordered.size() > 2 && manuallyReordered[0].name == L"Zulu database" &&
+      manuallyReordered[1].name == L"Alpha folder" && manuallyReordered[2].name == L"Bravo database");
+
   CHECK(!catalog.SetChildOrder(L"Alpha folder", {L"Nested alpha"}));
   CHECK(!catalog.SetChildOrder(L"Alpha folder", {L"Nested alpha", L"Nested alpha"}));
   CHECK(!catalog.SetChildOrder(L"Alpha folder", {L"Nested alpha", L"Zulu database"}));
