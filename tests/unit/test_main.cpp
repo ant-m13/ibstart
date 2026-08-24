@@ -281,13 +281,16 @@ void TestCatalogSortChildrenByName() {
   };
 
   CHECK(catalog.SortChildrenByName(L"", ibstart::catalog::SortDirection::ascending, false));
-  CHECK(names(catalog.Tree()) == std::vector<std::wstring>{L"Alpha database", L"Folder alpha", L"Folder bravo", L"Zulu database"});
+  const std::vector<std::wstring> ascendingRoot{L"Alpha database", L"Folder alpha", L"Folder bravo", L"Zulu database"};
+  CHECK(names(catalog.Tree()) == ascendingRoot);
   CHECK(catalog.SortChildrenByName(L"", ibstart::catalog::SortDirection::descending, true));
-  CHECK(names(catalog.Tree()) == std::vector<std::wstring>{L"Folder bravo", L"Folder alpha", L"Zulu database", L"Alpha database"});
+  const std::vector<std::wstring> descendingRoot{L"Folder bravo", L"Folder alpha", L"Zulu database", L"Alpha database"};
+  CHECK(names(catalog.Tree()) == descendingRoot);
   CHECK(catalog.SortChildrenByName(L"Folder bravo", ibstart::catalog::SortDirection::ascending, false));
   const auto tree = catalog.Tree();
   const auto folder = std::find_if(tree.begin(), tree.end(), [](const auto& item) { return item.name == L"Folder bravo"; });
-  CHECK(folder != tree.end() && names(folder->children) == std::vector<std::wstring>{L"Nested alpha", L"Nested zulu"});
+  const std::vector<std::wstring> ascendingNested{L"Nested alpha", L"Nested zulu"};
+  CHECK(folder != tree.end() && names(folder->children) == ascendingNested);
 }
 
 void TestInstanceActivationPayload() {
