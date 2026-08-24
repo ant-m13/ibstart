@@ -3010,6 +3010,7 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   const bool recentRoot = SelectedItemIsRecentRoot();
   const auto* entry = specialRoot ? nullptr : catalog_->Find(name);
   const bool database = entry && entry->IsDatabase();
+  const bool launch_available = database && !cache_operation_;
   const bool group = entry && entry->IsGroup();
   const bool editable = entry && !settings_.simple_mode;
   const bool manualOrder = entry && SortModeForFolder(catalog_->ParentOf(entry->name)) == storage::SortMode::catalog_order;
@@ -3050,8 +3051,8 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   const auto separator = [&] { AppendMenuW(menu, MF_SEPARATOR, 0, nullptr); };
   if (settings_.simple_mode) {
     if (database) {
-      append(true, false, kEnterprise, IDI_ACTION_ENTERPRISE, L"Предприятие", L"F3");
-      append(true, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор", L"F4");
+      append(launch_available, false, kEnterprise, IDI_ACTION_ENTERPRISE, L"Предприятие", L"F3");
+      append(launch_available, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор", L"F4");
       separator();
       append(true, false, kEdit, IDI_ACTION_EDIT, L"Изменить…", L"F2");
       append(true, false, kDelete, IDI_ACTION_DELETE, L"Удалить…", L"Alt+Shift+Del");
@@ -3072,8 +3073,8 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
     if (command) SendMessageW(window_, WM_COMMAND, MAKEWPARAM(command, 0), 0);
     return;
   }
-  append(database, false, kEnterprise, IDI_ACTION_ENTERPRISE, L"Предприятие", L"F3");
-  append(database, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор", L"F4");
+  append(launch_available, false, kEnterprise, IDI_ACTION_ENTERPRISE, L"Предприятие", L"F3");
+  append(launch_available, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор", L"F4");
   separator();
   append(database, favorite, kToggleFavorite, IDI_ACTION_FAVORITE, favorite ? L"Убрать из избранного" : L"Добавить в избранное", L"Ctrl+Alt+I");
   if (database && !settings_.simple_mode) {
@@ -3213,7 +3214,8 @@ void MainWindow::DisplaySelected() {
     }
   }
   const bool database = entry->IsDatabase();
-  EnableWindow(enterprise_, database); EnableWindow(designer_, database);
+  const bool launch_available = database && !cache_operation_;
+  EnableWindow(enterprise_, launch_available); EnableWindow(designer_, launch_available);
   EnableWindow(edit_, !settings_.simple_mode); EnableWindow(remove_, !settings_.simple_mode);
   EnableWindow(cache_, database && !settings_.simple_mode && !cache_operation_); EnableWindow(shortcut_, database && !settings_.simple_mode);
   InvalidateRect(details_, nullptr, TRUE);
@@ -3221,6 +3223,10 @@ void MainWindow::DisplaySelected() {
 }
 
 void MainWindow::LaunchSelected(domain::LaunchMode mode) {
+  if (cache_operation_) {
+    SetStatus(L"Запуск базы недоступен до завершения операции с кэшем.");
+    return;
+  }
   if (!catalog_) return; const auto name = SelectedName(); const auto* entry = catalog_->Find(name); if (!entry || !entry->IsDatabase()) { Message(window_, L"Выберите информационную базу."); return; }
   try {
     const auto database = catalog_->DatabaseFor(name);
@@ -3570,7 +3576,7 @@ void MainWindow::ClearSelectedCache() {
     const auto database = catalog_->DatabaseFor(SelectedName());
     const auto state = std::make_shared<CacheOperationState>();
     cache_operation_ = state;
-    EnableWindow(cache_, FALSE);
+    DisplaySelected();
     SetStatus(L"Анализируем размер кэша…");
     const HWND owner = window_;
     std::thread([state, owner, database] {
