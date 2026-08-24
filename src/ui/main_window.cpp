@@ -70,6 +70,21 @@ constexpr LPARAM kFavoritesRootItemData = 2;
 constexpr LPARAM kCatalogRootItemData = 3;
 constexpr wchar_t kCatalogRootName[] = L"Информационные базы";
 
+OwnerDrawMenuIcon MenuIconForCommand(UINT command) {
+  switch (command) {
+    case kMoveUp: return OwnerDrawMenuIcon::move_up;
+    case kMoveDown: return OwnerDrawMenuIcon::move_down;
+    case kSimpleMode: return OwnerDrawMenuIcon::compact_mode;
+    case kTagsContextMenu:
+    case kEditTags:
+    case kConfigureTagColors:
+    case kShowTagsInList: return OwnerDrawMenuIcon::tag;
+    case kSortAscending: return OwnerDrawMenuIcon::sort_ascending;
+    case kSortDescending: return OwnerDrawMenuIcon::sort_descending;
+    default: return OwnerDrawMenuIcon::standard;
+  }
+}
+
 void Message(HWND owner, std::wstring_view text, std::wstring_view title = L"ИБ Старт", UINT type = MB_OK | MB_ICONINFORMATION) { MessageBoxW(owner, std::wstring(text).c_str(), std::wstring(title).c_str(), type); }
 std::wstring WideErrorText(std::string_view message) noexcept {
   try { return utf::FromUtf8(message); }
@@ -1664,8 +1679,9 @@ MainWindow::~MainWindow() {
     settings_.selected_entry = catalog_ && catalog_->Find(SelectedName()) ? SelectedName() : std::wstring();
     DestroyWindow(window_);
   }
-  ClearContextMenuItems();
-  ClearMainMenuItems();
+  context_menu_items_.Clear();
+  main_menu_items_.Clear();
+  file_menu_items_.Clear();
   for (const auto images : button_images_) if (images) ImageList_Destroy(images);
   if (tree_images_) ImageList_Destroy(tree_images_);
   if (controls_font_) DeleteObject(controls_font_);
@@ -2372,200 +2388,20 @@ LRESULT MainWindow::DrawDetailsList(NMLVCUSTOMDRAW* draw) const {
 }
 bool MainWindow::MeasureContextMenuItem(MEASUREITEMSTRUCT* measure) const {
   if (!measure || measure->CtlType != ODT_MENU) return false;
-  const auto* item = reinterpret_cast<const ContextMenuItem*>(measure->itemData);
-  const auto contains = [item](const auto& items) {
-    return std::any_of(items.begin(), items.end(), [item](const auto& candidate) { return &candidate == item; });
-  };
-  if (!contains(context_menu_items_) && !contains(main_menu_items_) && !contains(file_menu_items_)) return false;
-
-  HDC context = GetDC(window_);
-  if (!context) return false;
-  const HFONT font = controls_font_ ? controls_font_ : static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-  const auto previous = SelectObject(context, font);
-  SIZE titleSize{};
-  SIZE shortcutSize{};
-  GetTextExtentPoint32W(context, item->text.c_str(), static_cast<int>(item->text.size()), &titleSize);
-  if (!item->shortcut.empty()) {
-    GetTextExtentPoint32W(context, item->shortcut.c_str(), static_cast<int>(item->shortcut.size()), &shortcutSize);
-  }
-  SelectObject(context, previous);
-  ReleaseDC(window_, context);
-  measure->itemHeight = 28;
-  measure->itemWidth = std::max<UINT>(210u, static_cast<UINT>(titleSize.cx) + static_cast<UINT>(shortcutSize.cx) + 66u);
-  return true;
+  const auto* item = FindMenuItem(measure->itemData);
+  return item && OwnerDrawMenu::Measure(window_, controls_font_, *item, measure);
 }
 
 bool MainWindow::DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const {
   if (!draw || draw->CtlType != ODT_MENU) return false;
-  const auto* item = reinterpret_cast<const ContextMenuItem*>(draw->itemData);
-  const auto contains = [item](const auto& items) {
-    return std::any_of(items.begin(), items.end(), [item](const auto& candidate) { return &candidate == item; });
-  };
-  if (!contains(context_menu_items_) && !contains(main_menu_items_) && !contains(file_menu_items_)) return false;
-
-  const bool disabled = (draw->itemState & ODS_DISABLED) != 0;
-  const bool selected = (draw->itemState & ODS_SELECTED) != 0 && !disabled;
-  const bool checked = (draw->itemState & ODS_CHECKED) != 0;
-  const bool tagIcon = item->command == kTagsContextMenu || item->command == kEditTags || item->command == kConfigureTagColors || item->command == kShowTagsInList;
-  const bool simpleModeIcon = item->command == kSimpleMode;
-  const bool sortIcon = item->command == kSortAscending || item->command == kSortDescending;
-  const bool hasSubmenuArrow = item->command == kTagsContextMenu || item->command == kRecentListsMenu;
-  const int saved = SaveDC(draw->hDC);
-  FillRect(draw->hDC, &draw->rcItem, GetSysColorBrush(selected ? COLOR_HIGHLIGHT : COLOR_MENU));
-  const int iconX = draw->rcItem.left + 7;
-  const int iconY = draw->rcItem.top + (static_cast<int>(draw->rcItem.bottom - draw->rcItem.top) - 20) / 2;
-  if (item->command == kMoveUp || item->command == kMoveDown) {
-    const COLORREF color = disabled ? GetSysColor(COLOR_GRAYTEXT) : RGB(0, 144, 162);
-    const HBRUSH brush = CreateSolidBrush(color);
-    const HPEN pen = CreatePen(PS_SOLID, 1, color);
-    const auto previousBrush = SelectObject(draw->hDC, brush);
-    const auto previousPen = SelectObject(draw->hDC, pen);
-    POINT arrow[] = {{iconX + 10, item->command == kMoveUp ? iconY + 1 : iconY + 19},
-        {iconX + 2, item->command == kMoveUp ? iconY + 9 : iconY + 11},
-        {iconX + 7, item->command == kMoveUp ? iconY + 9 : iconY + 11},
-        {iconX + 7, item->command == kMoveUp ? iconY + 19 : iconY + 1},
-        {iconX + 13, item->command == kMoveUp ? iconY + 19 : iconY + 1},
-        {iconX + 13, item->command == kMoveUp ? iconY + 9 : iconY + 11},
-        {iconX + 18, item->command == kMoveUp ? iconY + 9 : iconY + 11}};
-    Polygon(draw->hDC, arrow, 7);
-    SelectObject(draw->hDC, previousBrush);
-    SelectObject(draw->hDC, previousPen);
-    DeleteObject(brush);
-    DeleteObject(pen);
-  } else if (simpleModeIcon) {
-    const COLORREF outline = disabled ? GetSysColor(COLOR_GRAYTEXT) : selected ? RGB(218, 242, 255) : RGB(0, 144, 162);
-    const COLORREF background = selected ? GetSysColor(COLOR_HIGHLIGHT) : RGB(231, 246, 248);
-    const HBRUSH brush = CreateSolidBrush(background);
-    const HPEN pen = CreatePen(PS_SOLID, 1, outline);
-    const auto previousBrush = SelectObject(draw->hDC, brush);
-    const auto previousPen = SelectObject(draw->hDC, pen);
-    RoundRect(draw->hDC, iconX + 2, iconY + 3, iconX + 19, iconY + 17, 4, 4);
-    SelectObject(draw->hDC, previousBrush);
-    SelectObject(draw->hDC, previousPen);
-    DeleteObject(brush);
-    if (!disabled) {
-      const auto previousLinePen = SelectObject(draw->hDC, pen);
-      MoveToEx(draw->hDC, iconX + 6, iconY + 8, nullptr);
-      LineTo(draw->hDC, iconX + 15, iconY + 8);
-      MoveToEx(draw->hDC, iconX + 6, iconY + 12, nullptr);
-      LineTo(draw->hDC, iconX + 12, iconY + 12);
-      SelectObject(draw->hDC, previousLinePen);
-    }
-    DeleteObject(pen);
-  } else if (tagIcon) {
-    const COLORREF color = disabled ? GetSysColor(COLOR_GRAYTEXT) : selected ? RGB(218, 242, 255) : RGB(0, 144, 162);
-    const HBRUSH brush = CreateSolidBrush(color);
-    const HPEN pen = CreatePen(PS_SOLID, 1, color);
-    const auto previousBrush = SelectObject(draw->hDC, brush);
-    const auto previousPen = SelectObject(draw->hDC, pen);
-    POINT tag[] = {{iconX + 2, iconY + 3}, {iconX + 11, iconY + 3}, {iconX + 18, iconY + 10}, {iconX + 11, iconY + 17}, {iconX + 2, iconY + 17}};
-    Polygon(draw->hDC, tag, 5);
-    SelectObject(draw->hDC, previousBrush);
-    SelectObject(draw->hDC, previousPen);
-    const HBRUSH holeBrush = GetSysColorBrush(selected ? COLOR_HIGHLIGHT : COLOR_MENU);
-    const HPEN holePen = CreatePen(PS_SOLID, 1, selected ? GetSysColor(COLOR_HIGHLIGHT) : GetSysColor(COLOR_MENU));
-    const auto previousHoleBrush = SelectObject(draw->hDC, holeBrush);
-    const auto previousHolePen = SelectObject(draw->hDC, holePen);
-    Ellipse(draw->hDC, iconX + 5, iconY + 6, iconX + 9, iconY + 10);
-    SelectObject(draw->hDC, previousHoleBrush);
-    SelectObject(draw->hDC, previousHolePen);
-    DeleteObject(brush);
-    DeleteObject(pen);
-    DeleteObject(holePen);
-  } else if (sortIcon) {
-    const COLORREF color = disabled ? GetSysColor(COLOR_GRAYTEXT) : selected ? RGB(218, 242, 255) : RGB(0, 144, 162);
-    const HPEN pen = CreatePen(PS_SOLID, 2, color);
-    const auto previousPen = SelectObject(draw->hDC, pen);
-    const HFONT previousFont = static_cast<HFONT>(SelectObject(draw->hDC, GetStockObject(DEFAULT_GUI_FONT)));
-    SetTextColor(draw->hDC, color);
-    SetBkMode(draw->hDC, TRANSPARENT);
-    const bool ascending = item->command == kSortAscending;
-    TextOutW(draw->hDC, iconX + 2, iconY + 1, ascending ? L"А" : L"Я", 1);
-    TextOutW(draw->hDC, iconX + 2, iconY + 10, ascending ? L"Я" : L"А", 1);
-    MoveToEx(draw->hDC, iconX + 17, iconY + 3, nullptr);
-    LineTo(draw->hDC, iconX + 17, iconY + 16);
-    MoveToEx(draw->hDC, iconX + 14, iconY + 13, nullptr);
-    LineTo(draw->hDC, iconX + 17, iconY + 16);
-    LineTo(draw->hDC, iconX + 20, iconY + 13);
-    SelectObject(draw->hDC, previousFont);
-    SelectObject(draw->hDC, previousPen);
-    DeleteObject(pen);
-  } else if (item->icon) {
-    if (disabled) DrawStateW(draw->hDC, nullptr, nullptr, reinterpret_cast<LPARAM>(item->icon), 0, iconX, iconY, 20, 20, DST_ICON | DSS_DISABLED);
-    else DrawIconEx(draw->hDC, iconX, iconY, item->icon, 20, 20, 0, nullptr, DI_NORMAL);
-  }
-  if (checked) {
-    if (tagIcon) {
-      const COLORREF border = selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : RGB(0, 103, 117);
-      const HBRUSH badgeBrush = CreateSolidBrush(RGB(255, 255, 255));
-      const HPEN badgePen = CreatePen(PS_SOLID, 1, border);
-      const auto previousBrush = SelectObject(draw->hDC, badgeBrush);
-      const auto previousPen = SelectObject(draw->hDC, badgePen);
-      Ellipse(draw->hDC, iconX + 11, iconY + 10, iconX + 22, iconY + 21);
-      SelectObject(draw->hDC, previousBrush);
-      SelectObject(draw->hDC, previousPen);
-      DeleteObject(badgeBrush);
-      DeleteObject(badgePen);
-    }
-    const COLORREF color = tagIcon ? RGB(0, 103, 117) : selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : RGB(0, 103, 117);
-    const HPEN pen = CreatePen(PS_SOLID, 2, color);
-    const auto previousPen = SelectObject(draw->hDC, pen);
-    POINT check[] = {{iconX + 4, iconY + 11}, {iconX + 8, iconY + 15}, {iconX + 17, iconY + 6}};
-    if (tagIcon) {
-      check[0] = {iconX + 13, iconY + 15};
-      check[1] = {iconX + 16, iconY + 18};
-      check[2] = {iconX + 20, iconY + 13};
-    }
-    Polyline(draw->hDC, check, 3);
-    SelectObject(draw->hDC, previousPen);
-    DeleteObject(pen);
-  }
-  const HFONT font = controls_font_ ? controls_font_ : static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
-  SelectObject(draw->hDC, font);
-  SetBkMode(draw->hDC, TRANSPARENT);
-  RECT textRect = draw->rcItem;
-  textRect.left += 35;
-  textRect.right -= 10;
-  if (hasSubmenuArrow) textRect.right -= 16;
-  if (!item->shortcut.empty()) {
-    SIZE shortcutSize{};
-    GetTextExtentPoint32W(draw->hDC, item->shortcut.c_str(), static_cast<int>(item->shortcut.size()), &shortcutSize);
-    RECT shortcutRect = draw->rcItem;
-    shortcutRect.right -= 10;
-    shortcutRect.left = std::max(textRect.left + 64, shortcutRect.right - shortcutSize.cx);
-    textRect.right = shortcutRect.left - 12;
-    const COLORREF shortcutColor = disabled ? GetSysColor(COLOR_GRAYTEXT) : selected ? RGB(218, 242, 255) : RGB(91, 109, 121);
-    SetTextColor(draw->hDC, shortcutColor);
-    DrawTextW(draw->hDC, item->shortcut.c_str(), static_cast<int>(item->shortcut.size()), &shortcutRect, DT_SINGLELINE | DT_VCENTER | DT_RIGHT | DT_NOPREFIX);
-  }
-  SetTextColor(draw->hDC, GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : (disabled ? COLOR_GRAYTEXT : COLOR_MENUTEXT)));
-  DrawTextW(draw->hDC, item->text.c_str(), static_cast<int>(item->text.size()), &textRect, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
-  if (hasSubmenuArrow) {
-    const COLORREF arrowColor = disabled ? GetSysColor(COLOR_GRAYTEXT) : GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_MENUTEXT);
-    const HPEN pen = CreatePen(PS_SOLID, 1, arrowColor);
-    const auto previousPen = SelectObject(draw->hDC, pen);
-    const int centerY = (static_cast<int>(draw->rcItem.top) + static_cast<int>(draw->rcItem.bottom)) / 2;
-    MoveToEx(draw->hDC, draw->rcItem.right - 15, centerY - 4, nullptr);
-    LineTo(draw->hDC, draw->rcItem.right - 10, centerY);
-    LineTo(draw->hDC, draw->rcItem.right - 15, centerY + 4);
-    SelectObject(draw->hDC, previousPen);
-    DeleteObject(pen);
-  }
-  if (draw->itemState & ODS_FOCUS) DrawFocusRect(draw->hDC, &draw->rcItem);
-  RestoreDC(draw->hDC, saved);
-  return true;
+  const auto* item = FindMenuItem(draw->itemData);
+  return item && OwnerDrawMenu::Draw(controls_font_, *item, draw);
 }
 
-void MainWindow::ClearContextMenuItems() noexcept {
-  for (const auto& item : context_menu_items_) if (item.icon) DestroyIcon(item.icon);
-  context_menu_items_.clear();
-}
-
-void MainWindow::ClearMainMenuItems() noexcept {
-  for (const auto& item : main_menu_items_) if (item.icon) DestroyIcon(item.icon);
-  main_menu_items_.clear();
-  for (const auto& item : file_menu_items_) if (item.icon) DestroyIcon(item.icon);
-  file_menu_items_.clear();
+const OwnerDrawMenuItem* MainWindow::FindMenuItem(ULONG_PTR item_data) const noexcept {
+  if (const auto* item = context_menu_items_.Find(item_data)) return item;
+  if (const auto* item = main_menu_items_.Find(item_data)) return item;
+  return file_menu_items_.Find(item_data);
 }
 
 std::wstring MainWindow::SelectedName() const {
@@ -2784,7 +2620,7 @@ bool MainWindow::SelectCatalogRoot() {
 
 void MainWindow::ShowTreeContextMenu(POINT screen) {
   if (!tree_ || !catalog_) return;
-  ClearContextMenuItems();
+  context_menu_items_.Clear();
   if (screen.x == -1 && screen.y == -1) {
     const auto selected = TreeView_GetSelection(tree_);
     RECT bounds{};
@@ -2824,35 +2660,16 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
 
   HMENU menu = CreatePopupMenu();
   if (!menu) return;
-  context_menu_items_.reserve(40);
   std::vector<std::wstring> quick_tags;
   const auto appendTo = [&](HMENU target, bool enabled, bool checked, UINT command, int iconResource, std::wstring text, std::wstring shortcut = {}) {
-    ContextMenuItem visual{command, iconResource == 0 ? nullptr : LoadResourceIcon(instance_, iconResource, 20), std::move(text), std::move(shortcut)};
-    context_menu_items_.push_back(std::move(visual));
-    MENUITEMINFOW item{};
-    item.cbSize = sizeof(item);
-    item.fMask = MIIM_FTYPE | MIIM_ID | MIIM_STATE | MIIM_DATA;
-    item.fType = MFT_OWNERDRAW;
-    item.wID = command;
-    item.fState = (enabled ? MFS_ENABLED : MFS_DISABLED) | (checked ? MFS_CHECKED : 0);
-    item.dwItemData = reinterpret_cast<ULONG_PTR>(&context_menu_items_.back());
-    InsertMenuItemW(target, static_cast<UINT>(GetMenuItemCount(target)), TRUE, &item);
+    context_menu_items_.Append(target, command, iconResource == 0 ? nullptr : LoadResourceIcon(instance_, iconResource, 20),
+        std::move(text), std::move(shortcut), MenuIconForCommand(command), enabled, checked);
   };
   const auto append = [&](bool enabled, bool checked, UINT command, int iconResource, std::wstring text, std::wstring shortcut = {}) {
     appendTo(menu, enabled, checked, command, iconResource, std::move(text), std::move(shortcut));
   };
   const auto appendPopup = [&](HMENU submenu, UINT identity, std::wstring text) {
-    ContextMenuItem visual{identity, nullptr, std::move(text), {}};
-    context_menu_items_.push_back(std::move(visual));
-    MENUITEMINFOW item{};
-    item.cbSize = sizeof(item);
-    item.fMask = MIIM_FTYPE | MIIM_ID | MIIM_STATE | MIIM_DATA | MIIM_SUBMENU;
-    item.fType = MFT_OWNERDRAW;
-    item.wID = identity;
-    item.fState = MFS_ENABLED;
-    item.hSubMenu = submenu;
-    item.dwItemData = reinterpret_cast<ULONG_PTR>(&context_menu_items_.back());
-    InsertMenuItemW(menu, static_cast<UINT>(GetMenuItemCount(menu)), TRUE, &item);
+    context_menu_items_.Append(menu, identity, nullptr, std::move(text), {}, MenuIconForCommand(identity), true, false, submenu);
   };
   const auto separator = [&] { AppendMenuW(menu, MF_SEPARATOR, 0, nullptr); };
   if (settings_.simple_mode) {
@@ -2862,7 +2679,7 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
       SetForegroundWindow(window_);
       const UINT command = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, window_, nullptr);
       DestroyMenu(menu);
-      ClearContextMenuItems();
+      context_menu_items_.Clear();
       if (command == kSortAscending) SortFolder(sortParent, catalog::SortDirection::ascending);
       else if (command == kSortDescending) SortFolder(sortParent, catalog::SortDirection::descending);
       return;
@@ -2880,13 +2697,13 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
     }
     if (!database) {
       DestroyMenu(menu);
-      ClearContextMenuItems();
+      context_menu_items_.Clear();
       return;
     }
     SetForegroundWindow(window_);
     const UINT command = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, window_, nullptr);
     DestroyMenu(menu);
-    ClearContextMenuItems();
+    context_menu_items_.Clear();
     if (command) SendMessageW(window_, WM_COMMAND, MAKEWPARAM(command, 0), 0);
     return;
   }
@@ -2942,7 +2759,7 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   SetForegroundWindow(window_);
   const UINT command = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, window_, nullptr);
   DestroyMenu(menu);
-  ClearContextMenuItems();
+  context_menu_items_.Clear();
   if (!command) return;
   const size_t quickTagIndex = command >= kQuickTag1 ? static_cast<size_t>(command - kQuickTag1) : quick_tags.size();
   if (quickTagIndex < quick_tags.size()) AddTagToSelected(quick_tags[quickTagIndex]);
@@ -3366,33 +3183,14 @@ void MainWindow::RefreshFileMenu() {
     RemoveMenu(file_menu_, 0, MF_BYPOSITION);
     if (submenu) DestroyMenu(submenu);
   }
-  for (const auto& item : file_menu_items_) if (item.icon) DestroyIcon(item.icon);
-  file_menu_items_.clear();
-  file_menu_items_.reserve(16);
+  file_menu_items_.Clear();
   const auto append = [&](bool enabled, bool checked, UINT command, int iconResource, std::wstring text, std::wstring shortcut = {}) {
-    ContextMenuItem visual{command, iconResource == 0 ? nullptr : LoadResourceIcon(instance_, iconResource, 20), std::move(text), std::move(shortcut)};
-    file_menu_items_.push_back(std::move(visual));
-    MENUITEMINFOW item{};
-    item.cbSize = sizeof(item);
-    item.fMask = MIIM_FTYPE | MIIM_ID | MIIM_STATE | MIIM_DATA;
-    item.fType = MFT_OWNERDRAW;
-    item.wID = command;
-    item.fState = (enabled ? MFS_ENABLED : MFS_DISABLED) | (checked ? MFS_CHECKED : 0);
-    item.dwItemData = reinterpret_cast<ULONG_PTR>(&file_menu_items_.back());
-    InsertMenuItemW(file_menu_, static_cast<UINT>(GetMenuItemCount(file_menu_)), TRUE, &item);
+    file_menu_items_.Append(file_menu_, command, iconResource == 0 ? nullptr : LoadResourceIcon(instance_, iconResource, 20),
+        std::move(text), std::move(shortcut), MenuIconForCommand(command), enabled, checked);
   };
   const auto appendPopup = [&](HMENU submenu, UINT identity, int iconResource, std::wstring text) {
-    ContextMenuItem visual{identity, iconResource == 0 ? nullptr : LoadResourceIcon(instance_, iconResource, 20), std::move(text), {}};
-    file_menu_items_.push_back(std::move(visual));
-    MENUITEMINFOW item{};
-    item.cbSize = sizeof(item);
-    item.fMask = MIIM_FTYPE | MIIM_ID | MIIM_STATE | MIIM_DATA | MIIM_SUBMENU;
-    item.fType = MFT_OWNERDRAW;
-    item.wID = identity;
-    item.fState = MFS_ENABLED;
-    item.hSubMenu = submenu;
-    item.dwItemData = reinterpret_cast<ULONG_PTR>(&file_menu_items_.back());
-    InsertMenuItemW(file_menu_, static_cast<UINT>(GetMenuItemCount(file_menu_)), TRUE, &item);
+    file_menu_items_.Append(file_menu_, identity, iconResource == 0 ? nullptr : LoadResourceIcon(instance_, iconResource, 20),
+        std::move(text), {}, MenuIconForCommand(identity), true, false, submenu);
   };
   append(true, false, kOpenList, IDI_TREE_FOLDER, L"Открыть список баз…", L"Ctrl+O");
   append(true, false, kOpenStandardList, IDI_TREE_FOLDER, L"Открыть стандартный список 1С");
@@ -3423,20 +3221,10 @@ void MainWindow::RefreshMainMenuBar() {
   };
   clearMenu(view_menu_);
   clearMenu(help_menu_);
-  for (const auto& item : main_menu_items_) if (item.icon) DestroyIcon(item.icon);
-  main_menu_items_.clear();
-  main_menu_items_.reserve(14);
+  main_menu_items_.Clear();
   const auto append = [&](HMENU target, UINT command, int iconResource, std::wstring text, std::wstring shortcut = {}, bool checked = false) {
-    ContextMenuItem visual{command, iconResource == 0 ? nullptr : LoadResourceIcon(instance_, iconResource, 20), std::move(text), std::move(shortcut)};
-    main_menu_items_.push_back(std::move(visual));
-    MENUITEMINFOW item{};
-    item.cbSize = sizeof(item);
-    item.fMask = MIIM_FTYPE | MIIM_ID | MIIM_STATE | MIIM_DATA;
-    item.fType = MFT_OWNERDRAW;
-    item.wID = command;
-    item.fState = MFS_ENABLED | (checked ? MFS_CHECKED : 0);
-    item.dwItemData = reinterpret_cast<ULONG_PTR>(&main_menu_items_.back());
-    InsertMenuItemW(target, static_cast<UINT>(GetMenuItemCount(target)), TRUE, &item);
+    main_menu_items_.Append(target, command, iconResource == 0 ? nullptr : LoadResourceIcon(instance_, iconResource, 20),
+        std::move(text), std::move(shortcut), MenuIconForCommand(command), true, checked);
   };
   if (settings_.simple_mode) {
     append(view_menu_, kSimpleMode, 0, L"Выйти из простого режима", L"Ctrl+Alt+M", true);
