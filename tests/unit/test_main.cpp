@@ -1,5 +1,6 @@
 #include "app/instance_activation.hpp"
 #include "core/catalog/catalog.hpp"
+#include "core/catalog/catalog_metadata_service.hpp"
 #include "core/cache/cache_service.hpp"
 #include "core/connection/connection_string.hpp"
 #include "core/domain/version.hpp"
@@ -579,6 +580,52 @@ void TestCatalogStateRepository() {
   std::filesystem::remove_all(directory, error);
 }
 
+void TestCatalogMetadataService() {
+  const auto directory = Temp(L"catalog-metadata-service");
+  const ibstart::storage::StorageLayout layout{directory, true};
+  ibstart::storage::EnsureWritable(layout);
+  ibstart::catalog::CatalogMetadataService service(layout);
+
+  CHECK(service.ToggleFavorite(L"Основная база"));
+  CHECK(!service.ToggleFavorite(L"Основная база"));
+  for (unsigned index = 0; index != 10; ++index) CHECK(service.ToggleFavorite(L"База " + std::to_wstring(index)));
+  CHECK(service.Read().favorites.size() == ibstart::catalog::CatalogMetadataService::kMaxFavorites);
+  CHECK(service.Read().favorites.front() == L"База 9");
+  CHECK(std::find(service.Read().favorites.begin(), service.Read().favorites.end(), L"База 0") == service.Read().favorites.end());
+
+  service.SetTags(L"old-id", {L"Продуктив"});
+  CHECK(!service.AddTag(L"old-id", L"продуктив"));
+  CHECK(service.AddTag(L"old-id", L"Тест"));
+  service.ReplaceTagConfiguration(service.Read().tags, {{L"Продуктив", {RGB(1, 2, 3), RGB(4, 5, 6)}}});
+  service.RenameDatabaseMetadata(L"База 9", L"Переименованная база", L"old-id", L"new-id");
+  CHECK(service.Read().favorites.front() == L"Переименованная база");
+  CHECK(!service.Read().tags.contains(L"old-id"));
+  CHECK(service.Read().tags.at(L"new-id") == std::vector<std::wstring>{L"Продуктив", L"Тест"});
+  CHECK(service.Read().tag_styles.contains(L"Продуктив"));
+  service.SetTags(L"id-only-old", {L"ID обновлён"});
+  service.RenameDatabaseMetadata(L"Без переименования", L"Без переименования", L"id-only-old", L"id-only-new");
+  CHECK(!service.Read().tags.contains(L"id-only-old"));
+  CHECK(service.Read().tags.contains(L"id-only-new"));
+  CHECK(service.RemoveTags(L"new-id"));
+  CHECK(!service.RemoveTags(L"new-id"));
+
+  const auto timestamp = std::chrono::system_clock::from_time_t(123456789);
+  service.RecordLaunch({L"new-id", timestamp, ibstart::domain::LaunchMode::designer});
+  CHECK(service.Read().history.size() == 1);
+  CHECK(service.Read().last_launches.contains(L"new-id"));
+  service.ClearHistory();
+  CHECK(service.Read().history.empty());
+  CHECK(service.Read().last_launches.contains(L"new-id"));
+
+  const auto persisted = ibstart::storage::LoadCatalogState(layout);
+  CHECK(persisted.favorites == service.Read().favorites);
+  CHECK(persisted.tags == service.Read().tags);
+  CHECK(persisted.tag_styles == service.Read().tag_styles);
+  CHECK(persisted.history.empty());
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
 void TestV8iSaveRejectsActiveWriter() {
   const auto directory = Temp(L"store-lock");
   const auto file = directory / L"ibases.v8i";
@@ -704,6 +751,7 @@ int wmain() {
   run(L"CacheSizeFormatting", TestCacheSizeFormatting);
   run(L"PortableMode", TestPortableMode);
   run(L"CatalogStateRepository", TestCatalogStateRepository);
+  run(L"CatalogMetadataService", TestCatalogMetadataService);
   run(L"StorageSkipsMalformedRecords", TestStorageSkipsMalformedRecords);
   run(L"StorageRejectsUnreadableDataPath", TestStorageRejectsUnreadableDataPath);
   if (failures) { std::wcerr << failures << L" test(s) failed\n"; return 1; }

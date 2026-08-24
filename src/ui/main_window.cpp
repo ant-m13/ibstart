@@ -3230,7 +3230,7 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
     }
     const auto rememberLaunch = [&] {
       const auto timestamp = std::chrono::system_clock::now();
-      catalog_state_.AppendHistory({database.id, timestamp, mode});
+      catalog_state_.RecordLaunch({database.id, timestamp, mode});
       PopulateTree();
       SelectTreeItem(name);
     };
@@ -3331,7 +3331,6 @@ void MainWindow::EditSelected() {
     return;
   }
   const auto previousTagId = TagId(*entry);
-  const auto previousTags = tags_;
   const auto edited = EditDatabase(window_, L"Редактирование информационной базы", DatabaseEditorDataFromEntry(*entry), platforms_);
   if (!edited) return;
   if (selected != edited->name && !catalog_->RenameDatabase(selected, edited->name)) {
@@ -3341,27 +3340,14 @@ void MainWindow::EditSelected() {
   entry = catalog_->Find(edited->name);
   if (!entry) return;
   ApplyDatabaseEditorData(*entry, *edited);
-  if (selected != edited->name) {
-    auto favorites = catalog_state_.Read().favorites;
-    bool changed = false;
-    for (auto& favorite : favorites) {
-      if (EqualNoCase(favorite, selected)) { favorite = edited->name; changed = true; }
-    }
-    if (changed) {
-      catalog_state_.Update([&](storage::CatalogState& state) { state.favorites = favorites; });
-    }
-    if (previousTagId != TagId(*entry)) {
-      if (const auto tags = tags_.find(previousTagId); tags != tags_.end()) {
-        tags_[TagId(*entry)] = std::move(tags->second);
-        tags_.erase(tags);
-        try {
-          catalog_state_.Update([this](storage::CatalogState& state) { state.tags = tags_; });
-        } catch (const std::exception& error) {
-          tags_ = previousTags;
-          logger_.Error(L"Ошибка переноса тегов при переименовании: " + ibstart::utf::FromUtf8(error.what()));
-          Message(window_, L"Не удалось сохранить теги после переименования базы.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
-        }
-      }
+  const auto updatedTagId = TagId(*entry);
+  if (selected != edited->name || previousTagId != updatedTagId) {
+    try {
+      catalog_state_.RenameDatabaseMetadata(selected, edited->name, previousTagId, updatedTagId);
+      tags_ = catalog_state_.Read().tags;
+    } catch (const std::exception& error) {
+      logger_.Error(L"Ошибка обновления метаданных после переименования: " + ibstart::utf::FromUtf8(error.what()));
+      Message(window_, L"База переименована, но её избранное или теги не удалось сохранить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
     }
   }
   SaveCatalog();
@@ -3380,14 +3366,11 @@ void MainWindow::EditSelectedTags() {
   const auto edited = EditTagAssignment(window_, TagsFor(tags_, *entry), tags_, tag_styles_);
   if (!edited) return;
 
-  const auto previous = tags_;
   const auto& values = *edited;
-  if (values.empty()) tags_.erase(TagId(*entry));
-  else tags_[TagId(*entry)] = values;
   try {
-    catalog_state_.Update([this](storage::CatalogState& state) { state.tags = tags_; });
+    catalog_state_.SetTags(TagId(*entry), values);
+    tags_ = catalog_state_.Read().tags;
   } catch (const std::exception& error) {
-    tags_ = previous;
     logger_.Error(L"Ошибка сохранения тегов: " + ibstart::utf::FromUtf8(error.what()));
     Message(window_, L"Не удалось сохранить теги базы.", L"ИБ Старт", MB_OK | MB_ICONERROR);
     return;
@@ -3400,18 +3383,12 @@ void MainWindow::EditSelectedTags() {
 void MainWindow::ConfigureTagColors() {
   const auto updated = EditTagManager(window_, tags_, tag_styles_);
   if (!updated) return;
-  const auto previousTags = tags_;
-  const auto previousStyles = tag_styles_;
-  tags_ = updated->tags;
-  tag_styles_ = updated->styles;
   try {
-    catalog_state_.Update([this](storage::CatalogState& state) {
-      state.tags = tags_;
-      state.tag_styles = tag_styles_;
-    });
+    catalog_state_.ReplaceTagConfiguration(updated->tags, updated->styles);
+    const auto& state = catalog_state_.Read();
+    tags_ = state.tags;
+    tag_styles_ = state.tag_styles;
   } catch (const std::exception& error) {
-    tags_ = previousTags;
-    tag_styles_ = previousStyles;
     logger_.Error(L"Ошибка сохранения настроек тегов: " + ibstart::utf::FromUtf8(error.what()));
     Message(window_, L"Не удалось сохранить настройки тегов.", L"ИБ Старт", MB_OK | MB_ICONERROR);
     return;
@@ -3426,18 +3403,13 @@ void MainWindow::AddTagToSelected(std::wstring tag) {
   const auto name = SelectedName();
   const auto* entry = catalog_->Find(name);
   if (tag.empty() || !entry || !entry->IsDatabase()) return;
-  const auto previousTags = tags_;
-  auto values = TagsFor(tags_, *entry);
-  if (ContainsTag(values, tag)) {
-    SetStatus(L"У базы уже есть тег «" + tag + L"».");
-    return;
-  }
-  values.push_back(std::move(tag));
-  tags_[TagId(*entry)] = std::move(values);
   try {
-    catalog_state_.Update([this](storage::CatalogState& state) { state.tags = tags_; });
+    if (!catalog_state_.AddTag(TagId(*entry), tag)) {
+      SetStatus(L"У базы уже есть тег «" + tag + L"».");
+      return;
+    }
+    tags_ = catalog_state_.Read().tags;
   } catch (const std::exception& error) {
-    tags_ = previousTags;
     logger_.Error(L"Ошибка добавления тега: " + ibstart::utf::FromUtf8(error.what()));
     Message(window_, L"Не удалось добавить тег базе.", L"ИБ Старт", MB_OK | MB_ICONERROR);
     return;
@@ -3467,13 +3439,10 @@ void MainWindow::DeleteSelected() {
   const auto message = L"Удалить " + std::wstring(item) + L" \"" + name + L"\" из списка.";
   if (MessageBoxW(window_, message.c_str(), L"ИБ Старт", MB_YESNO) != IDYES) return;
   if (!catalog_->Remove(name)) return;
-  if (!tagId.empty() && tags_.contains(tagId)) {
-    const auto previousTags = tags_;
-    tags_.erase(tagId);
+  if (!tagId.empty()) {
     try {
-      catalog_state_.Update([this](storage::CatalogState& state) { state.tags = tags_; });
+      if (catalog_state_.RemoveTags(tagId)) tags_ = catalog_state_.Read().tags;
     } catch (const std::exception& error) {
-      tags_ = previousTags;
       logger_.Error(L"Ошибка удаления тегов: " + ibstart::utf::FromUtf8(error.what()));
       Message(window_, L"База удалена из списка, но её теги не удалось удалить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
     }
@@ -3809,19 +3778,15 @@ void MainWindow::ToggleFavorite() {
     return;
   }
 
-  auto favorites = catalog_state_.Read().favorites;
-  const auto found = std::find(favorites.begin(), favorites.end(), name);
-  if (found == favorites.end()) {
-    favorites.insert(favorites.begin(), name);
-    if (favorites.size() > 9) favorites.resize(9);
-    SetStatus(L"Добавлено в избранное: " + name);
-  } else {
-    favorites.erase(found);
-    SetStatus(L"Удалено из избранного: " + name);
+  try {
+    const bool added = catalog_state_.ToggleFavorite(name);
+    SetStatus((added ? L"Добавлено в избранное: " : L"Удалено из избранного: ") + name);
+    RefreshTagFilter();
+    PopulateTree();
+  } catch (const std::exception& error) {
+    logger_.Error(L"Ошибка сохранения избранного: " + ibstart::utf::FromUtf8(error.what()));
+    Message(window_, L"Не удалось сохранить избранное.", L"ИБ Старт", MB_OK | MB_ICONERROR);
   }
-  catalog_state_.Update([&](storage::CatalogState& state) { state.favorites = favorites; });
-  RefreshTagFilter();
-  PopulateTree();
 }
 
 void MainWindow::LaunchFavorite(size_t slot) {

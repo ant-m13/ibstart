@@ -1,6 +1,7 @@
 #pragma once
 
 #include "core/catalog/catalog.hpp"
+#include "core/catalog/catalog_metadata_service.hpp"
 #include "core/logging/logging.hpp"
 #include "core/storage/storage.hpp"
 #include "core/v8i/v8i_file_store.hpp"
@@ -142,7 +143,7 @@ class MainWindow {
   std::filesystem::path executable_;
   storage::StorageLayout layout_;
   storage::Settings settings_;
-  storage::CatalogStateRepository catalog_state_;
+  catalog::CatalogMetadataService catalog_state_;
   logging::Logger logger_;
   std::optional<v8i::V8iFileStore> store_;
   std::optional<catalog::Catalog> catalog_;
