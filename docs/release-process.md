@@ -23,9 +23,9 @@
 1. через GitHub API подтверждает, что коммит появился в `main` после принятия PR (прямой push не выпускается);
 2. повторно собирает Release и запускает CTest;
 3. проверяет `ProductVersion` готового `IBStart.exe`;
-4. создаёт ZIP, SHA-256 `checksums.txt` и release asset `IBStart.version` с SemVer-версией;
+4. создаёт portable ZIP с пустым маркером `IBStart.portable`, SHA-256 `checksums.txt` и release asset `IBStart.version` с SemVer-версией;
 5. создаёт аннотированный тег `v<версия>` на этом коммите;
-6. публикует стабильный GitHub Release `IBStart <версия>` с заметками текущей версии, EXE, ZIP, `checksums.txt` и `IBStart.version`.
+6. публикует стабильный GitHub Release `IBStart <версия>` с заметками текущей версии, EXE, portable ZIP, `checksums.txt` и `IBStart.version`.
 
 Повторный запуск workflow безопасен: существующий тег принимается только тогда, когда он указывает на тот же коммит, а assets релиза обновляются через `--clobber`. Если версия уже относится к другому коммиту, выпуск останавливается — необходимо создать новый PR с увеличенным номером.
 

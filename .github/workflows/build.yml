@@ -79,13 +79,20 @@ jobs:
           if ($assetVersion -ne $env:IBSTART_VERSION) {
             throw "IBStart.version '$assetVersion' does not match '$env:IBSTART_VERSION'."
           }
-          Compress-Archive -Path out/build/ci/IBStart.exe,README.md,LICENSE,CHANGELOG.md -DestinationPath "out/build/ci/IBStart-$env:IBSTART_VERSION-windows-x64.zip"
+          $portableMarker = Get-Item out/build/ci/IBStart.portable
+          if ($portableMarker.Length -ne 0) { throw "IBStart.portable must be empty." }
+          $archive = "out/build/ci/IBStart-$env:IBSTART_VERSION-portable-x64.zip"
+          Compress-Archive -Path out/build/ci/IBStart.exe,$portableMarker.FullName,README.md,LICENSE,CHANGELOG.md -DestinationPath $archive
+          $archiveContents = Join-Path $env:RUNNER_TEMP "ibstart-portable-package"
+          Expand-Archive -LiteralPath $archive -DestinationPath $archiveContents
+          $archivedMarker = Get-Item (Join-Path $archiveContents "IBStart.portable")
+          if ($archivedMarker.Length -ne 0) { throw "Packaged IBStart.portable must be empty." }
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: IBStart-${{ steps.version.outputs.version }}-windows-x64
           path: |
             out/build/ci/IBStart.exe
-            out/build/ci/IBStart-${{ steps.version.outputs.version }}-windows-x64.zip
+            out/build/ci/IBStart-${{ steps.version.outputs.version }}-portable-x64.zip
             out/build/ci/IBStart.version
             out/build/ci/checksums.txt
