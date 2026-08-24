@@ -44,6 +44,7 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     MessageBoxW(nullptr, L"Не удалось инициализировать системные элементы управления.", L"ИБ Старт", MB_OK | MB_ICONERROR);
     return 1;
   }
+  SetLastError(ERROR_SUCCESS);
   HANDLE mutex = CreateMutexW(nullptr, TRUE, L"Local\\IBStart.SingleInstance.0.1");
   if (!mutex) {
     MessageBoxW(nullptr, L"Не удалось включить защиту от запуска нескольких экземпляров.", L"ИБ Старт", MB_OK | MB_ICONERROR);
