@@ -9,6 +9,7 @@
 #include <fstream>
 #include <regex>
 #include <stdexcept>
+#include <utility>
 
 namespace ibstart::storage {
 namespace {
@@ -203,6 +204,17 @@ bool ConsumeJsonCharacter(std::string_view json, size_t& position, char expected
   if (position >= json.size() || json[position] != expected) return false;
   ++position;
   return true;
+}
+
+void AppendHistoryToState(CatalogState& state, domain::HistoryItem item) {
+  state.history.erase(std::remove_if(state.history.begin(), state.history.end(), [&](const auto& existing) {
+    return existing.database_id == item.database_id;
+  }), state.history.end());
+  const auto id = item.database_id;
+  const auto timestamp = item.timestamp;
+  state.history.insert(state.history.begin(), std::move(item));
+  if (state.history.size() > 20) state.history.resize(20);
+  if (!id.empty()) state.last_launches[id] = timestamp;
 }
 
 }  // namespace
@@ -402,16 +414,38 @@ void SaveCatalogState(const StorageLayout& layout, const CatalogState& state) {
   WriteAtomically(PathFor(layout, L"catalog-state.json"), json);
 }
 
+CatalogStateRepository::CatalogStateRepository(StorageLayout layout) : layout_(std::move(layout)) {}
+
+const CatalogState& CatalogStateRepository::Read() {
+  if (!state_) state_ = LoadCatalogState(layout_);
+  return *state_;
+}
+
+const CatalogState& CatalogStateRepository::Reload() {
+  state_ = LoadCatalogState(layout_);
+  return *state_;
+}
+
+void CatalogStateRepository::Update(const std::function<void(CatalogState&)>& mutation) {
+  CatalogState updated = Read();
+  mutation(updated);
+  SaveCatalogState(layout_, updated);
+  state_ = std::move(updated);
+}
+
+void CatalogStateRepository::AppendHistory(domain::HistoryItem item) {
+  Update([&](CatalogState& state) { AppendHistoryToState(state, std::move(item)); });
+}
+
+void CatalogStateRepository::ClearHistory() {
+  Update([](CatalogState& state) { state.history.clear(); });
+}
+
 std::vector<domain::HistoryItem> LoadHistory(const StorageLayout& layout) { return LoadCatalogState(layout).history; }
 
 void AppendHistory(const StorageLayout& layout, domain::HistoryItem item) {
   auto state = LoadCatalogState(layout);
-  state.history.erase(std::remove_if(state.history.begin(), state.history.end(), [&](const auto& existing) { return existing.database_id == item.database_id; }), state.history.end());
-  const auto id = item.database_id;
-  const auto timestamp = item.timestamp;
-  state.history.insert(state.history.begin(), std::move(item));
-  if (state.history.size() > 20) state.history.resize(20);
-  if (!id.empty()) state.last_launches[id] = timestamp;
+  AppendHistoryToState(state, std::move(item));
   SaveCatalogState(layout, state);
 }
 

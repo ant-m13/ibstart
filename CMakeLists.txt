@@ -45,6 +45,7 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/ibstart-version.txt" "${IBSTART_VERSION}
 message(STATUS "IBStart product version: ${IBSTART_VERSION} (file version ${IBSTART_FILE_VERSION})")
 
 add_library(ibstart_core STATIC
+  src/core/connection/connection_string.cpp
   src/core/catalog/catalog.cpp
   src/core/v8i/v8i_document.cpp
   src/core/v8i/v8i_file_store.cpp

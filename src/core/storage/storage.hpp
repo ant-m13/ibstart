@@ -5,6 +5,7 @@
 #include <Windows.h>
 
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -50,6 +51,21 @@ struct CatalogState {
   LastLaunchTimes last_launches;
   DatabaseTags tags;
   TagStyles tag_styles;
+};
+
+class CatalogStateRepository {
+ public:
+  explicit CatalogStateRepository(StorageLayout layout);
+
+  [[nodiscard]] const CatalogState& Read();
+  [[nodiscard]] const CatalogState& Reload();
+  void Update(const std::function<void(CatalogState&)>& mutation);
+  void AppendHistory(domain::HistoryItem item);
+  void ClearHistory();
+
+ private:
+  StorageLayout layout_;
+  std::optional<CatalogState> state_;
 };
 
 [[nodiscard]] StorageLayout ResolveLayout(const std::filesystem::path& executable_path);
