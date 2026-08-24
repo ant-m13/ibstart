@@ -2306,10 +2306,10 @@ void MainWindow::SortTreeItems(std::vector<catalog::TreeItem>& items, std::wstri
   const auto foldersFirst = [](const catalog::TreeItem& left, const catalog::TreeItem& right) {
     return left.database != right.database && !left.database;
   };
-  if (mode == storage::SortMode::catalog_order) {
-    std::stable_sort(items.begin(), items.end(), foldersFirst);
-    return;
-  }
+  // The catalog order is the explicitly saved manual order.  Do not move
+  // folders ahead of databases here: manual placement may intentionally put a
+  // database above a folder.
+  if (mode == storage::SortMode::catalog_order) return;
   const auto nameLess = [](const catalog::TreeItem& left, const catalog::TreeItem& right) { return _wcsicmp(left.name.c_str(), right.name.c_str()) < 0; };
   if (mode == storage::SortMode::name) {
     std::stable_sort(items.begin(), items.end(), [&](const auto& left, const auto& right) {
