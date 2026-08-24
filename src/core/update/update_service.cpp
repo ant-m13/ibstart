@@ -17,10 +17,8 @@
 namespace ibstart::update {
 namespace {
 
-constexpr wchar_t kApiHost[] = L"api.github.com";
-constexpr wchar_t kRequestHeaders[] =
-    L"Accept: application/vnd.github+json\r\n"
-    L"X-GitHub-Api-Version: 2026-03-10\r\n";
+constexpr wchar_t kGitHubHost[] = L"github.com";
+constexpr wchar_t kRequestHeaders[] = L"Accept: text/plain\r\n";
 constexpr size_t kMaximumResponseSize = 1024 * 1024;
 constexpr DWORD kHttpOk = 200;
 constexpr DWORD kHttpNotFound = 404;
@@ -71,7 +69,7 @@ struct SemanticVersion {
 [[nodiscard]] bool IsPrereleaseCharacter(wchar_t value) noexcept {
   return IsAsciiDigit(value) || IsAsciiLetter(value) || value == L'-';
 }
-[[nodiscard]] bool IsJsonWhitespace(char value) noexcept {
+[[nodiscard]] bool IsAsciiWhitespace(char value) noexcept {
   return value == ' ' || value == '\n' || value == '\r' || value == '\t';
 }
 
@@ -143,50 +141,10 @@ void ValidateNumericIdentifier(std::wstring_view value, std::string_view part) {
   return 0;
 }
 
-[[nodiscard]] std::optional<std::string> JsonStringValue(std::string_view input, std::string_view name) {
-  const std::string quotedName = "\"" + std::string(name) + "\"";
-  size_t position = input.find(quotedName);
-  while (position != std::string_view::npos) {
-    size_t cursor = position + quotedName.size();
-    while (cursor < input.size() && IsJsonWhitespace(input[cursor])) ++cursor;
-    if (cursor >= input.size() || input[cursor] != ':') {
-      position = input.find(quotedName, position + 1);
-      continue;
-    }
-    ++cursor;
-    while (cursor < input.size() && IsJsonWhitespace(input[cursor])) ++cursor;
-    if (cursor >= input.size() || input[cursor] != '"') {
-      position = input.find(quotedName, position + 1);
-      continue;
-    }
-    ++cursor;
-    std::string result;
-    while (cursor < input.size()) {
-      const char value = input[cursor++];
-      if (value == '"') return result;
-      if (static_cast<unsigned char>(value) < 0x20) throw std::invalid_argument("Invalid control character in GitHub JSON string.");
-      if (value != '\\') {
-        result.push_back(value);
-        continue;
-      }
-      if (cursor >= input.size()) throw std::invalid_argument("Incomplete escape sequence in GitHub JSON string.");
-      const char escaped = input[cursor++];
-      switch (escaped) {
-        case '"': result.push_back('"'); break;
-        case '\\': result.push_back('\\'); break;
-        case '/': result.push_back('/'); break;
-        case 'b': result.push_back('\b'); break;
-        case 'f': result.push_back('\f'); break;
-        case 'n': result.push_back('\n'); break;
-        case 'r': result.push_back('\r'); break;
-        case 't': result.push_back('\t'); break;
-        case 'u': throw std::invalid_argument("Unicode escapes are not supported in GitHub release metadata.");
-        default: throw std::invalid_argument("Invalid escape sequence in GitHub JSON string.");
-      }
-    }
-    throw std::invalid_argument("Unterminated GitHub JSON string.");
-  }
-  return std::nullopt;
+[[nodiscard]] std::string_view TrimAsciiWhitespace(std::string_view value) noexcept {
+  while (!value.empty() && IsAsciiWhitespace(value.front())) value.remove_prefix(1);
+  while (!value.empty() && IsAsciiWhitespace(value.back())) value.remove_suffix(1);
+  return value;
 }
 
 [[nodiscard]] std::string ReadResponse(HINTERNET request) {
@@ -196,7 +154,7 @@ void ValidateNumericIdentifier(std::wstring_view value, std::string_view part) {
     if (!WinHttpQueryDataAvailable(request, &available)) ThrowWinHttpError("WinHttpQueryDataAvailable");
     if (available == 0) break;
     if (available > kMaximumResponseSize - response.size()) {
-      throw std::runtime_error("GitHub release response exceeds the 1 MiB safety limit.");
+      throw std::runtime_error("GitHub version asset exceeds the 1 MiB safety limit.");
     }
     const size_t offset = response.size();
     response.resize(offset + available);
@@ -227,17 +185,13 @@ int CompareVersions(std::wstring_view left, std::wstring_view right) {
   return parsedLeft.prerelease.size() < parsedRight.prerelease.size() ? -1 : 1;
 }
 
-Release ParseLatestReleaseResponse(std::string_view response) {
-  const auto tag = JsonStringValue(response, "tag_name");
-  const auto pageUrl = JsonStringValue(response, "html_url");
-  if (!tag || !pageUrl) throw std::invalid_argument("GitHub release response does not contain tag_name or html_url.");
-  const std::wstring releaseVersion = utf::FromUtf8(*tag);
-  const std::wstring page = utf::FromUtf8(*pageUrl);
+Release ParseLatestVersionFile(std::string_view response) {
+  const std::string_view text = TrimAsciiWhitespace(response);
+  if (text.empty()) throw std::invalid_argument("GitHub version asset is empty.");
+  const std::wstring releaseVersion = utf::FromUtf8(std::string(text));
   static_cast<void>(ParseVersion(releaseVersion));
-  if (!page.starts_with(version::github_release_page_prefix)) {
-    throw std::invalid_argument("GitHub release page URL does not belong to the IBStart repository.");
-  }
-  return {releaseVersion.starts_with(L'v') ? releaseVersion.substr(1) : releaseVersion, page};
+  const std::wstring normalizedVersion = releaseVersion.starts_with(L'v') ? releaseVersion.substr(1) : releaseVersion;
+  return {normalizedVersion, std::wstring(version::github_release_page_prefix) + L"tag/v" + normalizedVersion};
 }
 
 std::optional<Release> FetchLatestRelease() {
@@ -246,11 +200,15 @@ std::optional<Release> FetchLatestRelease() {
   if (!session) ThrowWinHttpError("WinHttpOpen");
   if (!WinHttpSetTimeouts(session.get(), 4000, 4000, 6000, 6000)) ThrowWinHttpError("WinHttpSetTimeouts");
 
-  InternetHandle connection(WinHttpConnect(session.get(), kApiHost, INTERNET_DEFAULT_HTTPS_PORT, 0));
+  InternetHandle connection(WinHttpConnect(session.get(), kGitHubHost, INTERNET_DEFAULT_HTTPS_PORT, 0));
   if (!connection) ThrowWinHttpError("WinHttpConnect");
-  InternetHandle request(WinHttpOpenRequest(connection.get(), L"GET", version::github_latest_release_path.data(), nullptr, WINHTTP_NO_REFERER,
+  InternetHandle request(WinHttpOpenRequest(connection.get(), L"GET", version::github_latest_version_asset_path.data(), nullptr, WINHTTP_NO_REFERER,
       WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE));
   if (!request) ThrowWinHttpError("WinHttpOpenRequest");
+  DWORD redirectPolicy = WINHTTP_OPTION_REDIRECT_POLICY_DISALLOW_HTTPS_TO_HTTP;
+  if (!WinHttpSetOption(request.get(), WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy))) {
+    ThrowWinHttpError("WinHttpSetOption");
+  }
   if (!WinHttpAddRequestHeaders(request.get(), kRequestHeaders, -1L, WINHTTP_ADDREQ_FLAG_ADD)) {
     ThrowWinHttpError("WinHttpAddRequestHeaders");
   }
@@ -266,8 +224,8 @@ std::optional<Release> FetchLatestRelease() {
     ThrowWinHttpError("WinHttpQueryHeaders");
   }
   if (status == kHttpNotFound) return std::nullopt;
-  if (status != kHttpOk) throw std::runtime_error("GitHub returned HTTP status " + std::to_string(status) + ".");
-  return ParseLatestReleaseResponse(ReadResponse(request.get()));
+  if (status != kHttpOk) throw std::runtime_error("GitHub version asset returned HTTP status " + std::to_string(status) + ".");
+  return ParseLatestVersionFile(ReadResponse(request.get()));
 }
 
 }  // namespace ibstart::update

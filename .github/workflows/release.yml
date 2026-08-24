@@ -66,6 +66,11 @@ jobs:
         run: |
           $exe = Get-Item out/build/release/IBStart.exe
           $archive = "out/build/release/IBStart-$env:IBSTART_VERSION-windows-x64.zip"
+          Copy-Item -LiteralPath out/build/release/ibstart-version.txt -Destination out/build/release/IBStart.version
+          $assetVersion = (Get-Content -Raw out/build/release/IBStart.version).Trim()
+          if ($assetVersion -ne $env:IBSTART_VERSION) {
+            throw "IBStart.version '$assetVersion' does not match '$env:IBSTART_VERSION'."
+          }
           Compress-Archive -Path $exe.FullName,README.md,LICENSE,CHANGELOG.md -DestinationPath $archive
           (Get-FileHash $exe -Algorithm SHA256).Hash + "  IBStart.exe" | Out-File -Encoding ascii out/build/release/checksums.txt
           (Get-FileHash $archive -Algorithm SHA256).Hash + "  $(Split-Path $archive -Leaf)" | Add-Content -Encoding ascii out/build/release/checksums.txt
@@ -100,6 +105,7 @@ jobs:
           $files = @(
             "out/build/release/IBStart.exe",
             "out/build/release/IBStart-$env:RELEASE_VERSION-windows-x64.zip",
+            "out/build/release/IBStart.version",
             "out/build/release/checksums.txt"
           )
           $releases = gh release list --limit 1000 --json tagName | ConvertFrom-Json

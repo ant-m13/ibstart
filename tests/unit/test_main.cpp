@@ -99,9 +99,9 @@ void TestProductVersion() {
   const auto file = core + L"." + std::to_wstring(ibstart::version::revision);
   CHECK(ibstart::version::value.starts_with(core));
   CHECK(ibstart::version::file_value == file);
-  const auto releasePath = L"/repos/" + std::wstring(ibstart::version::github_owner) + L"/" + std::wstring(ibstart::version::github_repository) + L"/releases/latest";
+  const auto versionAssetPath = L"/" + std::wstring(ibstart::version::github_owner) + L"/" + std::wstring(ibstart::version::github_repository) + L"/releases/latest/download/IBStart.version";
   const auto releasePage = L"https://github.com/" + std::wstring(ibstart::version::github_owner) + L"/" + std::wstring(ibstart::version::github_repository) + L"/releases/";
-  CHECK(ibstart::version::github_latest_release_path == releasePath);
+  CHECK(ibstart::version::github_latest_version_asset_path == versionAssetPath);
   CHECK(ibstart::version::github_release_page_prefix == releasePage);
 }
 
@@ -363,7 +363,7 @@ void TestInstanceActivationPayload() {
   CHECK(!ibstart::app::IsValidLaunchIdLength(ibstart::app::kMaximumLaunchIdLength + 1));
 }
 
-void TestUpdateVersionsAndReleaseResponse() {
+void TestUpdateVersionsAndVersionFile() {
   CHECK(ibstart::update::CompareVersions(L"0.5.1", L"0.5.1") == 0);
   CHECK(ibstart::update::CompareVersions(L"0.5.1", L"0.6.0") < 0);
   CHECK(ibstart::update::CompareVersions(L"v1.0.0", L"0.9.9") > 0);
@@ -377,18 +377,19 @@ void TestUpdateVersionsAndReleaseResponse() {
   CHECK(invalidVersion);
 
   const auto expectedPageUrl = std::wstring(ibstart::version::github_release_page_prefix) + L"tag/v0.6.0";
-  auto escapedPageUrl = ibstart::utf::ToUtf8(expectedPageUrl);
-  for (size_t position = 0; (position = escapedPageUrl.find('/', position)) != std::string::npos; position += 2) escapedPageUrl.insert(position, "\\");
-  const auto release = ibstart::update::ParseLatestReleaseResponse(
-      "{\"html_url\":\"" + escapedPageUrl + "\",\"tag_name\":\"v0.6.0\"}");
+  const auto release = ibstart::update::ParseLatestVersionFile(" \r\n v0.6.0\t");
   CHECK(release.version == L"0.6.0");
   CHECK(release.page_url == expectedPageUrl);
-  bool invalidPage = false;
+  bool emptyVersionFile = false;
   try {
-    static_cast<void>(ibstart::update::ParseLatestReleaseResponse(
-        R"({"tag_name":"v0.6.0","html_url":"https://example.test/release"})"));
-  } catch (const std::invalid_argument&) { invalidPage = true; }
-  CHECK(invalidPage);
+    static_cast<void>(ibstart::update::ParseLatestVersionFile("\r\n\t "));
+  } catch (const std::invalid_argument&) { emptyVersionFile = true; }
+  CHECK(emptyVersionFile);
+  bool invalidVersionFile = false;
+  try {
+    static_cast<void>(ibstart::update::ParseLatestVersionFile("0.6"));
+  } catch (const std::invalid_argument&) { invalidVersionFile = true; }
+  CHECK(invalidVersionFile);
 }
 
 void TestCatalogSearch() {
@@ -783,7 +784,7 @@ int wmain() {
   run(L"CheckMacroAcceptsCommaExpressions", TestCheckMacroAcceptsCommaExpressions);
   run(L"DemoCatalogFixture", TestDemoCatalogFixture);
   run(L"ProductVersion", TestProductVersion);
-  run(L"UpdateVersionsAndReleaseResponse", TestUpdateVersionsAndReleaseResponse);
+  run(L"UpdateVersionsAndVersionFile", TestUpdateVersionsAndVersionFile);
   run(L"UnicodeCaseInsensitiveSearch", TestUnicodeCaseInsensitiveSearch);
   run(L"ConnectionStringParsing", TestConnectionStringParsing);
   run(L"InstanceActivationPayload", TestInstanceActivationPayload);

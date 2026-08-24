@@ -73,7 +73,13 @@ jobs:
         shell: pwsh
         env:
           IBSTART_VERSION: ${{ steps.version.outputs.version }}
-        run: Compress-Archive -Path out/build/ci/IBStart.exe,README.md,LICENSE,CHANGELOG.md -DestinationPath "out/build/ci/IBStart-$env:IBSTART_VERSION-windows-x64.zip"
+        run: |
+          Copy-Item -LiteralPath out/build/ci/ibstart-version.txt -Destination out/build/ci/IBStart.version
+          $assetVersion = (Get-Content -Raw out/build/ci/IBStart.version).Trim()
+          if ($assetVersion -ne $env:IBSTART_VERSION) {
+            throw "IBStart.version '$assetVersion' does not match '$env:IBSTART_VERSION'."
+          }
+          Compress-Archive -Path out/build/ci/IBStart.exe,README.md,LICENSE,CHANGELOG.md -DestinationPath "out/build/ci/IBStart-$env:IBSTART_VERSION-windows-x64.zip"
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
@@ -81,4 +87,5 @@ jobs:
           path: |
             out/build/ci/IBStart.exe
             out/build/ci/IBStart-${{ steps.version.outputs.version }}-windows-x64.zip
+            out/build/ci/IBStart.version
             out/build/ci/checksums.txt
