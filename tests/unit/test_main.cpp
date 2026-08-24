@@ -476,19 +476,13 @@ void TestPortableMode() {
   const ibstart::storage::TagStyles tagStyles = {{L"[Клиент] \"А\"", {RGB(236, 217, 245), RGB(75, 20, 95)}}};
   ibstart::storage::SaveTagStyles(layout, tagStyles); CHECK(ibstart::storage::LoadTagStyles(layout) == tagStyles);
   ibstart::storage::SaveTagsAndStyles(layout, tags, tagStyles); CHECK(ibstart::storage::LoadTags(layout) == tags); CHECK(ibstart::storage::LoadTagStyles(layout) == tagStyles);
-  ibstart::storage::SortSettings sorting;
-  sorting.default_mode = ibstart::storage::SortMode::name;
-  sorting.folder_modes = {{L"Группа А", ibstart::storage::SortMode::last_launch}};
-  ibstart::storage::SaveSortSettings(layout, sorting);
-  const auto loadedSorting = ibstart::storage::LoadSortSettings(layout);
-  CHECK(loadedSorting.default_mode == sorting.default_mode); CHECK(loadedSorting.folder_modes == sorting.folder_modes);
   const auto launchTime = std::chrono::system_clock::from_time_t(123456789);
   ibstart::storage::AppendHistory(layout, {L"id-😀", launchTime, ibstart::domain::LaunchMode::designer}); const auto history = ibstart::storage::LoadHistory(layout); CHECK(history.size() == 1); CHECK(!history.empty() && history[0].database_id == L"id-😀");
   const auto launches = ibstart::storage::LoadLastLaunchTimes(layout); CHECK(launches.contains(L"id-😀") && launches.at(L"id-😀") == launchTime);
   ibstart::storage::ClearHistory(layout);
   const auto state = ibstart::storage::LoadCatalogState(layout);
   CHECK(state.history.empty()); CHECK(state.last_launches == launches); CHECK(state.favorites == favorites);
-  CHECK(state.tags == tags); CHECK(state.tag_styles == tagStyles); CHECK(state.sorting.default_mode == sorting.default_mode); CHECK(state.sorting.folder_modes == sorting.folder_modes);
+  CHECK(state.tags == tags); CHECK(state.tag_styles == tagStyles);
   CHECK(std::filesystem::is_regular_file(layout.root / L"catalog-state.json"));
   CHECK(!std::filesystem::exists(layout.root / L"history.json")); CHECK(!std::filesystem::exists(layout.root / L"last-launches.json"));
   CHECK(!std::filesystem::exists(layout.root / L"favorites.json")); CHECK(!std::filesystem::exists(layout.root / L"tags.json"));
@@ -551,17 +545,15 @@ void TestStorageSkipsMalformedRecords() {
     ],
     "last_launches": [{"last_launch_id": "valid-launch", "time": 3}],
     "tag_styles": [{"tag_style": "bad\q", "background": 1, "text": 2}, {"tag_style": "valid-style", "background": 3, "text": 4}],
-    "sorting": {"default_sort_mode": 2, "folders": [{"folder": "bad\q", "mode": 1}, {"folder": "valid-folder", "mode": 2}]}
+    "sorting": {"default_sort_mode": 2, "folders": [{"folder": "valid-folder", "mode": 2}]}
   })");
   const auto state = ibstart::storage::LoadCatalogState(layout);
   CHECK(state.favorites == std::vector<std::wstring>{L"preserved"});
   CHECK(state.history.size() == 1 && state.history[0].database_id == L"valid-history");
   CHECK(state.last_launches.contains(L"valid-launch"));
   CHECK(state.tag_styles.size() == 1 && state.tag_styles.contains(L"valid-style"));
-  CHECK(state.sorting.default_mode == ibstart::storage::SortMode::last_launch);
-  CHECK(state.sorting.folder_modes.size() == 1 && state.sorting.folder_modes.contains(L"valid-folder"));
-  const auto valid_folder = state.sorting.folder_modes.find(L"valid-folder");
-  CHECK(valid_folder != state.sorting.folder_modes.end() && valid_folder->second == ibstart::storage::SortMode::last_launch);
+  ibstart::storage::SaveCatalogState(layout, state);
+  CHECK(ReadBytes(layout.root / L"catalog-state.json").find("\"sorting\"") == std::string::npos);
 
   std::error_code error;
   std::filesystem::remove_all(directory, error);

@@ -2,6 +2,7 @@
 
 #include "core/domain/utf.hpp"
 
+#include <Windows.h>
 #include <objbase.h>
 
 #include <algorithm>
