@@ -349,6 +349,24 @@ bool Catalog::MoveBy(std::wstring_view name, int offset) {
   return Move(name, parent, static_cast<size_t>(targetIndex));
 }
 
+bool Catalog::SortChildrenByName(std::wstring_view parent, SortDirection direction, bool folders_first) {
+  auto children = ChildrenOf(parent);
+  std::stable_sort(children.begin(), children.end(), [&](const domain::Entry* left, const domain::Entry* right) {
+    if (folders_first && left->IsGroup() != right->IsGroup()) return left->IsGroup();
+    const int comparison = CompareStringOrdinal(left->name.c_str(), static_cast<int>(left->name.size()),
+        right->name.c_str(), static_cast<int>(right->name.size()), TRUE);
+    if (comparison == CSTR_EQUAL) return false;
+    return direction == SortDirection::ascending ? comparison == CSTR_LESS_THAN : comparison == CSTR_GREATER_THAN;
+  });
+  for (size_t index = 0; index < children.size(); ++index) {
+    auto* entry = const_cast<domain::Entry*>(children[index]);
+    const auto order = std::to_wstring(index + 1);
+    entry->Set(L"OrderInList", order);
+    entry->Set(L"OrderInTree", order);
+  }
+  return true;
+}
+
 bool Catalog::SetChildOrder(std::wstring_view parent, const std::vector<std::wstring>& names) {
   const auto children = ChildrenOf(parent);
   if (children.size() != names.size()) return false;

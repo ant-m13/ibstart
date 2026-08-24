@@ -265,6 +265,31 @@ void TestCatalogSetChildOrder() {
   CHECK(!catalog.SetChildOrder(L"Alpha folder", {L"Nested alpha", L"Zulu database"}));
 }
 
+void TestCatalogSortChildrenByName() {
+  auto document = ibstart::v8i::V8iDocument::ParseUtf8(
+      "[Zulu database]\nConnect=File=\"C:\\\\zulu\"\nOrderInList=1\n"
+      "[Folder bravo]\nFolder=/\nOrderInList=2\n"
+      "[Alpha database]\nConnect=File=\"C:\\\\alpha\"\nOrderInList=3\n"
+      "[Folder alpha]\nFolder=/\nOrderInList=4\n"
+      "[Nested zulu]\nConnect=File=\"C:\\\\nested-zulu\"\nFolder=/Folder bravo\nOrderInList=1\n"
+      "[Nested alpha]\nConnect=File=\"C:\\\\nested-alpha\"\nFolder=/Folder bravo\nOrderInList=2\n");
+  ibstart::catalog::Catalog catalog(std::move(document));
+  const auto names = [](const std::vector<ibstart::catalog::TreeItem>& items) {
+    std::vector<std::wstring> result;
+    for (const auto& item : items) result.push_back(item.name);
+    return result;
+  };
+
+  CHECK(catalog.SortChildrenByName(L"", ibstart::catalog::SortDirection::ascending, false));
+  CHECK(names(catalog.Tree()) == std::vector<std::wstring>{L"Alpha database", L"Folder alpha", L"Folder bravo", L"Zulu database"});
+  CHECK(catalog.SortChildrenByName(L"", ibstart::catalog::SortDirection::descending, true));
+  CHECK(names(catalog.Tree()) == std::vector<std::wstring>{L"Folder bravo", L"Folder alpha", L"Zulu database", L"Alpha database"});
+  CHECK(catalog.SortChildrenByName(L"Folder bravo", ibstart::catalog::SortDirection::ascending, false));
+  const auto tree = catalog.Tree();
+  const auto folder = std::find_if(tree.begin(), tree.end(), [](const auto& item) { return item.name == L"Folder bravo"; });
+  CHECK(folder != tree.end() && names(folder->children) == std::vector<std::wstring>{L"Nested alpha", L"Nested zulu"});
+}
+
 void TestInstanceActivationPayload() {
   const wchar_t valid[] = L"database-id";
   COPYDATASTRUCT data{};
@@ -583,6 +608,7 @@ int wmain() {
   run(L"WindowsArgumentQuoting", TestWindowsArgumentQuoting);
   run(L"CatalogOrderingAndCycles", TestCatalogOrderingAndCycles);
   run(L"CatalogSetChildOrder", TestCatalogSetChildOrder);
+  run(L"CatalogSortChildrenByName", TestCatalogSortChildrenByName);
   run(L"StandardFolderPaths", TestStandardFolderPaths);
   run(L"FileBaseScanRegistration", TestFileBaseScanRegistration);
   run(L"SecretMasking", TestSecretMasking);
