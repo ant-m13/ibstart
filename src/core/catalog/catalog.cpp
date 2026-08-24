@@ -1,5 +1,6 @@
 #include "core/catalog/catalog.hpp"
 
+#include "core/connection/connection_string.hpp"
 #include "core/domain/utf.hpp"
 
 #include <Windows.h>
@@ -74,13 +75,6 @@ bool LessEntry(const domain::Entry* left, const domain::Entry* right) {
   if (leftNumeric.has_value() != rightNumeric.has_value()) return leftNumeric.has_value();
   if (!leftOrder.empty() && !rightOrder.empty() && leftOrder != rightOrder) return leftOrder < rightOrder;
   return _wcsicmp(left->name.c_str(), right->name.c_str()) < 0;
-}
-std::wstring Trim(std::wstring_view value) {
-  size_t first = 0;
-  while (first < value.size() && std::iswspace(value[first])) ++first;
-  size_t last = value.size();
-  while (last > first && std::iswspace(value[last - 1])) --last;
-  return std::wstring(value.substr(first, last - first));
 }
 std::wstring ParentName(std::wstring_view folder) {
   // Native 1C lists use "/" for the root and absolute paths such as "/Group/Subgroup".
@@ -400,39 +394,11 @@ void Catalog::Renumber(std::wstring_view parent) {
 }
 
 std::optional<std::wstring> Catalog::WebUrl(std::wstring_view connect) {
-  auto direct = Trim(connect);
-  // In the legacy form the URL is the first, unkeyed connection fragment.
-  // Later fragments still belong to Connect (for example, Custom=keep), not
-  // to the browser URL.
-  if (const size_t separator = direct.find(L';'); separator != std::wstring::npos) {
-    direct = Trim(std::wstring_view(direct).substr(0, separator));
-  }
-  if (direct.size() >= 7 && (_wcsnicmp(direct.c_str(), L"http://", 7) == 0 ||
-      (direct.size() >= 8 && _wcsnicmp(direct.c_str(), L"https://", 8) == 0))) return direct;
-
-  size_t start = 0;
-  bool quoted = false;
-  for (size_t index = 0; index <= connect.size(); ++index) {
-    const wchar_t character = index < connect.size() ? connect[index] : L';';
-    if (character == L'"') quoted = !quoted;
-    if (character != L';' || quoted) continue;
-    const auto field = connect.substr(start, index - start);
-    const size_t separator = field.find(L'=');
-    if (separator != std::wstring_view::npos && EqualNoCase(Trim(field.substr(0, separator)), L"ws")) {
-      auto value = Trim(field.substr(separator + 1));
-      if (value.size() >= 2 && value.front() == L'"' && value.back() == L'"') value = value.substr(1, value.size() - 2);
-      if (value.size() >= 7 && (_wcsnicmp(value.c_str(), L"http://", 7) == 0 ||
-          (value.size() >= 8 && _wcsnicmp(value.c_str(), L"https://", 8) == 0))) return value;
-      return std::nullopt;
-    }
-    start = index + 1;
-  }
-  return std::nullopt;
+  return connection::WebUrl(connect);
 }
 
 bool IsBareWebConnection(std::wstring_view connect) {
-  const auto url = Catalog::WebUrl(connect);
-  return url.has_value() && EqualNoCase(Trim(connect), *url);
+  return connection::IsBareWebUrl(connect);
 }
 
 bool Catalog::IsWebConnection(std::wstring_view connect) { return WebUrl(connect).has_value(); }

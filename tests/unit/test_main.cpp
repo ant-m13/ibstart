@@ -1,6 +1,7 @@
 #include "app/instance_activation.hpp"
 #include "core/catalog/catalog.hpp"
 #include "core/cache/cache_service.hpp"
+#include "core/connection/connection_string.hpp"
 #include "core/domain/version.hpp"
 #include "core/domain/utf.hpp"
 #include "core/launcher/command_builder.hpp"
@@ -110,6 +111,24 @@ void TestUnicodeCaseInsensitiveSearch() {
   CHECK(ibstart::utf::FindNoCaseOrdinal(L"КДКД", L"кд", 2) == 2);
 }
 
+void TestConnectionStringParsing() {
+  const std::wstring connect = L"  FILE = \"C:\\Базы;Основная\" ; Srvr = \"ignored\" ; Ref = demo ; Custom = keep  ";
+  const auto parts = ibstart::connection::Split(connect);
+  CHECK(parts.size() == 4);
+  CHECK(parts.size() > 0 && parts[0] == L"FILE = \"C:\\Базы;Основная\"");
+  CHECK(ibstart::connection::ValueOrEmpty(connect, L"file") == L"C:\\Базы;Основная");
+  CHECK(ibstart::connection::ValueOrEmpty(connect, L"SRVR") == L"ignored");
+  CHECK(ibstart::connection::ValueOrEmpty(connect, L"missing").empty());
+  CHECK(ibstart::connection::QuoteValue(L"A\"B") == L"\"A'B\"");
+
+  const auto keyedWeb = ibstart::connection::WebUrl(L"WS = \"https://example.test/base;part\" ; WA=1");
+  CHECK(keyedWeb && *keyedWeb == L"https://example.test/base;part");
+  const auto legacyWeb = ibstart::connection::WebUrl(L" https://example.test/base ; Custom = keep");
+  CHECK(legacyWeb && *legacyWeb == L"https://example.test/base");
+  CHECK(ibstart::connection::IsBareWebUrl(L" https://example.test/base "));
+  CHECK(!ibstart::connection::IsBareWebUrl(L"https://example.test/base;Custom=keep"));
+}
+
 void TestNoBomAndCatalog() {
   auto document = ibstart::v8i::V8iDocument::ParseUtf8(ReadBytes(Fixture(L"no-bom-unknown.v8i")));
   CHECK(document.encoding == ibstart::v8i::Utf8Encoding::utf8);
@@ -184,6 +203,24 @@ void TestCommandBuilderAndSelection() {
   const auto spacedCommand = ibstart::launcher::BuildCommand(spaced, *chosen, options); CHECK(spacedCommand.arguments[1] == L"/F"); CHECK(spacedCommand.arguments[2] == L"C:\\base;one");
   options.client_type = ibstart::domain::ClientType::thin; options.mode = ibstart::domain::LaunchMode::designer;
   bool invalidThinDesigner = false; try { (void)ibstart::launcher::BuildCommand(file, *chosen, options); } catch (const std::invalid_argument&) { invalidThinDesigner = true; } CHECK(invalidThinDesigner);
+
+  const auto thinDirectory = Temp(L"thin-web-client");
+  const auto thickExecutable = thinDirectory / L"1cv8.exe";
+  const auto thinExecutable = thinDirectory / L"1cv8c.exe";
+  WriteBytes(thickExecutable, "");
+  WriteBytes(thinExecutable, "");
+  const ibstart::domain::PlatformInstallation thinPlatform{thickExecutable, L"8.3.27", ibstart::domain::ClientBitness::x64, true};
+  ibstart::domain::Database web; web.connect = L"WS = \"https://example.test/base\" ; WA=1";
+  options.mode = ibstart::domain::LaunchMode::enterprise;
+  const auto webCommand = ibstart::launcher::BuildCommand(web, thinPlatform, options);
+  CHECK(webCommand.executable == thinExecutable);
+  CHECK(webCommand.arguments.size() == 3);
+  CHECK(webCommand.arguments.size() > 2 && webCommand.arguments[0] == L"ENTERPRISE" && webCommand.arguments[1] == L"/WS" && webCommand.arguments[2] == L"https://example.test/base");
+  options.client_type = ibstart::domain::ClientType::automatic;
+  options.mode = ibstart::domain::LaunchMode::designer;
+  bool invalidWebDesigner = false; try { (void)ibstart::launcher::BuildCommand(web, thinPlatform, options); } catch (const std::invalid_argument&) { invalidWebDesigner = true; } CHECK(invalidWebDesigner);
+  std::error_code thinCleanupError;
+  std::filesystem::remove_all(thinDirectory, thinCleanupError);
 }
 
 void TestPlatformDiscoveryLargeVersions() {
@@ -504,6 +541,44 @@ void TestPortableMode() {
   std::error_code error; std::filesystem::remove_all(directory, error);
 }
 
+void TestCatalogStateRepository() {
+  const auto directory = Temp(L"catalog-state-repository");
+  const ibstart::storage::StorageLayout layout{directory, true};
+  ibstart::storage::EnsureWritable(layout);
+  ibstart::storage::CatalogStateRepository repository(layout);
+  CHECK(repository.Read().favorites.empty());
+
+  const auto timestamp = std::chrono::system_clock::from_time_t(123456789);
+  repository.Update([](ibstart::storage::CatalogState& state) {
+    state.favorites = {L"Основная база"};
+    state.tags[L"database-id"] = {L"Продуктив"};
+  });
+  repository.AppendHistory({L"database-id", timestamp, ibstart::domain::LaunchMode::enterprise});
+  repository.Update([](ibstart::storage::CatalogState& state) {
+    state.tag_styles[L"Продуктив"] = {RGB(1, 2, 3), RGB(4, 5, 6)};
+  });
+
+  const auto persisted = ibstart::storage::LoadCatalogState(layout);
+  CHECK(persisted.favorites == std::vector<std::wstring>{L"Основная база"});
+  CHECK(persisted.tags.contains(L"database-id"));
+  CHECK(persisted.tag_styles.contains(L"Продуктив"));
+  CHECK(persisted.history.size() == 1 && persisted.history.front().database_id == L"database-id");
+  CHECK(persisted.last_launches.contains(L"database-id"));
+
+  repository.ClearHistory();
+  CHECK(repository.Read().history.empty());
+  CHECK(repository.Read().last_launches.contains(L"database-id"));
+
+  ibstart::storage::CatalogState external;
+  external.favorites = {L"Внешнее изменение"};
+  ibstart::storage::SaveCatalogState(layout, external);
+  CHECK(repository.Read().favorites == std::vector<std::wstring>{L"Основная база"});
+  CHECK(repository.Reload().favorites == std::vector<std::wstring>{L"Внешнее изменение"});
+
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
 void TestV8iSaveRejectsActiveWriter() {
   const auto directory = Temp(L"store-lock");
   const auto file = directory / L"ibases.v8i";
@@ -605,6 +680,7 @@ int wmain() {
   run(L"ProductVersion", TestProductVersion);
   run(L"UpdateVersionsAndReleaseResponse", TestUpdateVersionsAndReleaseResponse);
   run(L"UnicodeCaseInsensitiveSearch", TestUnicodeCaseInsensitiveSearch);
+  run(L"ConnectionStringParsing", TestConnectionStringParsing);
   run(L"InstanceActivationPayload", TestInstanceActivationPayload);
   run(L"CatalogSearch", TestCatalogSearch);
   run(L"NoBomAndCatalog", TestNoBomAndCatalog);
@@ -621,6 +697,7 @@ int wmain() {
   run(L"SecretMasking", TestSecretMasking);
   run(L"CacheSizeFormatting", TestCacheSizeFormatting);
   run(L"PortableMode", TestPortableMode);
+  run(L"CatalogStateRepository", TestCatalogStateRepository);
   run(L"StorageSkipsMalformedRecords", TestStorageSkipsMalformedRecords);
   run(L"StorageRejectsUnreadableDataPath", TestStorageRejectsUnreadableDataPath);
   if (failures) { std::wcerr << failures << L" test(s) failed\n"; return 1; }

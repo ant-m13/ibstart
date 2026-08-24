@@ -3,6 +3,7 @@
 #include "app/instance_activation.hpp"
 #include "app/resource.h"
 #include "core/cache/cache_service.hpp"
+#include "core/connection/connection_string.hpp"
 #include "core/domain/version.hpp"
 #include "core/domain/utf.hpp"
 #include "core/launcher/command_builder.hpp"
@@ -277,34 +278,6 @@ struct DatabaseEditorData {
   DatabaseConnectionKind kind{DatabaseConnectionKind::server};
 };
 
-std::vector<std::wstring> SplitConnection(std::wstring_view connect) {
-  std::vector<std::wstring> result;
-  size_t begin = 0;
-  bool quoted = false;
-  for (size_t index = 0; index <= connect.size(); ++index) {
-    const wchar_t character = index < connect.size() ? connect[index] : L';';
-    if (character == L'"') quoted = !quoted;
-    if (character != L';' || quoted) continue;
-    const auto part = TrimText(connect.substr(begin, index - begin));
-    if (!part.empty()) result.push_back(part);
-    begin = index + 1;
-  }
-  return result;
-}
-std::wstring UnquoteConnectionValue(std::wstring value) {
-  value = TrimText(value);
-  if (value.size() >= 2 && value.front() == L'"' && value.back() == L'"') value = value.substr(1, value.size() - 2);
-  return value;
-}
-std::wstring ConnectionValue(std::wstring_view connect, std::wstring_view key) {
-  for (const auto& part : SplitConnection(connect)) {
-    const size_t separator = part.find(L'=');
-    if (separator != std::wstring::npos && EqualNoCase(TrimText(std::wstring_view(part).substr(0, separator)), key)) {
-      return UnquoteConnectionValue(part.substr(separator + 1));
-    }
-  }
-  return {};
-}
 struct FileDatabasePassport {
   std::filesystem::path directory;
   std::filesystem::path database_file;
@@ -330,7 +303,7 @@ bool IsNetworkFilePath(const std::filesystem::path& path) {
 }
 FileDatabasePassport ReadFileDatabasePassport(std::wstring_view connect) {
   FileDatabasePassport result;
-  result.directory = ConnectionValue(connect, L"File");
+  result.directory = connection::ValueOrEmpty(connect, L"File");
   result.database_file = result.directory / L"1Cv8.1CD";
   if (result.directory.empty()) return result;
   result.network_path = IsNetworkFilePath(result.directory);
@@ -344,12 +317,8 @@ FileDatabasePassport ReadFileDatabasePassport(std::wstring_view connect) {
 }
 DatabaseConnectionKind DetectConnectionKind(std::wstring_view connect) {
   if (catalog::Catalog::WebUrl(connect)) return DatabaseConnectionKind::web;
-  if (!ConnectionValue(connect, L"File").empty()) return DatabaseConnectionKind::file;
+  if (!connection::ValueOrEmpty(connect, L"File").empty()) return DatabaseConnectionKind::file;
   return DatabaseConnectionKind::server;
-}
-std::wstring QuoteConnectionValue(std::wstring value) {
-  std::replace(value.begin(), value.end(), L'"', L'\'');
-  return L"\"" + value + L"\"";
 }
 std::wstring BuildConnection(DatabaseConnectionKind kind, std::wstring_view original, std::wstring_view file,
     std::wstring_view web, std::wstring_view server, std::wstring_view reference) {
@@ -359,14 +328,14 @@ std::wstring BuildConnection(DatabaseConnectionKind kind, std::wstring_view orig
     if (!result.empty()) result.push_back(L';');
     result += value;
   };
-  if (kind == DatabaseConnectionKind::file) append(L"File=" + QuoteConnectionValue(std::wstring(file)));
-  else if (kind == DatabaseConnectionKind::web) append(L"WS=" + QuoteConnectionValue(std::wstring(web)));
+  if (kind == DatabaseConnectionKind::file) append(L"File=" + connection::QuoteValue(std::wstring(file)));
+  else if (kind == DatabaseConnectionKind::web) append(L"WS=" + connection::QuoteValue(std::wstring(web)));
   else {
-    append(L"Srvr=" + QuoteConnectionValue(std::wstring(server)));
-    append(L"Ref=" + QuoteConnectionValue(std::wstring(reference)));
+    append(L"Srvr=" + connection::QuoteValue(std::wstring(server)));
+    append(L"Ref=" + connection::QuoteValue(std::wstring(reference)));
   }
   bool firstFragment = true;
-  for (const auto& part : SplitConnection(original)) {
+  for (const auto& part : connection::Split(original)) {
     // A legacy direct URL (https://host/base) becomes WS="…" above. It has no
     // key, so it must not be copied as an unknown fragment. Keep every later
     // fragment, including vendor-specific values such as Custom=keep.
@@ -377,8 +346,8 @@ std::wstring BuildConnection(DatabaseConnectionKind kind, std::wstring_view orig
     firstFragment = false;
     const size_t separator = part.find(L'=');
     const auto key = separator == std::wstring::npos ? std::wstring_view{} : std::wstring_view(part).substr(0, separator);
-    if (EqualNoCase(TrimText(key), L"File") || EqualNoCase(TrimText(key), L"WS") ||
-        EqualNoCase(TrimText(key), L"Srvr") || EqualNoCase(TrimText(key), L"Ref")) continue;
+    if (EqualNoCase(connection::Trim(key), L"File") || EqualNoCase(connection::Trim(key), L"WS") ||
+        EqualNoCase(connection::Trim(key), L"Srvr") || EqualNoCase(connection::Trim(key), L"Ref")) continue;
     append(part);
   }
   return result;
@@ -882,7 +851,7 @@ void CreateDatabaseEditorControls(HWND dialog, DatabaseEditorState& state, const
   create(0, L"BUTTON", L"Расположение информационной базы", BS_GROUPBOX, 14, 74, 632, 260, 0, textFont);
   state.file_radio = create(0, L"BUTTON", L"Файловая база", WS_GROUP | WS_TABSTOP | BS_AUTORADIOBUTTON, 28, 98, 180, 20, kConnectionFile, textFont);
   state.file_label = create(0, L"STATIC", L"Каталог файловой базы:", 0, 48, 122, 190, 20, 0, textFont);
-  state.file = create(WS_EX_CLIENTEDGE, L"EDIT", ConnectionValue(state.initial.connect, L"File"), WS_TABSTOP | ES_AUTOHSCROLL, 48, 142, 498, 25, kFilePath, textFont);
+  state.file = create(WS_EX_CLIENTEDGE, L"EDIT", connection::ValueOrEmpty(state.initial.connect, L"File"), WS_TABSTOP | ES_AUTOHSCROLL, 48, 142, 498, 25, kFilePath, textFont);
   state.file_browse = create(0, L"BUTTON", L"Обзор…", WS_TABSTOP, 556, 142, 78, 25, kBrowseFilePath, buttonFont);
   state.web_radio = create(0, L"BUTTON", L"Веб-база", WS_TABSTOP | BS_AUTORADIOBUTTON, 28, 178, 180, 20, kConnectionWeb, textFont);
   state.web_label = create(0, L"STATIC", L"Адрес веб-сервера:", 0, 48, 202, 190, 20, 0, textFont);
@@ -890,9 +859,9 @@ void CreateDatabaseEditorControls(HWND dialog, DatabaseEditorState& state, const
   state.web = create(WS_EX_CLIENTEDGE, L"EDIT", web ? *web : L"", WS_TABSTOP | ES_AUTOHSCROLL, 48, 222, 586, 25, kWebAddress, textFont);
   state.server_radio = create(0, L"BUTTON", L"Серверная база 1С:Предприятия", WS_TABSTOP | BS_AUTORADIOBUTTON, 28, 258, 270, 20, kConnectionServer, textFont);
   state.server_label = create(0, L"STATIC", L"Кластер серверов:", 0, 48, 282, 150, 20, 0, textFont);
-  state.server = create(WS_EX_CLIENTEDGE, L"EDIT", ConnectionValue(state.initial.connect, L"Srvr"), WS_TABSTOP | ES_AUTOHSCROLL, 205, 278, 429, 25, kServerCluster, textFont);
+  state.server = create(WS_EX_CLIENTEDGE, L"EDIT", connection::ValueOrEmpty(state.initial.connect, L"Srvr"), WS_TABSTOP | ES_AUTOHSCROLL, 205, 278, 429, 25, kServerCluster, textFont);
   state.reference_label = create(0, L"STATIC", L"Имя информационной базы:", 0, 48, 310, 170, 20, 0, textFont);
-  state.reference = create(WS_EX_CLIENTEDGE, L"EDIT", ConnectionValue(state.initial.connect, L"Ref"), WS_TABSTOP | ES_AUTOHSCROLL, 220, 306, 414, 25, kServerReference, textFont);
+  state.reference = create(WS_EX_CLIENTEDGE, L"EDIT", connection::ValueOrEmpty(state.initial.connect, L"Ref"), WS_TABSTOP | ES_AUTOHSCROLL, 220, 306, 414, 25, kServerReference, textFont);
 
   create(0, L"BUTTON", L"Параметры запуска", BS_GROUPBOX, 14, 342, 632, 166, 0, textFont);
   create(0, L"STATIC", L"Версия платформы:", 0, 28, 366, 150, 20, 0, textFont);
@@ -1730,7 +1699,7 @@ struct MainWindow::CacheOperationState {
 MainWindow::MainWindow(HINSTANCE instance, std::filesystem::path executable, storage::StorageLayout layout,
     storage::Settings settings, std::optional<std::wstring> launch_id)
     : instance_(instance), executable_(std::move(executable)), layout_(std::move(layout)), settings_(std::move(settings)),
-      logger_(layout_.root / L"logs"), initial_launch_id_(std::move(launch_id)) {}
+      catalog_state_(layout_), logger_(layout_.root / L"logs"), initial_launch_id_(std::move(launch_id)) {}
 MainWindow::~MainWindow() {
   CancelTreeDrag();
   if (window_ && IsWindow(window_)) {
@@ -2189,8 +2158,9 @@ void MainWindow::LoadCatalog(bool report_error) {
       SetStatus(settings_.active_ibases.wstring() + L" | " + CatalogStatistics());
       logger_.Info(L"Загружен список баз: " + settings_.active_ibases.wstring() + L" | " + CatalogStatistics());
     }
-    tags_ = storage::LoadTags(layout_);
-    tag_styles_ = storage::LoadTagStyles(layout_);
+    const auto& catalogState = catalog_state_.Reload();
+    tags_ = catalogState.tags;
+    tag_styles_ = catalogState.tag_styles;
     RefreshTagFilter();
     PopulateTree();
     if (!hasInitialLaunch) {
@@ -2262,7 +2232,7 @@ void MainWindow::RefreshTagFilter() {
   std::wstring selectedTag;
   if (selection >= 2 && static_cast<size_t>(selection - 2) < filter_tags_.size()) selectedTag = filter_tags_[selection - 2];
 
-  filter_favorites_ = storage::LoadFavorites(layout_);
+  filter_favorites_ = catalog_state_.Read().favorites;
   filter_tags_.clear();
   if (catalog_) {
     for (const auto* entry : catalog_->Databases()) {
@@ -2372,9 +2342,10 @@ void MainWindow::PopulateTree() {
       if (any) TreeView_Expand(tree_, rootHandle, TVE_EXPAND); else TreeView_DeleteItem(tree_, rootHandle);
     };
     if (!settings_.simple_mode) {
-      addSpecialRoot(L"Избранное", storage::LoadFavorites(layout_), kFavoriteImage, kFavoritesRootItemData);
+      const auto& catalogState = catalog_state_.Read();
+      addSpecialRoot(L"Избранное", catalogState.favorites, kFavoriteImage, kFavoritesRootItemData);
       std::vector<std::wstring> recent;
-      for (const auto& history : storage::LoadHistory(layout_)) for (const auto* entry : catalog_->Databases()) if (entry->ValueOr(L"ID", entry->name) == history.database_id) { recent.push_back(entry->name); break; }
+      for (const auto& history : catalogState.history) for (const auto* entry : catalog_->Databases()) if (entry->ValueOr(L"ID", entry->name) == history.database_id) { recent.push_back(entry->name); break; }
       addSpecialRoot(L"Недавние", recent, kRecentImage, kRecentRootItemData);
     }
   }
@@ -3024,14 +2995,15 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   const bool recentRoot = SelectedItemIsRecentRoot();
   const auto* entry = specialRoot ? nullptr : catalog_->Find(name);
   const bool database = entry && entry->IsDatabase();
+  const bool web = database && catalog::Catalog::IsWebConnection(entry->ValueOr(L"Connect"));
   const bool launch_available = database && !cache_operation_;
   const bool group = entry && entry->IsGroup();
   const bool editable = entry && !settings_.simple_mode;
-  const bool file = database && !ConnectionValue(entry->ValueOr(L"Connect"), L"File").empty();
+  const bool file = database && !connection::ValueOrEmpty(entry->ValueOr(L"Connect"), L"File").empty();
   const std::wstring addParent = group ? entry->name : entry ? catalog_->ParentOf(entry->name) : std::wstring();
   const bool sortTarget = catalogRoot || group;
   const std::wstring sortParent = catalogRoot ? std::wstring() : group ? entry->name : std::wstring();
-  const auto favorites = storage::LoadFavorites(layout_);
+  const auto& favorites = catalog_state_.Read().favorites;
   const bool favorite = std::find(favorites.begin(), favorites.end(), name) != favorites.end();
 
   HMENU menu = CreatePopupMenu();
@@ -3081,7 +3053,7 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
     }
     if (database) {
       append(launch_available, false, kEnterprise, IDI_ACTION_ENTERPRISE, L"Предприятие", L"F3");
-      append(launch_available, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор", L"F4");
+      append(launch_available && !web, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор", L"F4");
       separator();
       append(true, false, kEdit, IDI_ACTION_EDIT, L"Изменить…", L"F2");
       append(true, false, kDelete, IDI_ACTION_DELETE, L"Удалить…", L"Alt+Shift+Del");
@@ -3104,7 +3076,7 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   }
   if (!catalogRoot) {
     append(launch_available, false, kEnterprise, IDI_ACTION_ENTERPRISE, L"Предприятие", L"F3");
-    append(launch_available, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор", L"F4");
+    append(launch_available && !web, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор", L"F4");
     separator();
     append(database, favorite, kToggleFavorite, IDI_ACTION_FAVORITE, favorite ? L"Убрать из избранного" : L"Добавить в избранное", L"Ctrl+Alt+I");
     if (database) {
@@ -3210,7 +3182,7 @@ void MainWindow::DisplaySelected() {
     const auto& tags = TagsFor(tags_, *entry);
     for (const auto& tag : tags) addRow(L"Тег", tag);
     const auto connect = entry->ValueOr(L"Connect");
-    if (!ConnectionValue(connect, L"File").empty()) {
+    if (!connection::ValueOrEmpty(connect, L"File").empty()) {
       const auto passport = ReadFileDatabasePassport(connect);
       addDivider();
       addRow(L"Каталог", passport.directory.wstring());
@@ -3224,8 +3196,8 @@ void MainWindow::DisplaySelected() {
         addRow(L"Состояние", L"Файл не найден или недоступен");
       }
     } else {
-      const auto server = ConnectionValue(connect, L"Srvr");
-      const auto reference = ConnectionValue(connect, L"Ref");
+      const auto server = connection::ValueOrEmpty(connect, L"Srvr");
+      const auto reference = connection::ValueOrEmpty(connect, L"Ref");
       if (!server.empty() || !reference.empty()) {
         addDivider();
         addRow(L"Сервер 1С", server);
@@ -3234,8 +3206,9 @@ void MainWindow::DisplaySelected() {
     }
   }
   const bool database = entry->IsDatabase();
+  const bool web = database && catalog::Catalog::IsWebConnection(entry->ValueOr(L"Connect"));
   const bool launch_available = database && !cache_operation_;
-  EnableWindow(enterprise_, launch_available); EnableWindow(designer_, launch_available);
+  EnableWindow(enterprise_, launch_available); EnableWindow(designer_, launch_available && !web);
   EnableWindow(edit_, !settings_.simple_mode); EnableWindow(remove_, !settings_.simple_mode);
   EnableWindow(cache_, database && !settings_.simple_mode && !cache_operation_); EnableWindow(shortcut_, database && !settings_.simple_mode);
   InvalidateRect(details_, nullptr, TRUE);
@@ -3250,23 +3223,25 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
   if (!catalog_) return; const auto name = SelectedName(); const auto* entry = catalog_->Find(name); if (!entry || !entry->IsDatabase()) { Message(window_, L"Выберите информационную базу."); return; }
   try {
     const auto database = catalog_->DatabaseFor(name);
+    const auto webUrl = catalog::Catalog::WebUrl(database.connect);
+    if (webUrl && mode == domain::LaunchMode::designer) {
+      Message(window_, L"Конфигуратор недоступен для веб-базы. Запустите её в режиме Предприятие тонким клиентом.", L"ИБ Старт", MB_OK | MB_ICONINFORMATION);
+      return;
+    }
     const auto rememberLaunch = [&] {
       const auto timestamp = std::chrono::system_clock::now();
-      storage::AppendHistory(layout_, {database.id, timestamp, mode});
+      catalog_state_.AppendHistory({database.id, timestamp, mode});
       PopulateTree();
       SelectTreeItem(name);
     };
-    if (const auto webUrl = catalog::Catalog::WebUrl(database.connect)) {
-      const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", webUrl->c_str(), nullptr, nullptr, SW_SHOWNORMAL));
-      if (result <= 32) throw std::runtime_error("Unable to open the web database URL.");
-      rememberLaunch();
-      SetStatus(L"Запущена база: " + database.name);
-      return;
-    }
     domain::LaunchOptions options;
     options.mode = mode;
-    options.client_type = ClientTypeFromApplication(database.app);
-    if (options.client_type == domain::ClientType::automatic) options.client_type = ClientTypeFromApplication(database.default_app);
+    if (webUrl) {
+      options.client_type = domain::ClientType::thin;
+    } else {
+      options.client_type = ClientTypeFromApplication(database.app);
+      if (options.client_type == domain::ClientType::automatic) options.client_type = ClientTypeFromApplication(database.default_app);
+    }
     if (const auto fromParameters = launcher::AppArchitectureFromParameters(database.additional_parameters)) options.architecture = *fromParameters;
     else if (const auto fromDatabase = launcher::ParseAppArchitecture(database.app_arch)) options.architecture = *fromDatabase;
     const auto& selectedVersion = database.version.empty() ? database.default_version : database.version;
@@ -3281,7 +3256,7 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
 std::wstring MainWindow::NextName(std::wstring_view stem) const { for (unsigned number = 1;; ++number) { const auto candidate = std::wstring(stem) + L" " + std::to_wstring(number); if (!catalog_ || !catalog_->Find(candidate)) return candidate; } }
 void MainWindow::OpenSelectedFolder() {
   if (!catalog_) return; const auto name = SelectedName(); const auto* entry = catalog_->Find(name); if (!entry || !entry->IsDatabase()) return;
-  const auto folder = ConnectionValue(entry->ValueOr(L"Connect"), L"File");
+  const auto folder = connection::ValueOrEmpty(entry->ValueOr(L"Connect"), L"File");
   if (folder.empty()) return;
   std::error_code error;
   if (!std::filesystem::is_directory(folder, error) || error) { Message(window_, L"Каталог файловой базы не найден.", L"ИБ Старт", MB_OK | MB_ICONWARNING); return; }
@@ -3289,44 +3264,24 @@ void MainWindow::OpenSelectedFolder() {
   if (result <= 32) Message(window_, L"Не удалось открыть каталог базы.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
 }
 void MainWindow::AddFileDatabase(std::wstring parent) {
-  if (settings_.simple_mode || !catalog_) return;
-  DatabaseEditorData initial;
-  initial.name = NextName(L"Файловая база");
-  initial.kind = DatabaseConnectionKind::file;
-  auto entered = EditDatabase(window_, L"Добавление информационной базы", std::move(initial), platforms_);
-  if (!entered) return;
-  bool added = false;
-  if (entered->kind == DatabaseConnectionKind::file) {
-    added = catalog_->AddFileDatabase(entered->name, std::filesystem::path(ConnectionValue(entered->connect, L"File")), parent);
-  } else {
-    added = catalog_->AddServerDatabase(entered->name, entered->connect, parent);
-  }
-  if (!added) {
-    const std::wstring message = entered->kind == DatabaseConnectionKind::file
-        ? L"Не удалось добавить базу. Укажите уникальное имя, существующую группу и каталог, содержащий 1Cv8.1CD."
-        : L"Не удалось добавить базу. Укажите уникальное имя, корректное подключение и существующую группу.";
-    Message(window_, message, L"ИБ Старт", MB_OK | MB_ICONWARNING);
-    return;
-  }
-  if (auto* entry = catalog_->Find(entered->name)) {
-    entered->id = entry->ValueOr(L"ID");
-    entered->folder = entry->ValueOr(L"Folder");
-    if (entered->order_in_list.empty()) entered->order_in_list = entry->ValueOr(L"OrderInList");
-    if (entered->order_in_tree.empty()) entered->order_in_tree = entry->ValueOr(L"OrderInTree");
-    ApplyDatabaseEditorData(*entry, *entered);
-  }
-  SaveCatalog(); PopulateTree(); SelectTreeItem(entered->name);
+  AddDatabase(NewDatabaseKind::file, std::move(parent));
 }
+
 void MainWindow::AddServerDatabase(std::wstring parent) {
+  AddDatabase(NewDatabaseKind::server, std::move(parent));
+}
+
+void MainWindow::AddDatabase(NewDatabaseKind kind, std::wstring parent) {
   if (settings_.simple_mode || !catalog_) return;
   DatabaseEditorData initial;
-  initial.name = NextName(L"Серверная база");
-  initial.kind = DatabaseConnectionKind::server;
+  const bool file_default = kind == NewDatabaseKind::file;
+  initial.name = NextName(file_default ? L"Файловая база" : L"Серверная база");
+  initial.kind = file_default ? DatabaseConnectionKind::file : DatabaseConnectionKind::server;
   auto entered = EditDatabase(window_, L"Добавление информационной базы", std::move(initial), platforms_);
   if (!entered) return;
   bool added = false;
   if (entered->kind == DatabaseConnectionKind::file) {
-    added = catalog_->AddFileDatabase(entered->name, std::filesystem::path(ConnectionValue(entered->connect, L"File")), parent);
+    added = catalog_->AddFileDatabase(entered->name, std::filesystem::path(connection::ValueOrEmpty(entered->connect, L"File")), parent);
   } else {
     added = catalog_->AddServerDatabase(entered->name, entered->connect, parent);
   }
@@ -3387,18 +3342,20 @@ void MainWindow::EditSelected() {
   if (!entry) return;
   ApplyDatabaseEditorData(*entry, *edited);
   if (selected != edited->name) {
-    auto favorites = storage::LoadFavorites(layout_);
+    auto favorites = catalog_state_.Read().favorites;
     bool changed = false;
     for (auto& favorite : favorites) {
       if (EqualNoCase(favorite, selected)) { favorite = edited->name; changed = true; }
     }
-    if (changed) storage::SaveFavorites(layout_, favorites);
+    if (changed) {
+      catalog_state_.Update([&](storage::CatalogState& state) { state.favorites = favorites; });
+    }
     if (previousTagId != TagId(*entry)) {
       if (const auto tags = tags_.find(previousTagId); tags != tags_.end()) {
         tags_[TagId(*entry)] = std::move(tags->second);
         tags_.erase(tags);
         try {
-          storage::SaveTags(layout_, tags_);
+          catalog_state_.Update([this](storage::CatalogState& state) { state.tags = tags_; });
         } catch (const std::exception& error) {
           tags_ = previousTags;
           logger_.Error(L"Ошибка переноса тегов при переименовании: " + ibstart::utf::FromUtf8(error.what()));
@@ -3428,7 +3385,7 @@ void MainWindow::EditSelectedTags() {
   if (values.empty()) tags_.erase(TagId(*entry));
   else tags_[TagId(*entry)] = values;
   try {
-    storage::SaveTags(layout_, tags_);
+    catalog_state_.Update([this](storage::CatalogState& state) { state.tags = tags_; });
   } catch (const std::exception& error) {
     tags_ = previous;
     logger_.Error(L"Ошибка сохранения тегов: " + ibstart::utf::FromUtf8(error.what()));
@@ -3448,7 +3405,10 @@ void MainWindow::ConfigureTagColors() {
   tags_ = updated->tags;
   tag_styles_ = updated->styles;
   try {
-    storage::SaveTagsAndStyles(layout_, tags_, tag_styles_);
+    catalog_state_.Update([this](storage::CatalogState& state) {
+      state.tags = tags_;
+      state.tag_styles = tag_styles_;
+    });
   } catch (const std::exception& error) {
     tags_ = previousTags;
     tag_styles_ = previousStyles;
@@ -3475,7 +3435,7 @@ void MainWindow::AddTagToSelected(std::wstring tag) {
   values.push_back(std::move(tag));
   tags_[TagId(*entry)] = std::move(values);
   try {
-    storage::SaveTags(layout_, tags_);
+    catalog_state_.Update([this](storage::CatalogState& state) { state.tags = tags_; });
   } catch (const std::exception& error) {
     tags_ = previousTags;
     logger_.Error(L"Ошибка добавления тега: " + ibstart::utf::FromUtf8(error.what()));
@@ -3511,7 +3471,7 @@ void MainWindow::DeleteSelected() {
     const auto previousTags = tags_;
     tags_.erase(tagId);
     try {
-      storage::SaveTags(layout_, tags_);
+      catalog_state_.Update([this](storage::CatalogState& state) { state.tags = tags_; });
     } catch (const std::exception& error) {
       tags_ = previousTags;
       logger_.Error(L"Ошибка удаления тегов: " + ibstart::utf::FromUtf8(error.what()));
@@ -3605,9 +3565,9 @@ bool MainWindow::IsClearingCache() const {
 }
 void MainWindow::ClearRecentBases() {
   try {
-    if (storage::LoadHistory(layout_).empty()) { SetStatus(L"Список недавних баз уже пуст."); return; }
+    if (catalog_state_.Read().history.empty()) { SetStatus(L"Список недавних баз уже пуст."); return; }
     if (MessageBoxW(window_, L"Очистить список недавних баз?\n\nСами базы и избранное не будут затронуты.", L"Очистить недавние базы", MB_YESNO | MB_ICONWARNING) != IDYES) return;
-    storage::ClearHistory(layout_);
+    catalog_state_.ClearHistory();
     logger_.Info(L"Очищен список недавних баз.");
     PopulateTree();
     SetStatus(L"Список недавних баз очищен.");
@@ -3840,8 +3800,41 @@ void MainWindow::SetSimpleMode(bool enabled) {
   if (GetClientRect(window_, &client)) Layout(client.right - client.left, client.bottom - client.top);
   if (tree_) RedrawWindow(tree_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
 }
-void MainWindow::ToggleFavorite() { if (!catalog_) return; const auto name = SelectedName(); const auto* entry = catalog_->Find(name); if (!entry || !entry->IsDatabase()) { Message(window_, L"Выберите базу для добавления в избранное."); return; } auto favorites = storage::LoadFavorites(layout_); const auto found = std::find(favorites.begin(), favorites.end(), name); if (found == favorites.end()) { favorites.insert(favorites.begin(), name); if (favorites.size() > 9) favorites.resize(9); SetStatus(L"Добавлено в избранное: " + name); } else { favorites.erase(found); SetStatus(L"Удалено из избранного: " + name); } storage::SaveFavorites(layout_, favorites); RefreshTagFilter(); PopulateTree(); }
-void MainWindow::LaunchFavorite(size_t slot) { auto favorites = storage::LoadFavorites(layout_); if (slot >= favorites.size()) { Message(window_, L"Этот слот избранного пока не назначен."); return; } SetWindowTextW(search_, L""); PopulateTree(); if (SelectTreeItem(favorites[slot])) LaunchSelected(domain::LaunchMode::enterprise); }
+void MainWindow::ToggleFavorite() {
+  if (!catalog_) return;
+  const auto name = SelectedName();
+  const auto* entry = catalog_->Find(name);
+  if (!entry || !entry->IsDatabase()) {
+    Message(window_, L"Выберите базу для добавления в избранное.");
+    return;
+  }
+
+  auto favorites = catalog_state_.Read().favorites;
+  const auto found = std::find(favorites.begin(), favorites.end(), name);
+  if (found == favorites.end()) {
+    favorites.insert(favorites.begin(), name);
+    if (favorites.size() > 9) favorites.resize(9);
+    SetStatus(L"Добавлено в избранное: " + name);
+  } else {
+    favorites.erase(found);
+    SetStatus(L"Удалено из избранного: " + name);
+  }
+  catalog_state_.Update([&](storage::CatalogState& state) { state.favorites = favorites; });
+  RefreshTagFilter();
+  PopulateTree();
+}
+
+void MainWindow::LaunchFavorite(size_t slot) {
+  const auto& favorites = catalog_state_.Read().favorites;
+  if (slot >= favorites.size()) {
+    Message(window_, L"Этот слот избранного пока не назначен.");
+    return;
+  }
+  const auto name = favorites[slot];
+  SetWindowTextW(search_, L"");
+  PopulateTree();
+  if (SelectTreeItem(name)) LaunchSelected(domain::LaunchMode::enterprise);
+}
 void MainWindow::CheckForUpdates() {
   if (update_check_) {
     SetStatus(L"Проверка обновлений уже выполняется…");

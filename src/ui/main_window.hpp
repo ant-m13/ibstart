@@ -31,6 +31,7 @@ class MainWindow {
     std::wstring text;
     std::wstring shortcut;
   };
+  enum class NewDatabaseKind { file, server };
   struct UpdateCheckState;
   struct CacheOperationState;
 
@@ -68,6 +69,7 @@ class MainWindow {
   void CopySelectedDetail(bool include_name);
   void DisplaySelected();
   void LaunchSelected(domain::LaunchMode mode);
+  void AddDatabase(NewDatabaseKind kind, std::wstring parent);
   void AddFileDatabase(std::wstring parent = {});
   void AddServerDatabase(std::wstring parent = {});
   void AddGroup(std::wstring parent = {});
@@ -140,6 +142,7 @@ class MainWindow {
   std::filesystem::path executable_;
   storage::StorageLayout layout_;
   storage::Settings settings_;
+  storage::CatalogStateRepository catalog_state_;
   logging::Logger logger_;
   std::optional<v8i::V8iFileStore> store_;
   std::optional<catalog::Catalog> catalog_;

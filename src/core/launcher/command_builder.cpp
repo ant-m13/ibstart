@@ -1,5 +1,6 @@
 #include "core/launcher/command_builder.hpp"
 
+#include "core/connection/connection_string.hpp"
 #include "core/domain/utf.hpp"
 #include "core/platform/platform_version.hpp"
 
@@ -28,34 +29,12 @@ bool EqualNoCase(std::wstring_view left, std::wstring_view right) {
   return left.size() == right.size() && _wcsnicmp(left.data(), right.data(), left.size()) == 0;
 }
 
-std::wstring Unquote(std::wstring value) {
-  if (value.size() >= 2 && value.front() == L'"' && value.back() == L'"') return value.substr(1, value.size() - 2);
-  return value;
-}
-
 std::wstring Trim(std::wstring_view value) {
   size_t first = 0;
   while (first < value.size() && std::iswspace(value[first])) ++first;
   size_t last = value.size();
   while (last > first && std::iswspace(value[last - 1])) --last;
   return std::wstring(value.substr(first, last - first));
-}
-
-std::wstring ConnectionValue(std::wstring_view connect, std::wstring_view key) {
-  size_t start = 0;
-  bool quoted = false;
-  for (size_t index = 0; index <= connect.size(); ++index) {
-    const wchar_t character = index < connect.size() ? connect[index] : L';';
-    if (character == L'"') quoted = !quoted;
-    if (character != L';' || quoted) continue;
-    const auto field = connect.substr(start, index - start);
-    const size_t separator = field.find(L'=');
-    if (separator != std::wstring_view::npos && EqualNoCase(Trim(field.substr(0, separator)), key)) {
-      return Unquote(Trim(field.substr(separator + 1)));
-    }
-    start = index + 1;
-  }
-  return {};
 }
 
 bool VersionMatches(std::wstring_view installed, std::wstring_view requested) {
@@ -184,18 +163,22 @@ domain::LaunchCommand BuildCommand(const domain::Database& database,
   if (options.mode == domain::LaunchMode::designer) command.arguments.push_back(L"DESIGNER");
   else if (options.mode == domain::LaunchMode::enterprise) command.arguments.push_back(L"ENTERPRISE");
 
-  const auto file = ConnectionValue(database.connect, L"File");
-  const auto server = ConnectionValue(database.connect, L"Srvr");
-  const auto reference = ConnectionValue(database.connect, L"Ref");
-  if (!file.empty()) {
+  const auto web = connection::WebUrl(database.connect);
+  const auto file = connection::ValueOrEmpty(database.connect, L"File");
+  const auto server = connection::ValueOrEmpty(database.connect, L"Srvr");
+  const auto reference = connection::ValueOrEmpty(database.connect, L"Ref");
+  if (web) {
+    if (options.mode != domain::LaunchMode::enterprise) {
+      throw std::invalid_argument("A web database can only be launched in enterprise mode.");
+    }
+    if (options.client_type != domain::ClientType::thin) {
+      throw std::invalid_argument("A web database requires the thin client.");
+    }
+    command.arguments.insert(command.arguments.end(), {L"/WS", *web});
+  } else if (!file.empty()) {
     command.arguments.insert(command.arguments.end(), {L"/F", file});
   } else if (!server.empty() && !reference.empty()) {
     command.arguments.insert(command.arguments.end(), {L"/S", server + L"\\" + reference});
-  } else if (database.connect.size() >= 7 &&
-      (_wcsnicmp(database.connect.c_str(), L"http://", 7) == 0 ||
-       (database.connect.size() >= 8 && _wcsnicmp(database.connect.c_str(), L"https://", 8) == 0))) {
-    if (options.mode != domain::LaunchMode::web_client) throw std::invalid_argument("A web database can only be opened with the web-client action.");
-    command.arguments.insert(command.arguments.end(), {L"/WS", database.connect});
   } else {
     command.arguments.insert(command.arguments.end(), {L"/IBConnection", database.connect});
   }
