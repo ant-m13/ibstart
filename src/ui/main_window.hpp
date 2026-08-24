@@ -82,6 +82,7 @@ class MainWindow {
   void MoveSelected(int offset);
   void MoveSelectedToFolder();
   void ClearSelectedCache();
+  [[nodiscard]] bool IsClearingCache() const;
   void ClearRecentBases();
   void CreateShortcut();
   void OpenSelectedFolder();
