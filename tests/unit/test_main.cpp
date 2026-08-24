@@ -397,6 +397,9 @@ void TestStandardFolderPaths() {
   CHECK(dragCatalog.Move(L"Grouped", L"", 0));
   const auto* movedToRoot = dragCatalog.Find(L"Grouped");
   CHECK(movedToRoot && movedToRoot->ValueOr(L"Folder") == L"/");
+  CHECK(dragCatalog.Move(L"Second", L"Folder", std::numeric_limits<size_t>::max()));
+  const auto* movedIntoFolder = dragCatalog.Find(L"Second");
+  CHECK(movedIntoFolder && movedIntoFolder->ValueOr(L"Folder") == L"/Folder");
 }
 
 void TestFileBaseScanRegistration() {

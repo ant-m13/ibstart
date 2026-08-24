@@ -2908,7 +2908,7 @@ void MainWindow::UpdateTreeDrag(POINT windowPoint) {
   if (drag_image_) ImageList_DragMove(treePoint.x, treePoint.y);
 
   const auto* dragged = catalog_->Find(dragging_name_);
-  const bool manualSource = dragged && SortModeForFolder(catalog_->ParentOf(dragging_name_)) == storage::SortMode::catalog_order;
+  const std::wstring sourceParent = dragged ? catalog_->ParentOf(dragging_name_) : std::wstring();
   std::wstring targetName;
   bool targetIsGroup = false;
   bool insertAfter = false;
@@ -2920,7 +2920,7 @@ void MainWindow::UpdateTreeDrag(POINT windowPoint) {
     TVHITTESTINFO hit{}; hit.pt = treePoint;
     TreeView_HitTest(tree_, &hit);
     if (!hit.hItem) {
-      toRoot = manualSource && SortModeForFolder(L"") == storage::SortMode::catalog_order;
+      toRoot = true;
     } else if (!IsVirtualTreeBranch(tree_, hit.hItem)) {
       targetName = TreeItemName(tree_, hit.hItem);
       const auto* target = catalog_->Find(targetName);
@@ -2938,10 +2938,12 @@ void MainWindow::UpdateTreeDrag(POINT windowPoint) {
             ancestor = next;
           }
         }
-        if (!manualSource || SortModeForFolder(targetParent) != storage::SortMode::catalog_order || cycle) targetName.clear();
+        if (cycle) targetName.clear();
         else {
           targetItem = hit.hItem;
-          if (!targetIsGroup) {
+          const bool manualPosition = SortModeForFolder(sourceParent) == storage::SortMode::catalog_order &&
+              SortModeForFolder(targetParent) == storage::SortMode::catalog_order;
+          if (!targetIsGroup && manualPosition) {
             RECT itemBounds{};
             if (TreeView_GetItemRect(tree_, hit.hItem, &itemBounds, TRUE)) insertAfter = treePoint.y >= (itemBounds.top + itemBounds.bottom) / 2;
           }
@@ -2951,14 +2953,17 @@ void MainWindow::UpdateTreeDrag(POINT windowPoint) {
   }
 
   TreeView_SelectDropTarget(tree_, targetName.empty() || !targetIsGroup ? nullptr : targetItem);
-  TreeView_SetInsertMark(tree_, targetName.empty() || targetIsGroup ? nullptr : targetItem, insertAfter);
+  const bool manualPosition = dragged && !targetName.empty() && !targetIsGroup &&
+      SortModeForFolder(sourceParent) == storage::SortMode::catalog_order &&
+      SortModeForFolder(catalog_->ParentOf(targetName)) == storage::SortMode::catalog_order;
+  TreeView_SetInsertMark(tree_, manualPosition ? targetItem : nullptr, insertAfter);
   drag_target_name_ = std::move(targetName);
   drag_insert_after_ = insertAfter;
   drag_to_root_ = toRoot;
   if (drag_to_root_) SetStatus(L"Отпустите мышь, чтобы переместить в корень списка.");
   else if (!drag_target_name_.empty() && targetIsGroup) SetStatus(L"Отпустите мышь, чтобы переместить в группу: " + drag_target_name_);
-  else if (!drag_target_name_.empty()) SetStatus(L"Отпустите мышь, чтобы вставить " + std::wstring(drag_insert_after_ ? L"после: " : L"перед: ") + drag_target_name_);
-  else if (!manualSource) SetStatus(L"Перетаскивание доступно только при исходном порядке списка.");
+  else if (!drag_target_name_.empty() && manualPosition) SetStatus(L"Отпустите мышь, чтобы вставить " + std::wstring(drag_insert_after_ ? L"после: " : L"перед: ") + drag_target_name_);
+  else if (!drag_target_name_.empty()) SetStatus(L"Отпустите мышь, чтобы переместить в папку элемента: " + drag_target_name_);
   else SetStatus(L"Наведите указатель на базу, группу или свободное место дерева.");
 }
 void MainWindow::EndTreeDrag(POINT windowPoint) {
@@ -2975,7 +2980,6 @@ void MainWindow::EndTreeDrag(POINT windowPoint) {
   const auto* dragged = catalog_->Find(draggedName);
   if (!dragged) return;
   const auto sourceParent = catalog_->ParentOf(draggedName);
-  if (SortModeForFolder(sourceParent) != storage::SortMode::catalog_order) { SetStatus(L"Перетаскивание доступно только при исходном порядке списка."); return; }
 
   std::wstring targetParent;
   size_t position = std::numeric_limits<size_t>::max();
@@ -2983,21 +2987,30 @@ void MainWindow::EndTreeDrag(POINT windowPoint) {
     const auto* target = catalog_->Find(targetName);
     if (!target || EqualNoCase(target->name, draggedName)) { SetStatus(L"Перемещение отменено."); return; }
     targetParent = target->IsGroup() ? target->name : catalog_->ParentOf(target->name);
-    if (!target->IsGroup()) {
+    const bool manualPosition = SortModeForFolder(sourceParent) == storage::SortMode::catalog_order &&
+        SortModeForFolder(targetParent) == storage::SortMode::catalog_order;
+    if (!target->IsGroup() && manualPosition) {
       const auto targetPosition = CatalogPosition(target->name, targetParent);
       if (!targetPosition) { SetStatus(L"Не удалось определить место вставки."); return; }
       position = *targetPosition + (insertAfter ? 1 : 0);
+    } else if (!target->IsGroup() && EqualNoCase(sourceParent, targetParent)) {
+      SetStatus(L"Положение в этой папке задаётся её автоматической сортировкой.");
+      return;
     }
   }
-  if (SortModeForFolder(targetParent) != storage::SortMode::catalog_order) { SetStatus(L"Перетаскивание доступно только при исходном порядке списка."); return; }
   if (position != std::numeric_limits<size_t>::max() && EqualNoCase(sourceParent, targetParent)) {
     if (const auto sourcePosition = CatalogPosition(draggedName, sourceParent); sourcePosition && *sourcePosition < position) --position;
   }
   if (!catalog_->Move(draggedName, targetParent, position)) { SetStatus(L"Перемещение невозможно: нельзя поместить группу внутрь самой себя."); return; }
-  SaveCatalog();
+  if (!SaveCatalog()) return;
   PopulateTree();
   SelectTreeItem(draggedName);
-  SetStatus(targetParent.empty() ? L"Элемент перемещён в корень списка." : L"Элемент перемещён: " + draggedName);
+  if (SortModeForFolder(targetParent) != storage::SortMode::catalog_order) {
+    SetStatus(targetParent.empty() ? L"Элемент перемещён в корень; его положение задаёт текущая сортировка." :
+        L"Элемент перемещён в папку; его положение задаёт её текущая сортировка.");
+  } else {
+    SetStatus(targetParent.empty() ? L"Элемент перемещён в корень списка." : L"Элемент перемещён: " + draggedName);
+  }
 }
 void MainWindow::CancelTreeDrag() {
   if (tree_ && IsWindow(tree_)) {
