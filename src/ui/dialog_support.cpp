@@ -55,10 +55,20 @@ LRESULT DialogControlColor(UINT message, WPARAM wparam, LPARAM lparam) {
   return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
 }
 
+void DisableModalOwner(HWND owner) {
+  if (owner && IsWindow(owner)) EnableWindow(owner, FALSE);
+}
+
+void CloseModalDialog(HWND dialog, HWND owner) {
+  // Re-enabling the owner before its owned popup is destroyed lets Windows
+  // restore activation in one transition, without a visible owner redraw.
+  if (owner && IsWindow(owner)) EnableWindow(owner, TRUE);
+  if (dialog && IsWindow(dialog)) DestroyWindow(dialog);
+}
+
 void RestoreModalOwner(HWND owner) {
   if (!owner || !IsWindow(owner)) return;
   EnableWindow(owner, TRUE);
-  // The owner shares this UI thread; activation restores input without forcing the app to the foreground.
   SetActiveWindow(owner);
 }
 
