@@ -90,6 +90,46 @@ bool ContainsTag(const std::vector<std::wstring>& tags, std::wstring_view value)
   return std::any_of(tags.begin(), tags.end(), [&](const auto& tag) { return EqualNoCase(tag, value); });
 }
 
+std::vector<std::wstring> CollectFilterTags(const catalog::Catalog& catalog, const storage::DatabaseTags& tags) {
+  std::vector<std::wstring> result;
+  for (const auto* entry : catalog.Databases()) {
+    for (const auto& tag : TagsFor(tags, *entry)) {
+      if (!ContainsTag(result, tag)) result.push_back(tag);
+    }
+  }
+  std::sort(result.begin(), result.end(), [](const auto& left, const auto& right) { return _wcsicmp(left.c_str(), right.c_str()) < 0; });
+  return result;
+}
+
+bool MatchesSearchFilter(const catalog::Catalog& catalog, const catalog::TreeItem& item, std::wstring_view search_filter,
+    const storage::DatabaseTags& tags) {
+  if (search_filter.empty()) return true;
+  if (const auto* entry = catalog.Find(item.name)) {
+    if (catalog::MatchesSearchText(*entry, search_filter)) return true;
+    if (entry->IsDatabase()) {
+      const auto& entry_tags = TagsFor(tags, *entry);
+      if (std::any_of(entry_tags.begin(), entry_tags.end(), [&](const auto& tag) {
+        return utf::FindNoCaseOrdinal(tag, search_filter) != std::wstring_view::npos;
+      })) return true;
+    }
+  }
+  return std::any_of(item.children.begin(), item.children.end(), [&](const auto& child) {
+    return MatchesSearchFilter(catalog, child, search_filter, tags);
+  });
+}
+
+bool MatchesTagFilter(const catalog::Catalog& catalog, const catalog::TreeItem& item, const TreeTagFilter& filter,
+    const storage::DatabaseTags& tags, const std::vector<std::wstring>& favorites) {
+  if (filter.kind == TreeTagFilterKind::all) return true;
+  if (const auto* entry = catalog.Find(item.name); entry && entry->IsDatabase()) {
+    if (filter.kind == TreeTagFilterKind::favorites) return ContainsTag(favorites, entry->name);
+    return ContainsTag(TagsFor(tags, *entry), filter.tag);
+  }
+  return std::any_of(item.children.begin(), item.children.end(), [&](const auto& child) {
+    return MatchesTagFilter(catalog, child, filter, tags, favorites);
+  });
+}
+
 LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Catalog* catalog,
     const storage::Settings& settings, const storage::DatabaseTags& tags_by_database,
     const storage::TagStyles& styles, std::wstring_view search_filter, HFONT controls_font) {

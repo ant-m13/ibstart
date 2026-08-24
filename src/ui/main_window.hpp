@@ -18,6 +18,10 @@
 
 namespace ibstart::ui {
 
+namespace presentation {
+struct TreeTagFilter;
+}
+
 class MainWindow {
  public:
   MainWindow(HINSTANCE instance, std::filesystem::path executable, storage::StorageLayout layout,
@@ -39,12 +43,12 @@ class MainWindow {
   bool SaveCatalog();
   void PopulateTree();
   void PopulateTreeWithoutFlicker(std::wstring_view selected = {}, bool select_catalog_root = false);
-  void AddTreeItems(const std::vector<catalog::TreeItem>& items, HTREEITEM parent, std::wstring_view filter);
+  void AddTreeItems(const std::vector<catalog::TreeItem>& items, HTREEITEM parent, std::wstring_view filter,
+      const presentation::TreeTagFilter& tag_filter);
   void SortFolder(std::wstring_view folder, catalog::SortDirection direction);
   void ToggleFoldersFirstWhenSorting();
-  [[nodiscard]] bool ItemMatches(const catalog::TreeItem& item, std::wstring_view filter) const;
-  [[nodiscard]] bool ItemMatchesTagFilter(const catalog::TreeItem& item) const;
   void RefreshTagFilter();
+  [[nodiscard]] presentation::TreeTagFilter CurrentTagFilter() const;
   LRESULT DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const;
   LRESULT DrawDetailsList(NMLVCUSTOMDRAW* draw) const;
   bool MeasureContextMenuItem(MEASUREITEMSTRUCT* measure) const;
