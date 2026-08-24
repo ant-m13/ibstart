@@ -145,8 +145,19 @@ void WriteAtomically(const std::filesystem::path& path, std::string_view content
 }
 
 std::string ReadFile(const std::filesystem::path& path) {
+  std::error_code error;
+  const bool exists = std::filesystem::exists(path, error);
+  if (error) throw std::runtime_error("Cannot inspect application data file: " + utf::ToUtf8(path.wstring()) + ": " + error.message());
+  if (!exists) return {};
+  if (!std::filesystem::is_regular_file(path, error)) {
+    if (error) throw std::runtime_error("Cannot inspect application data file: " + utf::ToUtf8(path.wstring()) + ": " + error.message());
+    throw std::runtime_error("Application data path is not a regular file: " + utf::ToUtf8(path.wstring()));
+  }
   std::ifstream input(path, std::ios::binary);
-  return input ? std::string((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>()) : std::string{};
+  if (!input) throw std::runtime_error("Cannot open application data file: " + utf::ToUtf8(path.wstring()));
+  const std::string contents((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+  if (!input.good() && !input.eof()) throw std::runtime_error("Cannot read application data file completely: " + utf::ToUtf8(path.wstring()));
+  return contents;
 }
 
 std::optional<std::wstring> JsonString(std::string_view json, std::string_view key) {

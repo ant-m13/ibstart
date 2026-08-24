@@ -468,6 +468,24 @@ void TestStorageSkipsMalformedRecords() {
   std::error_code error;
   std::filesystem::remove_all(directory, error);
 }
+
+void TestStorageRejectsUnreadableDataPath() {
+  const auto directory = Temp(L"unreadable-storage");
+  const ibstart::storage::StorageLayout layout{directory, true};
+  ibstart::storage::EnsureWritable(layout);
+  std::filesystem::create_directory(layout.root / L"settings.json");
+
+  bool rejected = false;
+  try {
+    static_cast<void>(ibstart::storage::LoadSettings(layout));
+  } catch (const std::runtime_error&) {
+    rejected = true;
+  }
+  CHECK(rejected);
+
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
 }
 
 int wmain() {
@@ -496,6 +514,7 @@ int wmain() {
   run(L"CacheSizeFormatting", TestCacheSizeFormatting);
   run(L"PortableMode", TestPortableMode);
   run(L"StorageSkipsMalformedRecords", TestStorageSkipsMalformedRecords);
+  run(L"StorageRejectsUnreadableDataPath", TestStorageRejectsUnreadableDataPath);
   if (failures) { std::wcerr << failures << L" test(s) failed\n"; return 1; }
   std::wcout << L"All IBStart unit tests passed\n"; return 0;
 }
