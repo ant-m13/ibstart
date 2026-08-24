@@ -49,7 +49,7 @@ constexpr UINT kCacheOperationFinishedMessage = WM_APP + 26;
 constexpr int kMinimumWindowWidth = 940;
 constexpr int kMinimumSimpleWindowWidth = 520;
 constexpr int kMinimumWindowHeight = 460;
-enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kCheckForUpdates, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kCopyDetailValue, kCopyDetailPair, kEditTags, kConfigureTagColors, kFolderSortDefault, kFolderSortCatalog, kFolderSortName, kFolderSortLastLaunch, kMoveToFolder, kOpenStandardList, kShowTagsInList, kNewTagForSelected, kFavorite1 = 200 };
+enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kCheckForUpdates, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kCopyDetailValue, kCopyDetailPair, kEditTags, kConfigureTagColors, kFolderSortDefault, kFolderSortCatalog, kFolderSortName, kFolderSortLastLaunch, kFolderSortMenu, kApplyCurrentSort, kMoveToFolder, kOpenStandardList, kShowTagsInList, kNewTagForSelected, kFavorite1 = 200 };
 constexpr UINT kRecentList1 = 300;
 constexpr UINT kQuickTag1 = 400;
 constexpr UINT kTagsContextMenu = 250;
@@ -1852,6 +1852,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
         case kCopyDetailValue: CopySelectedDetail(false); break; case kCopyDetailPair: CopySelectedDetail(true); break; case kEditTags: EditSelectedTags(); break; case kConfigureTagColors: ConfigureTagColors(); break;
         case kSimpleMode: SetSimpleMode(!settings_.simple_mode); break; case kToggleFavorite: ToggleFavorite(); break; case kShowTagsInList: ToggleTagDisplay(); break; case kFocusSearch: SetFocus(search_); break; case kCheckForUpdates: CheckForUpdates(); break; case kAbout: ShowAbout(); break;
         case kMoveUp: MoveSelected(-1); break; case kMoveDown: MoveSelected(1); break; case kMoveToFolder: MoveSelectedToFolder(); break; case kNewTagForSelected: AddNewTagToSelected(); break;
+        case kApplyCurrentSort: ApplyCurrentSortToFile(); break;
         default:
           if (LOWORD(wparam) >= kFavorite1 && LOWORD(wparam) < kFavorite1 + 9) LaunchFavorite(LOWORD(wparam) - kFavorite1);
           else if (LOWORD(wparam) >= kRecentList1 && LOWORD(wparam) < kRecentList1 + 10) OpenRecentList(LOWORD(wparam) - kRecentList1);
@@ -2206,8 +2207,8 @@ void MainWindow::LoadCatalog(bool report_error) {
   } catch (const std::exception& error) { logger_.Error(L"Ошибка загрузки: " + ibstart::utf::FromUtf8(error.what())); if (report_error) Message(window_, L"Не удалось загрузить список баз. Проверьте путь и кодировку UTF-8.", L"ИБ Старт", MB_OK | MB_ICONERROR); }
 }
 
-void MainWindow::SaveCatalog() {
-  if (!catalog_) return;
+bool MainWindow::SaveCatalog() {
+  if (!catalog_) return false;
   const auto logMaintenanceWarnings = [&] {
     if (!store_) return;
     for (const auto& warning : store_->maintenance_warnings()) {
@@ -2219,7 +2220,7 @@ void MainWindow::SaveCatalog() {
       if (settings_.active_ibases.empty()) {
         wchar_t filename[MAX_PATH] = L"ibases.v8i";
         OPENFILENAMEW dialog{}; dialog.lStructSize = sizeof(dialog); dialog.hwndOwner = window_; dialog.lpstrFilter = L"ibases.v8i\0ibases.v8i\0Все файлы\0*.*\0"; dialog.lpstrFile = filename; dialog.nMaxFile = MAX_PATH; dialog.lpstrDefExt = L"v8i"; dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
-        if (!GetSaveFileNameW(&dialog)) return;
+        if (!GetSaveFileNameW(&dialog)) return false;
         settings_.active_ibases = filename;
       }
       store_.emplace(settings_.active_ibases);
@@ -2231,8 +2232,10 @@ void MainWindow::SaveCatalog() {
     RefreshFileMenu();
     DrawMenuBar(window_);
     SetStatus(L"Сохранено: " + settings_.active_ibases.wstring() + L" | " + CatalogStatistics());
+    return true;
   } catch (const v8i::ExternalModificationError&) { logMaintenanceWarnings(); const int answer = MessageBoxW(window_, L"Файл ibases.v8i был изменён другой программой. Перечитать его?", L"ИБ Старт", MB_YESNO | MB_ICONWARNING); if (answer == IDYES) LoadCatalog(); }
   catch (const std::exception& error) { logMaintenanceWarnings(); logger_.Error(L"Ошибка записи: " + ibstart::utf::FromUtf8(error.what())); Message(window_, L"Не удалось сохранить ibases.v8i. Исходный файл не изменён.", L"ИБ Старт", MB_OK | MB_ICONERROR); }
+  return false;
 }
 
 bool MainWindow::ItemMatches(const catalog::TreeItem& item, std::wstring_view filter) const {
@@ -2300,10 +2303,19 @@ storage::SortMode MainWindow::SortModeForFolder(std::wstring_view folder) const 
 void MainWindow::SortTreeItems(std::vector<catalog::TreeItem>& items, std::wstring_view parent) const {
   for (auto& item : items) if (!item.database) SortTreeItems(item.children, item.name);
   const auto mode = SortModeForFolder(parent);
-  if (mode == storage::SortMode::catalog_order) return;
+  const auto foldersFirst = [](const catalog::TreeItem& left, const catalog::TreeItem& right) {
+    return left.database != right.database && !left.database;
+  };
+  if (mode == storage::SortMode::catalog_order) {
+    std::stable_sort(items.begin(), items.end(), foldersFirst);
+    return;
+  }
   const auto nameLess = [](const catalog::TreeItem& left, const catalog::TreeItem& right) { return _wcsicmp(left.name.c_str(), right.name.c_str()) < 0; };
   if (mode == storage::SortMode::name) {
-    std::stable_sort(items.begin(), items.end(), nameLess);
+    std::stable_sort(items.begin(), items.end(), [&](const auto& left, const auto& right) {
+      if (left.database != right.database) return !left.database;
+      return nameLess(left, right);
+    });
     return;
   }
   const auto lastLaunch = [&](const catalog::TreeItem& item) -> std::optional<std::chrono::system_clock::time_point> {
@@ -2328,6 +2340,24 @@ std::vector<catalog::TreeItem> MainWindow::SortedTree() const {
   auto items = catalog_->Tree();
   if (!settings_.simple_mode) SortTreeItems(items, L"");
   return items;
+}
+std::vector<std::wstring> MainWindow::SortedChildNames(std::wstring_view parent) const {
+  const auto items = SortedTree();
+  const auto find = [&](auto&& self, const std::vector<catalog::TreeItem>& siblings) -> const std::vector<catalog::TreeItem>* {
+    for (const auto& item : siblings) {
+      if (!item.database && EqualNoCase(item.name, parent)) return &item.children;
+      if (!item.database) {
+        if (const auto* found = self(self, item.children)) return found;
+      }
+    }
+    return nullptr;
+  };
+  const auto* children = parent.empty() ? &items : find(find, items);
+  if (!children) return {};
+  std::vector<std::wstring> names;
+  names.reserve(children->size());
+  for (const auto& item : *children) names.push_back(item.name);
+  return names;
 }
 std::optional<size_t> MainWindow::CatalogPosition(std::wstring_view name, std::wstring_view parent) const {
   if (!catalog_) return std::nullopt;
@@ -2375,6 +2405,28 @@ void MainWindow::SetFolderSortMode(std::wstring_view folder, std::optional<stora
   PopulateTree();
   SelectTreeItem(folder);
   SetStatus(L"Сортировка папки изменена.");
+}
+void MainWindow::ApplyCurrentSortToFile() {
+  if (settings_.simple_mode || !catalog_) return;
+  const HTREEITEM selectedItem = TreeView_GetSelection(tree_);
+  if (TreeItemData(tree_, selectedItem) != 0) {
+    Message(window_, L"Выберите папку, базу или свободное место в основном списке.", L"Сортировка", MB_OK | MB_ICONWARNING);
+    return;
+  }
+
+  const auto selected = SelectedName();
+  const auto* entry = catalog_->Find(selected);
+  const std::wstring parent = entry && entry->IsGroup() ? entry->name : entry ? catalog_->ParentOf(entry->name) : std::wstring();
+  const auto names = SortedChildNames(parent);
+  if (!catalog_->SetChildOrder(parent, names)) {
+    Message(window_, L"Не удалось определить полный порядок элементов для сохранения.", L"Сортировка", MB_OK | MB_ICONERROR);
+    return;
+  }
+  if (!SaveCatalog()) return;
+
+  PopulateTree();
+  if (!selected.empty()) SelectTreeItem(selected);
+  SetStatus(parent.empty() ? L"Текущая сортировка корня сохранена в файле ibases.v8i." : L"Текущая сортировка папки сохранена в файле ibases.v8i.");
 }
 void MainWindow::AddTreeItems(const std::vector<catalog::TreeItem>& items, HTREEITEM parent, std::wstring_view filter) {
   for (const auto& item : items) {
@@ -2654,7 +2706,9 @@ bool MainWindow::DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const {
   const bool checked = (draw->itemState & ODS_CHECKED) != 0;
   const bool tagIcon = item->command == kTagsContextMenu || item->command == kEditTags || item->command == kConfigureTagColors || item->command == kShowTagsInList;
   const bool simpleModeIcon = item->command == kSimpleMode;
-  const bool hasSubmenuArrow = item->command == kTagsContextMenu || item->command == kRecentListsMenu;
+  const bool sortIcon = item->command == kFolderSortMenu || item->command == kFolderSortDefault || item->command == kFolderSortCatalog ||
+      item->command == kFolderSortName || item->command == kFolderSortLastLaunch || item->command == kApplyCurrentSort;
+  const bool hasSubmenuArrow = item->command == kTagsContextMenu || item->command == kRecentListsMenu || item->command == kFolderSortMenu;
   const int saved = SaveDC(draw->hDC);
   FillRect(draw->hDC, &draw->rcItem, GetSysColorBrush(selected ? COLOR_HIGHLIGHT : COLOR_MENU));
   const int iconX = draw->rcItem.left + 7;
@@ -2717,6 +2771,42 @@ bool MainWindow::DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const {
     DeleteObject(brush);
     DeleteObject(pen);
     DeleteObject(holePen);
+  } else if (sortIcon) {
+    const COLORREF color = disabled ? GetSysColor(COLOR_GRAYTEXT) : selected ? RGB(218, 242, 255) : RGB(0, 144, 162);
+    const HPEN pen = CreatePen(PS_SOLID, 2, color);
+    const auto previousPen = SelectObject(draw->hDC, pen);
+    if (item->command == kFolderSortName) {
+      const HFONT previousFont = static_cast<HFONT>(SelectObject(draw->hDC, GetStockObject(DEFAULT_GUI_FONT)));
+      SetTextColor(draw->hDC, color);
+      SetBkMode(draw->hDC, TRANSPARENT);
+      TextOutW(draw->hDC, iconX + 2, iconY + 1, L"A", 1);
+      TextOutW(draw->hDC, iconX + 11, iconY + 10, L"Z", 1);
+      MoveToEx(draw->hDC, iconX + 17, iconY + 3, nullptr);
+      LineTo(draw->hDC, iconX + 17, iconY + 16);
+      MoveToEx(draw->hDC, iconX + 14, iconY + 13, nullptr);
+      LineTo(draw->hDC, iconX + 17, iconY + 16);
+      LineTo(draw->hDC, iconX + 20, iconY + 13);
+      SelectObject(draw->hDC, previousFont);
+    } else if (item->command == kFolderSortLastLaunch) {
+      SelectObject(draw->hDC, GetStockObject(HOLLOW_BRUSH));
+      Ellipse(draw->hDC, iconX + 3, iconY + 3, iconX + 18, iconY + 18);
+      MoveToEx(draw->hDC, iconX + 10, iconY + 6, nullptr);
+      LineTo(draw->hDC, iconX + 10, iconY + 11);
+      LineTo(draw->hDC, iconX + 14, iconY + 13);
+    } else {
+      for (int offset = 0; offset != 3; ++offset) {
+        const int y = iconY + 5 + offset * 5;
+        MoveToEx(draw->hDC, iconX + 4, y, nullptr);
+        LineTo(draw->hDC, iconX + 18, y);
+      }
+      if (item->command == kApplyCurrentSort) {
+        MoveToEx(draw->hDC, iconX + 12, iconY + 14, nullptr);
+        LineTo(draw->hDC, iconX + 15, iconY + 17);
+        LineTo(draw->hDC, iconX + 20, iconY + 11);
+      }
+    }
+    SelectObject(draw->hDC, previousPen);
+    DeleteObject(pen);
   } else if (item->icon) {
     if (disabled) DrawStateW(draw->hDC, nullptr, nullptr, reinterpret_cast<LPARAM>(item->icon), 0, iconX, iconY, 20, 20, DST_ICON | DSS_DISABLED);
     else DrawIconEx(draw->hDC, iconX, iconY, item->icon, 20, 20, 0, nullptr, DI_NORMAL);
@@ -3025,9 +3115,9 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
 
   HMENU menu = CreatePopupMenu();
   if (!menu) return;
-  context_menu_items_.reserve(24);
+  context_menu_items_.reserve(40);
   std::vector<std::wstring> quick_tags;
-  const auto append = [&](bool enabled, bool checked, UINT command, int iconResource, std::wstring text, std::wstring shortcut = {}) {
+  const auto appendTo = [&](HMENU target, bool enabled, bool checked, UINT command, int iconResource, std::wstring text, std::wstring shortcut = {}) {
     ContextMenuItem visual{command, iconResource == 0 ? nullptr : LoadResourceIcon(instance_, iconResource, 20), std::move(text), std::move(shortcut)};
     context_menu_items_.push_back(std::move(visual));
     MENUITEMINFOW item{};
@@ -3037,7 +3127,10 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
     item.wID = command;
     item.fState = (enabled ? MFS_ENABLED : MFS_DISABLED) | (checked ? MFS_CHECKED : 0);
     item.dwItemData = reinterpret_cast<ULONG_PTR>(&context_menu_items_.back());
-    InsertMenuItemW(menu, static_cast<UINT>(GetMenuItemCount(menu)), TRUE, &item);
+    InsertMenuItemW(target, static_cast<UINT>(GetMenuItemCount(target)), TRUE, &item);
+  };
+  const auto append = [&](bool enabled, bool checked, UINT command, int iconResource, std::wstring text, std::wstring shortcut = {}) {
+    appendTo(menu, enabled, checked, command, iconResource, std::move(text), std::move(shortcut));
   };
   const auto appendPopup = [&](HMENU submenu, UINT identity, std::wstring text) {
     ContextMenuItem visual{identity, nullptr, std::move(text), {}};
@@ -3120,12 +3213,16 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
       const auto checked = [&](std::optional<storage::SortMode> mode) {
         return mode ? configured != sort_settings_.folder_modes.end() && configured->second == *mode : configured == sort_settings_.folder_modes.end();
       };
-      AppendMenuW(sorting, MF_STRING | (checked(std::nullopt) ? MF_CHECKED : MF_UNCHECKED), kFolderSortDefault, L"Как для всего списка");
-      AppendMenuW(sorting, MF_STRING | (checked(storage::SortMode::catalog_order) ? MF_CHECKED : MF_UNCHECKED), kFolderSortCatalog, L"Исходный порядок");
-      AppendMenuW(sorting, MF_STRING | (checked(storage::SortMode::name) ? MF_CHECKED : MF_UNCHECKED), kFolderSortName, L"По названию");
-      AppendMenuW(sorting, MF_STRING | (checked(storage::SortMode::last_launch) ? MF_CHECKED : MF_UNCHECKED), kFolderSortLastLaunch, L"По последнему запуску");
-      AppendMenuW(menu, MF_POPUP, reinterpret_cast<UINT_PTR>(sorting), L"Сортировка в этой папке");
+      appendTo(sorting, true, checked(std::nullopt), kFolderSortDefault, 0, L"Как для всего списка");
+      appendTo(sorting, true, checked(storage::SortMode::catalog_order), kFolderSortCatalog, 0, L"Исходный порядок");
+      appendTo(sorting, true, checked(storage::SortMode::name), kFolderSortName, 0, L"По названию");
+      appendTo(sorting, true, checked(storage::SortMode::last_launch), kFolderSortLastLaunch, 0, L"По последнему запуску");
+      appendPopup(sorting, kFolderSortMenu, L"Сортировка отображения");
     }
+  }
+  if (!specialRoot) {
+    const std::wstring applyText = group ? L"Применить сортировку этой папки к файлу" : database ? L"Применить сортировку текущей папки к файлу" : L"Применить сортировку корня к файлу";
+    append(true, false, kApplyCurrentSort, 0, applyText);
   }
   separator();
   append(!settings_.simple_mode, false, kAddFile, IDI_ACTION_ADD, group ? L"Добавить файловую базу в группу…" : L"Добавить файловую базу…", L"Ctrl+Alt+F");
@@ -3148,6 +3245,7 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   else if (group && command == kFolderSortCatalog) SetFolderSortMode(entry->name, storage::SortMode::catalog_order);
   else if (group && command == kFolderSortName) SetFolderSortMode(entry->name, storage::SortMode::name);
   else if (group && command == kFolderSortLastLaunch) SetFolderSortMode(entry->name, storage::SortMode::last_launch);
+  else if (command == kApplyCurrentSort) ApplyCurrentSortToFile();
   else SendMessageW(window_, WM_COMMAND, MAKEWPARAM(command, 0), 0);
 }
 
@@ -3715,6 +3813,7 @@ void MainWindow::RefreshMainMenuBar() {
     append(view_menu_, kSimpleMode, 0, L"Выйти из простого режима", L"Ctrl+Alt+M", true);
   } else {
     append(view_menu_, kToggleFavorite, IDI_ACTION_FAVORITE, L"Добавить/убрать из избранного", L"Ctrl+Alt+I");
+    append(view_menu_, kApplyCurrentSort, 0, L"Применить текущую сортировку к файлу");
     append(view_menu_, kEditTags, 0, L"Управление тегами выбранной базы…");
     append(view_menu_, kConfigureTagColors, 0, L"Настроить теги…");
     append(view_menu_, kShowTagsInList, 0, L"Показывать теги в списке баз", {}, settings_.show_tags_in_list);

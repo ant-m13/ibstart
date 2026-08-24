@@ -39,14 +39,16 @@ class MainWindow {
   void CreateControls();
   void Layout(int width, int height);
   void LoadCatalog(bool report_error = true);
-  void SaveCatalog();
+  bool SaveCatalog();
   void PopulateTree();
   void AddTreeItems(const std::vector<catalog::TreeItem>& items, HTREEITEM parent, std::wstring_view filter);
   [[nodiscard]] std::vector<catalog::TreeItem> SortedTree() const;
+  [[nodiscard]] std::vector<std::wstring> SortedChildNames(std::wstring_view parent) const;
   void SortTreeItems(std::vector<catalog::TreeItem>& items, std::wstring_view parent) const;
   [[nodiscard]] storage::SortMode SortModeForFolder(std::wstring_view folder) const;
   void SetDefaultSortMode(storage::SortMode mode);
   void SetFolderSortMode(std::wstring_view folder, std::optional<storage::SortMode> mode);
+  void ApplyCurrentSortToFile();
   [[nodiscard]] bool ItemMatches(const catalog::TreeItem& item, std::wstring_view filter) const;
   [[nodiscard]] bool ItemMatchesTagFilter(const catalog::TreeItem& item) const;
   void RefreshTagFilter();
