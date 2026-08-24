@@ -428,6 +428,34 @@ void TestPortableMode() {
   std::error_code error; std::filesystem::remove_all(directory, error);
 }
 
+void TestV8iSaveRejectsActiveWriter() {
+  const auto directory = Temp(L"store-lock");
+  const auto file = directory / L"ibases.v8i";
+  const std::string original = "[Base]\r\nConnect=File=\"C:\\\\base\"\r\n";
+  WriteBytes(file, original);
+  ibstart::v8i::V8iFileStore store(file);
+  auto document = store.Read();
+  document.Find(L"Base")->entry.Set(L"Locale", L"ru_RU");
+
+  const HANDLE writer = CreateFileW(file.c_str(), GENERIC_WRITE,
+      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  CHECK(writer != INVALID_HANDLE_VALUE);
+  bool rejected = false;
+  if (writer != INVALID_HANDLE_VALUE) {
+    try {
+      store.Save(document);
+    } catch (const std::runtime_error&) {
+      rejected = true;
+    }
+    CloseHandle(writer);
+  }
+  CHECK(rejected);
+  CHECK(ReadBytes(file) == original);
+
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
 void TestStorageSkipsMalformedRecords() {
   const auto directory = Temp(L"malformed-storage");
   const ibstart::storage::StorageLayout layout{directory, true};
@@ -504,6 +532,7 @@ int wmain() {
   run(L"CatalogSearch", TestCatalogSearch);
   run(L"NoBomAndCatalog", TestNoBomAndCatalog);
   run(L"SafeStore", TestSafeStore);
+  run(L"V8iSaveRejectsActiveWriter", TestV8iSaveRejectsActiveWriter);
   run(L"CommandBuilderAndSelection", TestCommandBuilderAndSelection);
   run(L"PlatformDiscoveryLargeVersions", TestPlatformDiscoveryLargeVersions);
   run(L"WindowsArgumentQuoting", TestWindowsArgumentQuoting);
