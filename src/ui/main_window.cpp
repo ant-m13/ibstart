@@ -1,4 +1,5 @@
 #include "ui/main_window.hpp"
+#include "ui/dialog_support.hpp"
 #include "ui/tree_presentation.hpp"
 
 #include "app/instance_activation.hpp"
@@ -36,6 +37,13 @@
 #include <thread>
 
 namespace ibstart::ui {
+using dialog::CreateUiFont;
+using dialog::DialogControlColor;
+using dialog::DialogOuterSize;
+using dialog::PositionDialogNearOwner;
+using dialog::RestoreModalOwner;
+using dialog::ScaleForDpi;
+using dialog::SetControlFont;
 using presentation::ContainsTag;
 using presentation::EraseTagStyle;
 using presentation::KnownTags;
@@ -148,17 +156,6 @@ HICON CreateWebDatabaseIcon() {
   if (screen) ReleaseDC(nullptr, screen);
   return icon;
 }
-HFONT CreateUiFont(HWND window, int points, LONG weight) {
-  return CreateFontW(-MulDiv(points, static_cast<int>(GetDpiForWindow(window)), 72), 0, 0, 0, weight, FALSE, FALSE, FALSE,
-      DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS, DEFAULT_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
-}
-int ScaleForDpi(int logicalPixels, UINT dpi) { return MulDiv(logicalPixels, static_cast<int>(dpi == 0 ? 96 : dpi), 96); }
-SIZE DialogOuterSize(HWND owner, int clientWidth, int clientHeight, DWORD style, DWORD extendedStyle) {
-  const UINT dpi = owner ? GetDpiForWindow(owner) : GetDpiForSystem();
-  RECT bounds{0, 0, ScaleForDpi(clientWidth, dpi), ScaleForDpi(clientHeight, dpi)};
-  if (!AdjustWindowRectExForDpi(&bounds, style, FALSE, extendedStyle, dpi)) return {bounds.right, bounds.bottom};
-  return {bounds.right - bounds.left, bounds.bottom - bounds.top};
-}
 void AttachButtonIcon(HWND button, HINSTANCE instance, int resource, std::vector<HIMAGELIST>& storage) {
   HIMAGELIST images = ImageList_Create(20, 20, ILC_COLOR32 | ILC_MASK, 1, 1);
   HICON icon = LoadResourceIcon(instance, resource, 20);
@@ -248,39 +245,6 @@ bool IsVirtualTreeBranch(HWND tree, HTREEITEM item) {
   }
   return false;
 }
-void SetControlFont(HWND control, HFONT font) {
-  if (control && font) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(font), TRUE);
-}
-void PositionDialogNearOwner(HWND dialog, HWND owner) {
-  RECT dialogRect{};
-  if (!GetWindowRect(dialog, &dialogRect)) return;
-  const int width = dialogRect.right - dialogRect.left;
-  const int height = dialogRect.bottom - dialogRect.top;
-  RECT ownerRect{};
-  if (!owner || !GetWindowRect(owner, &ownerRect)) ownerRect = dialogRect;
-  MONITORINFO monitor{sizeof(monitor)};
-  const HMONITOR selected = MonitorFromWindow(owner ? owner : dialog, MONITOR_DEFAULTTONEAREST);
-  if (!GetMonitorInfoW(selected, &monitor)) return;
-  const RECT work = monitor.rcWork;
-  int x = ownerRect.left + ((ownerRect.right - ownerRect.left) - width) / 2;
-  int y = ownerRect.top + ((ownerRect.bottom - ownerRect.top) - height) / 2;
-  const int minimumX = static_cast<int>(work.left);
-  const int minimumY = static_cast<int>(work.top);
-  const int maximumX = std::max(minimumX, static_cast<int>(work.right) - width);
-  const int maximumY = std::max(minimumY, static_cast<int>(work.bottom) - height);
-  x = std::clamp(x, minimumX, maximumX);
-  y = std::clamp(y, minimumY, maximumY);
-  SetWindowPos(dialog, nullptr, x, y, 0, 0, SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE);
-}
-LRESULT DialogControlColor(UINT message, WPARAM wparam, LPARAM lparam) {
-  if (message != WM_CTLCOLORSTATIC && message != WM_CTLCOLORBTN) return 0;
-  const HDC context = reinterpret_cast<HDC>(wparam);
-  const HWND control = reinterpret_cast<HWND>(lparam);
-  SetBkColor(context, GetSysColor(COLOR_WINDOW));
-  SetTextColor(context, IsWindowEnabled(control) ? GetSysColor(COLOR_WINDOWTEXT) : GetSysColor(COLOR_GRAYTEXT));
-  return reinterpret_cast<LRESULT>(GetSysColorBrush(COLOR_WINDOW));
-}
-
 enum class DatabaseConnectionKind { file, web, server };
 struct DatabaseEditorData {
   std::wstring name;
@@ -608,13 +572,6 @@ std::optional<COLORREF> ParseColorText(std::wstring_view value) {
   if (!red || !green || !blue) return std::nullopt;
   return RGB(*red, *green, *blue);
 }
-void RestoreModalOwner(HWND owner) {
-  if (!owner || !IsWindow(owner)) return;
-  EnableWindow(owner, TRUE);
-  // The owner shares this UI thread; activation restores input without forcing the app to the foreground.
-  SetActiveWindow(owner);
-}
-
 std::wstring ListViewText(HWND list, int row, int column) {
   std::wstring text(256, L'\0');
   for (;;) {
