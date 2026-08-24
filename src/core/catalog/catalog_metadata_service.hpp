@@ -18,7 +18,7 @@ class CatalogMetadataService {
 
   explicit CatalogMetadataService(storage::StorageLayout layout);
 
-  [[nodiscard]] const storage::CatalogState& Read();
+  [[nodiscard]] const storage::CatalogState& Read() const;
   [[nodiscard]] const storage::CatalogState& Reload();
   [[nodiscard]] bool ToggleFavorite(std::wstring database_name);
   void RenameDatabaseMetadata(std::wstring previous_name, std::wstring updated_name,
@@ -31,7 +31,7 @@ class CatalogMetadataService {
   void ClearHistory();
 
  private:
-  storage::CatalogStateRepository repository_;
+  mutable storage::CatalogStateRepository repository_;
 };
 
 }  // namespace ibstart::catalog

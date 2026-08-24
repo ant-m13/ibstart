@@ -1840,7 +1840,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
           const auto* hint = reinterpret_cast<NMTVGETINFOTIPW*>(lparam);
           if (!settings_.simple_mode && hint && hint->pszText && hint->cchTextMax > 0 && catalog_ && TreeItemData(tree_, hint->hItem) == 0) {
             if (const auto* entry = catalog_->Find(TreeItemName(tree_, hint->hItem)); entry && entry->IsDatabase()) {
-              const auto& tags = TagsFor(tags_, *entry);
+              const auto& tags = TagsFor(catalog_state_.Read().tags, *entry);
               if (!tags.empty()) {
                 const std::wstring text = L"Теги: " + TagsText(tags);
                 wcsncpy_s(hint->pszText, static_cast<size_t>(hint->cchTextMax), text.c_str(), _TRUNCATE);
@@ -2158,9 +2158,7 @@ void MainWindow::LoadCatalog(bool report_error) {
       SetStatus(settings_.active_ibases.wstring() + L" | " + CatalogStatistics());
       logger_.Info(L"Загружен список баз: " + settings_.active_ibases.wstring() + L" | " + CatalogStatistics());
     }
-    const auto& catalogState = catalog_state_.Reload();
-    tags_ = catalogState.tags;
-    tag_styles_ = catalogState.tag_styles;
+    catalog_state_.Reload();
     RefreshTagFilter();
     PopulateTree();
     if (!hasInitialLaunch) {
@@ -2207,7 +2205,7 @@ bool MainWindow::ItemMatches(const catalog::TreeItem& item, std::wstring_view fi
     if (const auto* entry = catalog_->Find(item.name); entry) {
       if (catalog::MatchesSearchText(*entry, filter)) return true;
       if (entry->IsDatabase()) {
-        const auto& tags = TagsFor(tags_, *entry);
+        const auto& tags = TagsFor(catalog_state_.Read().tags, *entry);
         if (std::any_of(tags.begin(), tags.end(), [&](const auto& tag) { return utf::FindNoCaseOrdinal(tag, filter) != std::wstring_view::npos; })) return true;
       }
     }
@@ -2222,7 +2220,7 @@ bool MainWindow::ItemMatchesTagFilter(const catalog::TreeItem& item) const {
   if (entry && entry->IsDatabase()) {
     if (selection == 1) return ContainsTag(filter_favorites_, entry->name);
     const size_t tag = static_cast<size_t>(selection - 2);
-    return tag < filter_tags_.size() && ContainsTag(TagsFor(tags_, *entry), filter_tags_[tag]);
+    return tag < filter_tags_.size() && ContainsTag(TagsFor(catalog_state_.Read().tags, *entry), filter_tags_[tag]);
   }
   return std::any_of(item.children.begin(), item.children.end(), [&](const auto& child) { return ItemMatchesTagFilter(child); });
 }
@@ -2236,7 +2234,7 @@ void MainWindow::RefreshTagFilter() {
   filter_tags_.clear();
   if (catalog_) {
     for (const auto* entry : catalog_->Databases()) {
-      for (const auto& tag : TagsFor(tags_, *entry)) {
+      for (const auto& tag : TagsFor(catalog_state_.Read().tags, *entry)) {
         if (std::none_of(filter_tags_.begin(), filter_tags_.end(), [&](const auto& existing) { return EqualNoCase(existing, tag); })) filter_tags_.push_back(tag);
       }
     }
@@ -2397,7 +2395,7 @@ LRESULT MainWindow::DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const {
   if (!TreeView_GetItemRect(tree_, item, &labelRect, TRUE)) return CDRF_DODEFAULT;
   if (catalog_ && TreeItemData(tree_, item) == 0) {
     if (const auto* entry = catalog_->Find(label); entry && entry->IsDatabase()) {
-      const auto& tags = TagsFor(tags_, *entry);
+      const auto& tags = TagsFor(catalog_state_.Read().tags, *entry);
       const bool tagMatchesSearch = !search_filter_.empty() && std::any_of(tags.begin(), tags.end(), [&](const auto& tag) {
         return utf::FindNoCaseOrdinal(tag, search_filter_) != std::wstring_view::npos;
       });
@@ -2470,7 +2468,7 @@ LRESULT MainWindow::DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const {
             if (x + overflowWidth <= client.right - 4) drawOverflow(x);
             break;
           }
-          const auto* configured = TagStyleFor(tag_styles_, tag);
+          const auto* configured = TagStyleFor(catalog_state_.Read().tag_styles, tag);
           const storage::TagStyle style = configured ? *configured : storage::TagStyle{};
           const HBRUSH brush = CreateSolidBrush(style.background);
           const HPEN pen = CreatePen(PS_SOLID, 1, style.background);
@@ -2547,7 +2545,7 @@ LRESULT MainWindow::DrawDetailsList(NMLVCUSTOMDRAW* draw) const {
   const auto row = static_cast<int>(draw->nmcd.dwItemSpec);
   draw->clrTextBk = row % 2 == 0 ? RGB(242, 248, 249) : RGB(250, 252, 253);
   if (draw->iSubItem == 1 && details_ && EqualNoCase(ListViewText(details_, row, 0), L"Тег")) {
-    if (const auto* style = TagStyleFor(tag_styles_, ListViewText(details_, row, 1))) {
+    if (const auto* style = TagStyleFor(catalog_state_.Read().tag_styles, ListViewText(details_, row, 1))) {
       draw->clrTextBk = style->background;
       draw->clrText = style->text;
       return CDRF_DODEFAULT;
@@ -3094,9 +3092,9 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
       if (tagMenu) {
         AppendMenuW(tagMenu, MF_STRING, kEditTags, L"Управление тегами…");
         AppendMenuW(tagMenu, MF_SEPARATOR, 0, nullptr);
-        const auto& assigned = TagsFor(tags_, *entry);
+        const auto& assigned = TagsFor(catalog_state_.Read().tags, *entry);
         bool hasAvailableTags = false;
-        for (const auto& tag : KnownTags(tags_, tag_styles_)) {
+        for (const auto& tag : KnownTags(catalog_state_.Read().tags, catalog_state_.Read().tag_styles)) {
           if (ContainsTag(assigned, tag)) continue;
           const UINT command = kQuickTag1 + static_cast<UINT>(quick_tags.size());
           quick_tags.push_back(tag);
@@ -3189,7 +3187,7 @@ void MainWindow::DisplaySelected() {
     addRow(FriendlyFieldName(field.key), std::move(value));
   }
   if (entry->IsDatabase()) {
-    const auto& tags = TagsFor(tags_, *entry);
+    const auto& tags = TagsFor(catalog_state_.Read().tags, *entry);
     for (const auto& tag : tags) addRow(L"Тег", tag);
     const auto connect = entry->ValueOr(L"Connect");
     if (!connection::ValueOrEmpty(connect, L"File").empty()) {
@@ -3354,7 +3352,6 @@ void MainWindow::EditSelected() {
   if (selected != edited->name || previousTagId != updatedTagId) {
     try {
       catalog_state_.RenameDatabaseMetadata(selected, edited->name, previousTagId, updatedTagId);
-      tags_ = catalog_state_.Read().tags;
     } catch (const std::exception& error) {
       logger_.Error(L"Ошибка обновления метаданных после переименования: " + ibstart::utf::FromUtf8(error.what()));
       Message(window_, L"База переименована, но её избранное или теги не удалось сохранить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
@@ -3373,13 +3370,13 @@ void MainWindow::EditSelectedTags() {
     Message(window_, L"Выберите информационную базу для изменения тегов.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
     return;
   }
-  const auto edited = EditTagAssignment(window_, TagsFor(tags_, *entry), tags_, tag_styles_);
+  const auto& metadata = catalog_state_.Read();
+  const auto edited = EditTagAssignment(window_, TagsFor(metadata.tags, *entry), metadata.tags, metadata.tag_styles);
   if (!edited) return;
 
   const auto& values = *edited;
   try {
     catalog_state_.SetTags(TagId(*entry), values);
-    tags_ = catalog_state_.Read().tags;
   } catch (const std::exception& error) {
     logger_.Error(L"Ошибка сохранения тегов: " + ibstart::utf::FromUtf8(error.what()));
     Message(window_, L"Не удалось сохранить теги базы.", L"ИБ Старт", MB_OK | MB_ICONERROR);
@@ -3391,13 +3388,11 @@ void MainWindow::EditSelectedTags() {
   SetStatus(values.empty() ? L"Теги базы очищены." : L"Теги базы сохранены: " + TagsText(values));
 }
 void MainWindow::ConfigureTagColors() {
-  const auto updated = EditTagManager(window_, tags_, tag_styles_);
+  const auto& metadata = catalog_state_.Read();
+  const auto updated = EditTagManager(window_, metadata.tags, metadata.tag_styles);
   if (!updated) return;
   try {
     catalog_state_.ReplaceTagConfiguration(updated->tags, updated->styles);
-    const auto& state = catalog_state_.Read();
-    tags_ = state.tags;
-    tag_styles_ = state.tag_styles;
   } catch (const std::exception& error) {
     logger_.Error(L"Ошибка сохранения настроек тегов: " + ibstart::utf::FromUtf8(error.what()));
     Message(window_, L"Не удалось сохранить настройки тегов.", L"ИБ Старт", MB_OK | MB_ICONERROR);
@@ -3418,7 +3413,6 @@ void MainWindow::AddTagToSelected(std::wstring tag) {
       SetStatus(L"У базы уже есть тег «" + tag + L"».");
       return;
     }
-    tags_ = catalog_state_.Read().tags;
   } catch (const std::exception& error) {
     logger_.Error(L"Ошибка добавления тега: " + ibstart::utf::FromUtf8(error.what()));
     Message(window_, L"Не удалось добавить тег базе.", L"ИБ Старт", MB_OK | MB_ICONERROR);
@@ -3427,14 +3421,15 @@ void MainWindow::AddTagToSelected(std::wstring tag) {
   RefreshTagFilter();
   PopulateTree();
   SelectTreeItem(name);
-  SetStatus(L"Тег добавлен: " + TagsText(tags_.at(TagId(*entry))));
+  SetStatus(L"Тег добавлен: " + TagsText(TagsFor(catalog_state_.Read().tags, *entry)));
 }
 void MainWindow::AddNewTagToSelected() {
   const auto entered = InputBox(window_, L"Новый тег", L"Название тега:", L"");
   if (!entered) return;
   const auto requested = TrimText(*entered);
   if (requested.empty()) return;
-  const auto known = KnownTags(tags_, tag_styles_);
+  const auto& metadata = catalog_state_.Read();
+  const auto known = KnownTags(metadata.tags, metadata.tag_styles);
   const auto found = std::find_if(known.begin(), known.end(), [&](const auto& tag) { return EqualNoCase(tag, requested); });
   AddTagToSelected(found == known.end() ? requested : *found);
 }
@@ -3451,7 +3446,7 @@ void MainWindow::DeleteSelected() {
   if (!catalog_->Remove(name)) return;
   if (!tagId.empty()) {
     try {
-      if (catalog_state_.RemoveTags(tagId)) tags_ = catalog_state_.Read().tags;
+      catalog_state_.RemoveTags(tagId);
     } catch (const std::exception& error) {
       logger_.Error(L"Ошибка удаления тегов: " + ibstart::utf::FromUtf8(error.what()));
       Message(window_, L"База удалена из списка, но её теги не удалось удалить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);

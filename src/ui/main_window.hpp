@@ -147,8 +147,6 @@ class MainWindow {
   logging::Logger logger_;
   std::optional<v8i::V8iFileStore> store_;
   std::optional<catalog::Catalog> catalog_;
-  storage::DatabaseTags tags_;
-  storage::TagStyles tag_styles_;
   std::vector<domain::PlatformInstallation> platforms_;
   std::vector<std::wstring> filter_tags_;
   std::vector<std::wstring> filter_favorites_;
