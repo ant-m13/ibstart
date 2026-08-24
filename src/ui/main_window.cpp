@@ -1,6 +1,7 @@
 #include "ui/main_window.hpp"
 #include "ui/dialog_support.hpp"
 #include "ui/folder_picker.hpp"
+#include "ui/input_box.hpp"
 #include "ui/tree_presentation.hpp"
 
 #include "app/instance_activation.hpp"
@@ -41,6 +42,7 @@ namespace ibstart::ui {
 using dialog::CreateUiFont;
 using dialog::DialogControlColor;
 using dialog::DialogOuterSize;
+using dialog::InputBox;
 using dialog::PositionDialogNearOwner;
 using dialog::RestoreModalOwner;
 using dialog::ScaleForDpi;
@@ -55,7 +57,6 @@ using presentation::TagsFor;
 using presentation::TagsText;
 namespace {
 constexpr wchar_t kClassName[] = L"IBStart.MainWindow";
-constexpr wchar_t kInputBoxClass[] = L"IBStart.InputBox";
 constexpr wchar_t kDatabaseEditorClass[] = L"IBStart.DatabaseEditor";
 constexpr wchar_t kAdvancedDatabaseOptionsClass[] = L"IBStart.AdvancedDatabaseOptions";
 constexpr wchar_t kTagManagerClass[] = L"IBStart.TagManager";
@@ -933,61 +934,6 @@ void ApplyDatabaseEditorData(domain::Entry& entry, const DatabaseEditorData& dat
   entry.Set(L"ClientConnectionSpeed", data.client_connection_speed);
   entry.Set(L"AppArch", data.app_arch);
   entry.Set(L"AdditionalParameters", data.additional_parameters);
-}
-
-struct InputState { HWND edit{}; HFONT font{}; HFONT button_font{}; std::optional<std::wstring> result; bool done{false}; };
-LRESULT CALLBACK InputWindowProc(HWND wnd, UINT msg, WPARAM wp, LPARAM lp) {
-  auto* state = reinterpret_cast<InputState*>(GetWindowLongPtrW(wnd, GWLP_USERDATA));
-  if (msg == WM_NCCREATE) { SetWindowLongPtrW(wnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(reinterpret_cast<CREATESTRUCTW*>(lp)->lpCreateParams)); return TRUE; }
-  if (msg == WM_CTLCOLORSTATIC || msg == WM_CTLCOLORBTN) return DialogControlColor(msg, wp, lp);
-  if (msg == WM_COMMAND && state) {
-    if (LOWORD(wp) == IDOK) { const int length = GetWindowTextLengthW(state->edit); std::wstring text(length + 1, L'\0'); GetWindowTextW(state->edit, text.data(), length + 1); text.resize(length); state->result = std::move(text); state->done = true; DestroyWindow(wnd); return 0; }
-    if (LOWORD(wp) == IDCANCEL) { state->done = true; DestroyWindow(wnd); return 0; }
-  }
-  if (msg == WM_CLOSE && state) { state->done = true; DestroyWindow(wnd); return 0; }
-  return DefWindowProcW(wnd, msg, wp, lp);
-}
-
-std::optional<std::wstring> InputBox(HWND owner, std::wstring_view title, std::wstring_view caption, std::wstring_view initial) {
-  InputState state;
-  static ATOM atom = [] {
-    WNDCLASSW klass{}; klass.hInstance = GetModuleHandleW(nullptr); klass.lpszClassName = kInputBoxClass; klass.lpfnWndProc = InputWindowProc;
-    klass.hCursor = LoadCursor(nullptr, IDC_ARROW); klass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1); return RegisterClassW(&klass);
-  }();
-  (void)atom;
-  EnableWindow(owner, FALSE);
-  const UINT dpi = owner ? GetDpiForWindow(owner) : GetDpiForSystem();
-  constexpr DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP;
-  constexpr DWORD extendedStyle = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
-  const SIZE outerSize = DialogOuterSize(owner, 470, 125, style, extendedStyle);
-  HWND dialog = CreateWindowExW(extendedStyle, kInputBoxClass, std::wstring(title).c_str(), style,
-      CW_USEDEFAULT, CW_USEDEFAULT, outerSize.cx, outerSize.cy, owner, nullptr, GetModuleHandleW(nullptr), &state);
-  if (!dialog) {
-    RestoreModalOwner(owner);
-    return std::nullopt;
-  }
-  state.font = CreateUiFont(dialog, 9, FW_NORMAL);
-  state.button_font = CreateUiFont(dialog, 9, FW_NORMAL);
-  const auto px = [dpi](int logical) { return ScaleForDpi(logical, dpi); };
-  const HWND captionControl = CreateWindowW(L"STATIC", std::wstring(caption).c_str(), WS_CHILD | WS_VISIBLE, px(14), px(14), px(430), px(20), dialog, nullptr, nullptr, nullptr);
-  state.edit = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", std::wstring(initial).c_str(), WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, px(14), px(38), px(430), px(24), dialog, nullptr, nullptr, nullptr);
-  const HWND accept = CreateWindowW(L"BUTTON", L"ОК", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON, px(258), px(78), px(96), px(25), dialog, reinterpret_cast<HMENU>(IDOK), nullptr, nullptr);
-  const HWND cancel = CreateWindowW(L"BUTTON", L"Отмена", WS_CHILD | WS_VISIBLE | WS_TABSTOP, px(364), px(78), px(96), px(25), dialog, reinterpret_cast<HMENU>(IDCANCEL), nullptr, nullptr);
-  SetControlFont(captionControl, state.font);
-  SetControlFont(state.edit, state.font);
-  SetControlFont(accept, state.button_font ? state.button_font : state.font);
-  SetControlFont(cancel, state.button_font ? state.button_font : state.font);
-  PositionDialogNearOwner(dialog, owner);
-  ShowWindow(dialog, SW_SHOW); SetFocus(state.edit);
-  MSG message{};
-  int result = 1;
-  while (!state.done && (result = GetMessageW(&message, nullptr, 0, 0)) > 0) { if (!IsDialogMessageW(dialog, &message)) { TranslateMessage(&message); DispatchMessageW(&message); } }
-  if (IsWindow(dialog)) DestroyWindow(dialog);
-  if (result == 0) PostQuitMessage(static_cast<int>(message.wParam));
-  RestoreModalOwner(owner);
-  if (state.font) DeleteObject(state.font);
-  if (state.button_font) DeleteObject(state.button_font);
-  return state.result;
 }
 
 enum TagManagerControl : int {
