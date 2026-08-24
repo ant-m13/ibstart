@@ -1,3 +1,4 @@
+#include "app/instance_activation.hpp"
 #include "core/catalog/catalog.hpp"
 #include "core/cache/cache_service.hpp"
 #include "core/domain/version.hpp"
@@ -175,6 +176,29 @@ void TestCatalogOrderingAndCycles() {
   CHECK(legacyUrl && *legacyUrl == L"https://example.test/base");
   CHECK(!ibstart::catalog::IsBareWebConnection(L"https://example.test/base;Custom=keep"));
   CHECK(!ibstart::catalog::IsBareWebConnection(L"WS=\"https://example.test/base\""));
+}
+
+void TestInstanceActivationPayload() {
+  const wchar_t valid[] = L"database-id";
+  COPYDATASTRUCT data{};
+  data.dwData = ibstart::app::kLaunchCopyData;
+  data.cbData = sizeof(valid);
+  data.lpData = const_cast<wchar_t*>(valid);
+  CHECK(ibstart::app::IsValidLaunchIdLength(sizeof(valid) / sizeof(*valid) - 1));
+  CHECK(ibstart::app::IsValidLaunchCopyData(&data));
+
+  data.dwData = 0;
+  CHECK(!ibstart::app::IsValidLaunchCopyData(&data));
+  data.dwData = ibstart::app::kLaunchCopyData;
+  data.cbData = sizeof(wchar_t) - 1;
+  CHECK(!ibstart::app::IsValidLaunchCopyData(&data));
+  data.cbData = static_cast<DWORD>((ibstart::app::kMaximumLaunchIdLength + 2) * sizeof(wchar_t));
+  CHECK(!ibstart::app::IsValidLaunchCopyData(&data));
+  const wchar_t unterminated[] = {L'x', L'y'};
+  data.cbData = sizeof(unterminated);
+  data.lpData = const_cast<wchar_t*>(unterminated);
+  CHECK(!ibstart::app::IsValidLaunchCopyData(&data));
+  CHECK(!ibstart::app::IsValidLaunchIdLength(ibstart::app::kMaximumLaunchIdLength + 1));
 }
 
 void TestUpdateVersionsAndReleaseResponse() {
@@ -370,6 +394,7 @@ int wmain() {
   run(L"ProductVersion", TestProductVersion);
   run(L"UpdateVersionsAndReleaseResponse", TestUpdateVersionsAndReleaseResponse);
   run(L"UnicodeCaseInsensitiveSearch", TestUnicodeCaseInsensitiveSearch);
+  run(L"InstanceActivationPayload", TestInstanceActivationPayload);
   run(L"CatalogSearch", TestCatalogSearch);
   run(L"NoBomAndCatalog", TestNoBomAndCatalog);
   run(L"SafeStore", TestSafeStore);
