@@ -75,16 +75,5 @@ void EnsureWritable(const StorageLayout& layout);
 void SaveSettings(const StorageLayout& layout, const Settings& settings);
 [[nodiscard]] CatalogState LoadCatalogState(const StorageLayout& layout);
 void SaveCatalogState(const StorageLayout& layout, const CatalogState& state);
-[[nodiscard]] std::vector<domain::HistoryItem> LoadHistory(const StorageLayout& layout);
-void AppendHistory(const StorageLayout& layout, domain::HistoryItem item);
-void ClearHistory(const StorageLayout& layout);
-[[nodiscard]] LastLaunchTimes LoadLastLaunchTimes(const StorageLayout& layout);
-[[nodiscard]] std::vector<std::wstring> LoadFavorites(const StorageLayout& layout);
-void SaveFavorites(const StorageLayout& layout, const std::vector<std::wstring>& favorites);
-[[nodiscard]] DatabaseTags LoadTags(const StorageLayout& layout);
-void SaveTags(const StorageLayout& layout, const DatabaseTags& tags);
-[[nodiscard]] TagStyles LoadTagStyles(const StorageLayout& layout);
-void SaveTagStyles(const StorageLayout& layout, const TagStyles& styles);
-void SaveTagsAndStyles(const StorageLayout& layout, const DatabaseTags& tags, const TagStyles& styles);
 
 }  // namespace ibstart::storage

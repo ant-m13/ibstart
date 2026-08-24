@@ -550,27 +550,4 @@ void CatalogStateRepository::ClearHistory() {
   Update([](CatalogState& state) { state.history.clear(); });
 }
 
-std::vector<domain::HistoryItem> LoadHistory(const StorageLayout& layout) { return LoadCatalogState(layout).history; }
-
-void AppendHistory(const StorageLayout& layout, domain::HistoryItem item) {
-  auto state = LoadCatalogState(layout);
-  AppendHistoryToState(state, std::move(item));
-  SaveCatalogState(layout, state);
-}
-
-void ClearHistory(const StorageLayout& layout) { auto state = LoadCatalogState(layout); state.history.clear(); SaveCatalogState(layout, state); }
-LastLaunchTimes LoadLastLaunchTimes(const StorageLayout& layout) { return LoadCatalogState(layout).last_launches; }
-std::vector<std::wstring> LoadFavorites(const StorageLayout& layout) { return LoadCatalogState(layout).favorites; }
-void SaveFavorites(const StorageLayout& layout, const std::vector<std::wstring>& favorites) { auto state = LoadCatalogState(layout); state.favorites = favorites; SaveCatalogState(layout, state); }
-DatabaseTags LoadTags(const StorageLayout& layout) { return LoadCatalogState(layout).tags; }
-void SaveTags(const StorageLayout& layout, const DatabaseTags& tags) { auto state = LoadCatalogState(layout); state.tags = tags; SaveCatalogState(layout, state); }
-TagStyles LoadTagStyles(const StorageLayout& layout) { return LoadCatalogState(layout).tag_styles; }
-void SaveTagStyles(const StorageLayout& layout, const TagStyles& styles) { auto state = LoadCatalogState(layout); state.tag_styles = styles; SaveCatalogState(layout, state); }
-void SaveTagsAndStyles(const StorageLayout& layout, const DatabaseTags& tags, const TagStyles& styles) {
-  auto state = LoadCatalogState(layout);
-  state.tags = tags;
-  state.tag_styles = styles;
-  SaveCatalogState(layout, state);
-}
-
 }  // namespace ibstart::storage
