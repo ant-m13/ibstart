@@ -89,8 +89,8 @@ void DrawSortIcon(HDC context, const OwnerDrawMenuItem& item, int icon_x, int ic
 }
 
 void DrawCheckMark(HDC context, const OwnerDrawMenuItem& item, int icon_x, int icon_y, bool selected) {
-  const bool tag_icon = item.icon_kind == OwnerDrawMenuIcon::tag;
-  if (tag_icon) {
+  const bool badge = item.checked_badge || item.icon_kind == OwnerDrawMenuIcon::tag;
+  if (badge) {
     const COLORREF border = selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : RGB(0, 103, 117);
     const HBRUSH badge_brush = CreateSolidBrush(RGB(255, 255, 255));
     const HPEN badge_pen = CreatePen(PS_SOLID, 1, border);
@@ -102,11 +102,11 @@ void DrawCheckMark(HDC context, const OwnerDrawMenuItem& item, int icon_x, int i
     DeleteObject(badge_brush);
     DeleteObject(badge_pen);
   }
-  const COLORREF color = tag_icon ? RGB(0, 103, 117) : selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : RGB(0, 103, 117);
+  const COLORREF color = badge ? RGB(0, 103, 117) : selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : RGB(0, 103, 117);
   const HPEN pen = CreatePen(PS_SOLID, 2, color);
   const auto previous_pen = SelectObject(context, pen);
   POINT check[] = {{icon_x + 4, icon_y + 11}, {icon_x + 8, icon_y + 15}, {icon_x + 17, icon_y + 6}};
-  if (tag_icon) {
+  if (badge) {
     check[0] = {icon_x + 13, icon_y + 15};
     check[1] = {icon_x + 16, icon_y + 18};
     check[2] = {icon_x + 20, icon_y + 13};
@@ -121,8 +121,9 @@ void DrawCheckMark(HDC context, const OwnerDrawMenuItem& item, int icon_x, int i
 OwnerDrawMenuItems::~OwnerDrawMenuItems() { Clear(); }
 
 OwnerDrawMenuItem& OwnerDrawMenuItems::Append(HMENU menu, UINT command, HICON icon, std::wstring text, std::wstring shortcut,
-    OwnerDrawMenuIcon icon_kind, bool enabled, bool checked, HMENU submenu) {
-  auto visual = std::make_unique<OwnerDrawMenuItem>(OwnerDrawMenuItem{command, icon, std::move(text), std::move(shortcut), icon_kind, submenu != nullptr});
+    OwnerDrawMenuIcon icon_kind, bool enabled, bool checked, HMENU submenu, bool checked_badge) {
+  auto visual = std::make_unique<OwnerDrawMenuItem>(OwnerDrawMenuItem{
+      command, icon, std::move(text), std::move(shortcut), icon_kind, submenu != nullptr, checked_badge});
   const auto* item_data = visual.get();
   items_.push_back(std::move(visual));
   MENUITEMINFOW item{};

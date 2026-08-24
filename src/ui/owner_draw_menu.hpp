@@ -25,6 +25,8 @@ struct OwnerDrawMenuItem {
   std::wstring shortcut;
   OwnerDrawMenuIcon icon_kind{OwnerDrawMenuIcon::standard};
   bool has_submenu{};
+  // Places the check in a small badge so it does not obscure the item icon.
+  bool checked_badge{};
 };
 
 // Keeps item-data pointers stable while a native menu is displayed and owns
@@ -37,7 +39,7 @@ class OwnerDrawMenuItems {
   ~OwnerDrawMenuItems();
 
   OwnerDrawMenuItem& Append(HMENU menu, UINT command, HICON icon, std::wstring text, std::wstring shortcut,
-      OwnerDrawMenuIcon icon_kind, bool enabled, bool checked, HMENU submenu = nullptr);
+      OwnerDrawMenuIcon icon_kind, bool enabled, bool checked, HMENU submenu = nullptr, bool checked_badge = false);
   [[nodiscard]] const OwnerDrawMenuItem* Find(ULONG_PTR item_data) const noexcept;
   void Clear() noexcept;
 
