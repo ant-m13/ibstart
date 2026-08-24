@@ -1,5 +1,6 @@
 #include "ui/main_window.hpp"
 #include "ui/dialog_support.hpp"
+#include "ui/folder_picker.hpp"
 #include "ui/tree_presentation.hpp"
 
 #include "app/instance_activation.hpp"
@@ -59,7 +60,6 @@ constexpr wchar_t kDatabaseEditorClass[] = L"IBStart.DatabaseEditor";
 constexpr wchar_t kAdvancedDatabaseOptionsClass[] = L"IBStart.AdvancedDatabaseOptions";
 constexpr wchar_t kTagManagerClass[] = L"IBStart.TagManager";
 constexpr wchar_t kTagAssignmentClass[] = L"IBStart.TagAssignment";
-constexpr wchar_t kFolderPickerClass[] = L"IBStart.FolderPicker";
 constexpr UINT kActivateMessage = WM_APP + 23;
 constexpr UINT kUpdateCheckFinishedMessage = WM_APP + 24;
 constexpr UINT kFocusShortcutSelectionMessage = WM_APP + 25;
@@ -1465,134 +1465,6 @@ std::optional<std::vector<std::wstring>> EditTagAssignment(HWND owner, const std
   PositionDialogNearOwner(dialog, owner);
   ShowWindow(dialog, SW_SHOW);
   SetFocus(state.list);
-  MSG message{};
-  int result = 1;
-  while (!state.done && (result = GetMessageW(&message, nullptr, 0, 0)) > 0) {
-    if (!IsDialogMessageW(dialog, &message)) { TranslateMessage(&message); DispatchMessageW(&message); }
-  }
-  if (IsWindow(dialog)) DestroyWindow(dialog);
-  if (result == 0) PostQuitMessage(static_cast<int>(message.wParam));
-  RestoreModalOwner(owner);
-  if (state.font) DeleteObject(state.font);
-  if (state.button_font) DeleteObject(state.button_font);
-  return state.result;
-}
-
-enum FolderPickerControl : int { kFolderPickerTree = 1800 };
-
-struct FolderPickerState {
-  HWND tree{};
-  HFONT font{};
-  HFONT button_font{};
-  std::vector<std::wstring> folders;
-  std::optional<std::wstring> result;
-  bool done{false};
-};
-
-HTREEITEM AddFolderPickerItem(FolderPickerState& state, const catalog::TreeItem& source, HTREEITEM parent, std::wstring_view selected) {
-  if (source.database) return nullptr;
-  const size_t index = state.folders.size();
-  state.folders.push_back(source.name);
-  TVINSERTSTRUCTW insert{};
-  insert.hParent = parent;
-  insert.hInsertAfter = TVI_LAST;
-  insert.item.mask = TVIF_TEXT | TVIF_PARAM;
-  insert.item.pszText = const_cast<wchar_t*>(source.name.c_str());
-  insert.item.lParam = static_cast<LPARAM>(index);
-  const HTREEITEM node = TreeView_InsertItem(state.tree, &insert);
-  for (const auto& child : source.children) AddFolderPickerItem(state, child, node, selected);
-  TreeView_Expand(state.tree, node, TVE_EXPAND);
-  if (EqualNoCase(source.name, selected)) TreeView_SelectItem(state.tree, node);
-  return node;
-}
-
-LRESULT CALLBACK FolderPickerProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam) {
-  auto* state = reinterpret_cast<FolderPickerState*>(GetWindowLongPtrW(wnd, GWLP_USERDATA));
-  if (message == WM_NCCREATE) {
-    SetWindowLongPtrW(wnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(reinterpret_cast<CREATESTRUCTW*>(lparam)->lpCreateParams));
-    return TRUE;
-  }
-  if (message == WM_CTLCOLORSTATIC || message == WM_CTLCOLORBTN) return DialogControlColor(message, wparam, lparam);
-  if (message == WM_COMMAND && state) {
-    if (LOWORD(wparam) == IDOK) {
-      const HTREEITEM selected = TreeView_GetSelection(state->tree);
-      TVITEMW item{};
-      item.mask = TVIF_PARAM;
-      item.hItem = selected;
-      if (selected && TreeView_GetItem(state->tree, &item) && item.lParam >= 0 && static_cast<size_t>(item.lParam) < state->folders.size()) {
-        state->result = state->folders[static_cast<size_t>(item.lParam)];
-      }
-      state->done = true;
-      DestroyWindow(wnd);
-      return 0;
-    }
-    if (LOWORD(wparam) == IDCANCEL) {
-      state->done = true;
-      DestroyWindow(wnd);
-      return 0;
-    }
-  }
-  if (message == WM_CLOSE && state) {
-    state->done = true;
-    DestroyWindow(wnd);
-    return 0;
-  }
-  return DefWindowProcW(wnd, message, wparam, lparam);
-}
-
-std::optional<std::wstring> SelectCatalogFolder(HWND owner, const std::vector<catalog::TreeItem>& items, std::wstring_view initial) {
-  FolderPickerState state;
-  static ATOM atom = [] {
-    WNDCLASSW klass{};
-    klass.hInstance = GetModuleHandleW(nullptr);
-    klass.lpszClassName = kFolderPickerClass;
-    klass.lpfnWndProc = FolderPickerProc;
-    klass.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    klass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-    return RegisterClassW(&klass);
-  }();
-  (void)atom;
-  if (owner) EnableWindow(owner, FALSE);
-  const UINT dpi = owner ? GetDpiForWindow(owner) : GetDpiForSystem();
-  constexpr DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP;
-  constexpr DWORD extendedStyle = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
-  const SIZE outerSize = DialogOuterSize(owner, 460, 400, style, extendedStyle);
-  HWND dialog = CreateWindowExW(extendedStyle, kFolderPickerClass, L"Переместить в папку", style,
-      CW_USEDEFAULT, CW_USEDEFAULT, outerSize.cx, outerSize.cy, owner, nullptr, GetModuleHandleW(nullptr), &state);
-  if (!dialog) {
-    RestoreModalOwner(owner);
-    return std::nullopt;
-  }
-  state.font = CreateUiFont(dialog, 9, FW_NORMAL);
-  state.button_font = CreateUiFont(dialog, 9, FW_NORMAL);
-  const auto px = [dpi](int logical) { return ScaleForDpi(logical, dpi); };
-  const HWND caption = CreateWindowW(L"STATIC", L"Выберите папку, в которую нужно переместить базу:", WS_CHILD | WS_VISIBLE,
-      px(10), px(10), px(440), px(18), dialog, nullptr, nullptr, nullptr);
-  state.tree = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS,
-      px(10), px(32), px(440), px(315), dialog, reinterpret_cast<HMENU>(kFolderPickerTree), nullptr, nullptr);
-  const HWND accept = CreateWindowW(L"BUTTON", L"Переместить", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-      px(224), px(360), px(120), px(28), dialog, reinterpret_cast<HMENU>(IDOK), nullptr, nullptr);
-  const HWND cancel = CreateWindowW(L"BUTTON", L"Отмена", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-      px(354), px(360), px(96), px(28), dialog, reinterpret_cast<HMENU>(IDCANCEL), nullptr, nullptr);
-  SetControlFont(caption, state.font);
-  SetControlFont(state.tree, state.font);
-  SetControlFont(accept, state.button_font ? state.button_font : state.font);
-  SetControlFont(cancel, state.button_font ? state.button_font : state.font);
-  state.folders.push_back(L"");
-  std::wstring rootLabel = L"Корневой уровень";
-  TVINSERTSTRUCTW root{};
-  root.hParent = TVI_ROOT;
-  root.hInsertAfter = TVI_LAST;
-  root.item.mask = TVIF_TEXT | TVIF_PARAM;
-  root.item.pszText = rootLabel.data();
-  root.item.lParam = 0;
-  const HTREEITEM rootItem = TreeView_InsertItem(state.tree, &root);
-  if (initial.empty()) TreeView_SelectItem(state.tree, rootItem);
-  for (const auto& item : items) AddFolderPickerItem(state, item, rootItem, initial);
-  TreeView_Expand(state.tree, rootItem, TVE_EXPAND);
-  PositionDialogNearOwner(dialog, owner);
-  ShowWindow(dialog, SW_SHOW);
-  SetFocus(state.tree);
   MSG message{};
   int result = 1;
   while (!state.done && (result = GetMessageW(&message, nullptr, 0, 0)) > 0) {
@@ -3041,7 +2913,7 @@ void MainWindow::MoveSelectedToFolder() {
     return;
   }
   const auto current = catalog_->ParentOf(entry->name);
-  const auto target = SelectCatalogFolder(window_, catalog_->Tree(), current);
+  const auto target = dialog::SelectCatalogFolder(window_, catalog_->Tree(), current);
   if (!target) return;
   if (EqualNoCase(*target, current)) {
     SetStatus(L"База уже находится в выбранной папке.");

@@ -67,6 +67,7 @@ target_link_libraries(ibstart_core PUBLIC Advapi32 Shell32 Ole32 Winhttp)
 add_executable(IBStart WIN32
   src/app/main.cpp
   src/ui/dialog_support.cpp
+  src/ui/folder_picker.cpp
   src/ui/main_window.cpp
   src/ui/owner_draw_menu.cpp
   src/ui/tree_presentation.cpp
