@@ -46,6 +46,29 @@ std::filesystem::path UniqueTemporaryPath(const std::filesystem::path& target) {
   throw std::runtime_error("Unable to allocate a temporary file alongside ibases.v8i: " + PathText(target));
 }
 
+class SaveLock final {
+ public:
+  explicit SaveLock(const std::filesystem::path& path) {
+    // Do not share write or delete access: a concurrent atomic replacement
+    // needs delete access to the target and is rejected during the save.
+    handle_ = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+    if (handle_ == INVALID_HANDLE_VALUE) {
+      const DWORD error = GetLastError();
+      handle_ = nullptr;
+      throw std::runtime_error("Cannot lock ibases.v8i for saving: " + PathText(path) + ": " +
+          utf::ToUtf8(utf::LastErrorMessage(error)));
+    }
+  }
+
+  ~SaveLock() { if (handle_) CloseHandle(handle_); }
+
+  SaveLock(const SaveLock&) = delete;
+  SaveLock& operator=(const SaveLock&) = delete;
+
+ private:
+  HANDLE handle_{};
+};
+
 }  // namespace
 
 V8iFileStore::V8iFileStore(std::filesystem::path path) : path_(std::move(path)) {}
@@ -170,14 +193,25 @@ void V8iFileStore::Save(const V8iDocument& document) {
       output.flush();
       if (!output) throw std::runtime_error("Cannot write temporary ibases.v8i file.");
     }
-    if (FingerprintOf(path_) != loaded_fingerprint_) {
-      throw ExternalModificationError("ibases.v8i was changed by another program. Reload it before saving.");
-    }
-    CreateBackup();
-    // A backup may take long enough for another process to update the
-    // catalog.  Keep this final comparison directly next to the replacement.
-    if (FingerprintOf(path_) != loaded_fingerprint_) {
-      throw ExternalModificationError("ibases.v8i was changed by another program. Reload it before saving.");
+    if (loaded_fingerprint_) {
+      {
+        SaveLock lock(path_);
+        if (FingerprintOf(path_) != loaded_fingerprint_) {
+          throw ExternalModificationError("ibases.v8i was changed by another program. Reload it before saving.");
+        }
+        CreateBackup();
+        if (FingerprintOf(path_) != loaded_fingerprint_) {
+          throw ExternalModificationError("ibases.v8i was changed by another program. Reload it before saving.");
+        }
+      }  // MoveFileExW requires the target handle to be closed before replacement.
+    } else {
+      if (FingerprintOf(path_) != loaded_fingerprint_) {
+        throw ExternalModificationError("ibases.v8i was changed by another program. Reload it before saving.");
+      }
+      CreateBackup();
+      if (FingerprintOf(path_) != loaded_fingerprint_) {
+        throw ExternalModificationError("ibases.v8i was changed by another program. Reload it before saving.");
+      }
     }
     const DWORD replace_flags = MOVEFILE_WRITE_THROUGH | (loaded_fingerprint_ ? MOVEFILE_REPLACE_EXISTING : 0);
     if (!MoveFileExW(temporary.c_str(), path_.c_str(), replace_flags)) {
