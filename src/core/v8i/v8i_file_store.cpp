@@ -46,27 +46,6 @@ std::filesystem::path UniqueTemporaryPath(const std::filesystem::path& target) {
   throw std::runtime_error("Unable to allocate a temporary file alongside ibases.v8i: " + PathText(target));
 }
 
-class SaveLock final {
- public:
-  SaveLock(const std::filesystem::path& path, DWORD creation, DWORD sharing, std::string_view action) {
-    handle_ = CreateFileW(path.c_str(), GENERIC_READ, sharing, nullptr, creation, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (handle_ == INVALID_HANDLE_VALUE) {
-      const DWORD error = GetLastError();
-      handle_ = nullptr;
-      throw std::runtime_error("Cannot " + std::string(action) + " ibases.v8i for saving: " + PathText(path) + ": " +
-          utf::ToUtf8(utf::LastErrorMessage(error)));
-    }
-  }
-
-  ~SaveLock() { if (handle_) CloseHandle(handle_); }
-
-  SaveLock(const SaveLock&) = delete;
-  SaveLock& operator=(const SaveLock&) = delete;
-
- private:
-  HANDLE handle_{};
-};
-
 }  // namespace
 
 V8iFileStore::V8iFileStore(std::filesystem::path path) : path_(std::move(path)) {}
@@ -182,7 +161,6 @@ void V8iFileStore::Save(const V8iDocument& document) {
   if (error) throw std::runtime_error("Cannot create ibases.v8i directory: " + error.message());
 
   const auto temporary = UniqueTemporaryPath(path_);
-  bool reserved_new_file = false;
   try {
     const auto contents = document.SerializeUtf8();
     {
@@ -192,36 +170,20 @@ void V8iFileStore::Save(const V8iDocument& document) {
       output.flush();
       if (!output) throw std::runtime_error("Cannot write temporary ibases.v8i file.");
     }
-    if (loaded_fingerprint_) {
-      // The lock denies new writers while the final comparison, backup, and
-      // replacement run.  Holding it while the user edits the catalog would
-      // block 1C for too long, so it is deliberately limited to save time.
-      SaveLock lock(path_, OPEN_EXISTING, FILE_SHARE_READ | FILE_SHARE_DELETE, "lock");
-      if (FingerprintOf(path_) != loaded_fingerprint_) {
-        throw ExternalModificationError("ibases.v8i was changed by another program. Reload it before saving.");
-      }
-      CreateBackup();
-      if (!MoveFileExW(temporary.c_str(), path_.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-        throw std::runtime_error("Cannot replace ibases.v8i atomically: " + utf::ToUtf8(utf::LastErrorMessage()));
-      }
-    } else {
-      {
-        // CREATE_NEW atomically claims a previously absent target.  It closes
-        // the analogous race where another process creates ibases.v8i after
-        // the initial fingerprint comparison.
-        SaveLock lock(path_, CREATE_NEW, FILE_SHARE_DELETE, "reserve");
-        reserved_new_file = true;
-        if (!MoveFileExW(temporary.c_str(), path_.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-          throw std::runtime_error("Cannot replace ibases.v8i atomically: " + utf::ToUtf8(utf::LastErrorMessage()));
-        }
-      }
-      reserved_new_file = false;
+    if (FingerprintOf(path_) != loaded_fingerprint_) {
+      throw ExternalModificationError("ibases.v8i was changed by another program. Reload it before saving.");
+    }
+    CreateBackup();
+    // A backup may take long enough for another process to update the
+    // catalog.  Keep this final comparison directly next to the replacement.
+    if (FingerprintOf(path_) != loaded_fingerprint_) {
+      throw ExternalModificationError("ibases.v8i was changed by another program. Reload it before saving.");
+    }
+    const DWORD replace_flags = MOVEFILE_WRITE_THROUGH | (loaded_fingerprint_ ? MOVEFILE_REPLACE_EXISTING : 0);
+    if (!MoveFileExW(temporary.c_str(), path_.c_str(), replace_flags)) {
+      throw std::runtime_error("Cannot replace ibases.v8i atomically: " + utf::ToUtf8(utf::LastErrorMessage()));
     }
   } catch (...) {
-    if (reserved_new_file) {
-      std::filesystem::remove(path_, error);
-      if (error) AddMaintenanceWarning(FilesystemFailure("Cannot remove reserved ibases.v8i file", path_, error));
-    }
     std::filesystem::remove(temporary, error);
     if (error) AddMaintenanceWarning(FilesystemFailure("Cannot remove temporary ibases.v8i file", temporary, error));
     throw;

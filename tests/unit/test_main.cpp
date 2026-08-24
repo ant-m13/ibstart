@@ -447,7 +447,7 @@ void TestV8iSaveRejectsActiveWriter() {
   document.Find(L"Base")->entry.Set(L"Locale", L"ru_RU");
 
   const HANDLE writer = CreateFileW(file.c_str(), GENERIC_WRITE,
-      FILE_SHARE_READ | FILE_SHARE_WRITE | FILE_SHARE_DELETE, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+      FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
   CHECK(writer != INVALID_HANDLE_VALUE);
   bool rejected = false;
   if (writer != INVALID_HANDLE_VALUE) {
