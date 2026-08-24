@@ -2785,7 +2785,6 @@ void MainWindow::UpdateTreeDrag(POINT windowPoint) {
   if (dragging_name_.empty() || !catalog_ || !tree_) return;
   POINT treePoint = windowPoint;
   MapWindowPoints(window_, tree_, &treePoint, 1);
-  if (drag_image_) ImageList_DragMove(treePoint.x, treePoint.y);
 
   const auto* dragged = catalog_->Find(dragging_name_);
   std::wstring targetName;
@@ -2833,8 +2832,16 @@ void MainWindow::UpdateTreeDrag(POINT windowPoint) {
   }
 
   const HTREEITEM dropTarget = (targetIsGroup || (toRoot && targetItem)) ? targetItem : nullptr;
+  // A drag image saves the pixels underneath itself.  Hide it before changing
+  // the tree's drop feedback, otherwise its later restore can put those stale
+  // pixels back over the freshly painted selection or insert mark.
+  if (drag_image_) {
+    ImageList_DragMove(treePoint.x, treePoint.y);
+    ImageList_DragShowNolock(FALSE);
+  }
   TreeView_SelectDropTarget(tree_, dropTarget);
   TreeView_SetInsertMark(tree_, !targetName.empty() && !targetIsGroup ? targetItem : nullptr, insertAfter);
+  if (drag_image_) ImageList_DragShowNolock(TRUE);
   drag_target_name_ = std::move(targetName);
   drag_insert_after_ = insertAfter;
   drag_to_root_ = toRoot;
@@ -2879,15 +2886,18 @@ void MainWindow::EndTreeDrag(POINT windowPoint) {
   SetStatus(targetParent.empty() ? L"Элемент перемещён в корень списка." : L"Элемент перемещён: " + draggedName);
 }
 void MainWindow::CancelTreeDrag() {
-  if (tree_ && IsWindow(tree_)) {
-    TreeView_SelectDropTarget(tree_, nullptr);
-    TreeView_SetInsertMark(tree_, nullptr, FALSE);
-  }
   if (drag_image_) {
     if (tree_ && IsWindow(tree_)) ImageList_DragLeave(tree_);
     ImageList_EndDrag();
     ImageList_Destroy(drag_image_);
     drag_image_ = nullptr;
+  }
+  if (tree_ && IsWindow(tree_)) {
+    TreeView_SelectDropTarget(tree_, nullptr);
+    TreeView_SetInsertMark(tree_, nullptr, FALSE);
+    // Repaint once after the drag image has restored its saved background.
+    // This also clears any residue left by a previous native drag repaint.
+    RedrawWindow(tree_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_UPDATENOW);
   }
   dragging_name_.clear();
   drag_target_name_.clear();
