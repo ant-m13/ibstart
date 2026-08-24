@@ -27,12 +27,16 @@
 
 namespace {
 int failures = 0;
-#define CHECK(condition) do { if (!(condition)) { std::wcerr << L"FAILED " << __FUNCTION__ << L":" << __LINE__ << L"\n"; ++failures; } } while (false)
+#define CHECK(...) do { if (!(__VA_ARGS__)) { std::wcerr << L"FAILED " << __FUNCTION__ << L":" << __LINE__ << L"\n"; ++failures; } } while (false)
 
 std::string ReadBytes(const std::filesystem::path& path) { std::ifstream input(path, std::ios::binary); return {std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()}; }
 void WriteBytes(const std::filesystem::path& path, std::string_view text) { std::ofstream output(path, std::ios::binary | std::ios::trunc); output.write(text.data(), static_cast<std::streamsize>(text.size())); }
 std::filesystem::path Fixture(const wchar_t* name) { return std::filesystem::current_path() / L"tests" / L"fixtures" / name; }
 std::filesystem::path Temp(const wchar_t* suffix) { auto path = std::filesystem::temp_directory_path() / (std::wstring(L"ibstart-tests-") + suffix + L"-" + std::to_wstring(GetCurrentProcessId())); std::error_code error; std::filesystem::remove_all(path, error); std::filesystem::create_directories(path); return path; }
+
+void TestCheckMacroAcceptsCommaExpressions() {
+  CHECK(std::vector<int>{1, 2, 3} == std::vector<int>{1, 2, 3});
+}
 
 void TestV8iRoundTrip() {
   const auto bytes = ReadBytes(Fixture(L"nested-unicode.v8i"));
@@ -589,6 +593,7 @@ int wmain() {
     catch (...) { std::wcerr << L"UNCAUGHT unknown exception\n"; ++failures; }
   };
   run(L"V8iRoundTrip", TestV8iRoundTrip);
+  run(L"CheckMacroAcceptsCommaExpressions", TestCheckMacroAcceptsCommaExpressions);
   run(L"DemoCatalogFixture", TestDemoCatalogFixture);
   run(L"ProductVersion", TestProductVersion);
   run(L"UpdateVersionsAndReleaseResponse", TestUpdateVersionsAndReleaseResponse);
