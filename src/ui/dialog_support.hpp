@@ -10,6 +10,8 @@ namespace ibstart::ui::dialog {
 void SetControlFont(HWND control, HFONT font);
 void PositionDialogNearOwner(HWND dialog, HWND owner);
 [[nodiscard]] LRESULT DialogControlColor(UINT message, WPARAM wparam, LPARAM lparam);
+void DisableModalOwner(HWND owner);
+void CloseModalDialog(HWND dialog, HWND owner);
 void RestoreModalOwner(HWND owner);
 
 }  // namespace ibstart::ui::dialog

@@ -40,8 +40,10 @@
 
 namespace ibstart::ui {
 using dialog::CreateUiFont;
+using dialog::CloseModalDialog;
 using dialog::DialogControlColor;
 using dialog::DialogOuterSize;
+using dialog::DisableModalOwner;
 using dialog::InputBox;
 using dialog::PositionDialogNearOwner;
 using dialog::RestoreModalOwner;
@@ -695,12 +697,11 @@ LRESULT CALLBACK AdvancedDatabaseOptionsProc(HWND wnd, UINT message, WPARAM wpar
     if (command == IDOK) {
       if (const auto error = CollectAdvancedDatabaseOptions(*state)) { Message(wnd, *error, L"Проверка данных", MB_OK | MB_ICONWARNING); return 0; }
       state->done = true;
-      DestroyWindow(wnd);
       return 0;
     }
-    if (command == IDCANCEL) { state->done = true; DestroyWindow(wnd); return 0; }
+    if (command == IDCANCEL) { state->done = true; return 0; }
   }
-  if (message == WM_CLOSE && state) { state->done = true; DestroyWindow(wnd); return 0; }
+  if (message == WM_CLOSE && state) { state->done = true; return 0; }
   return DefWindowProcW(wnd, message, wparam, lparam);
 }
 std::optional<DatabaseEditorData> EditAdvancedDatabaseOptions(HWND owner, DatabaseEditorData initial) {
@@ -716,30 +717,26 @@ std::optional<DatabaseEditorData> EditAdvancedDatabaseOptions(HWND owner, Databa
     return RegisterClassW(&klass);
   }();
   (void)atom;
-  if (owner) EnableWindow(owner, FALSE);
   constexpr DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP;
   constexpr DWORD extendedStyle = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
   const SIZE outerSize = DialogOuterSize(owner, 660, 510, style, extendedStyle);
   HWND dialog = CreateWindowExW(extendedStyle, kAdvancedDatabaseOptionsClass, L"Дополнительные настройки базы", style,
       CW_USEDEFAULT, CW_USEDEFAULT, outerSize.cx, outerSize.cy, owner, nullptr, GetModuleHandleW(nullptr), &state);
-  if (!dialog) {
-    RestoreModalOwner(owner);
-    return std::nullopt;
-  }
+  if (!dialog) return std::nullopt;
   state.font = CreateUiFont(dialog, 9, FW_NORMAL);
   state.button_font = CreateUiFont(dialog, 9, FW_NORMAL);
   CreateAdvancedDatabaseOptionsControls(dialog, state);
   PositionDialogNearOwner(dialog, owner);
   ShowWindow(dialog, SW_SHOW);
+  DisableModalOwner(owner);
   SetFocus(state.default_app);
   MSG message{};
   int pumpResult = 1;
   while (!state.done && (pumpResult = GetMessageW(&message, nullptr, 0, 0)) > 0) {
     if (!IsDialogMessageW(dialog, &message)) { TranslateMessage(&message); DispatchMessageW(&message); }
   }
-  if (IsWindow(dialog)) DestroyWindow(dialog);
+  CloseModalDialog(dialog, owner);
   if (pumpResult == 0) PostQuitMessage(static_cast<int>(message.wParam));
-  RestoreModalOwner(owner);
   if (state.font) DeleteObject(state.font);
   if (state.button_font) DeleteObject(state.button_font);
   return state.result;
@@ -848,12 +845,11 @@ LRESULT CALLBACK DatabaseEditorProc(HWND wnd, UINT message, WPARAM wparam, LPARA
     if (command == IDOK) {
       if (const auto error = CollectDatabaseEditorResult(*state)) { Message(wnd, *error, L"Проверка данных", MB_OK | MB_ICONWARNING); return 0; }
       state->done = true;
-      DestroyWindow(wnd);
       return 0;
     }
-    if (command == IDCANCEL) { state->done = true; DestroyWindow(wnd); return 0; }
+    if (command == IDCANCEL) { state->done = true; return 0; }
   }
-  if (message == WM_CLOSE && state) { state->done = true; DestroyWindow(wnd); return 0; }
+  if (message == WM_CLOSE && state) { state->done = true; return 0; }
   return DefWindowProcW(wnd, message, wparam, lparam);
 }
 std::optional<DatabaseEditorData> EditDatabase(HWND owner, std::wstring_view title, DatabaseEditorData initial,
@@ -870,31 +866,27 @@ std::optional<DatabaseEditorData> EditDatabase(HWND owner, std::wstring_view tit
     return RegisterClassW(&klass);
   }();
   (void)atom;
-  if (owner) EnableWindow(owner, FALSE);
   constexpr DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP;
   constexpr DWORD extendedStyle = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
   const SIZE outerSize = DialogOuterSize(owner, 660, 570, style, extendedStyle);
   HWND dialog = CreateWindowExW(WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT, kDatabaseEditorClass, std::wstring(title).c_str(),
       style, CW_USEDEFAULT, CW_USEDEFAULT, outerSize.cx, outerSize.cy,
       owner, nullptr, GetModuleHandleW(nullptr), &state);
-  if (!dialog) {
-    RestoreModalOwner(owner);
-    return std::nullopt;
-  }
+  if (!dialog) return std::nullopt;
   state.font = CreateUiFont(dialog, 9, FW_NORMAL);
   state.button_font = CreateUiFont(dialog, 9, FW_NORMAL);
   CreateDatabaseEditorControls(dialog, state, platforms);
   PositionDialogNearOwner(dialog, owner);
   ShowWindow(dialog, SW_SHOW);
+  DisableModalOwner(owner);
   SetFocus(state.name);
   MSG message{};
   int pumpResult = 1;
   while (!state.done && (pumpResult = GetMessageW(&message, nullptr, 0, 0)) > 0) {
     if (!IsDialogMessageW(dialog, &message)) { TranslateMessage(&message); DispatchMessageW(&message); }
   }
-  if (IsWindow(dialog)) DestroyWindow(dialog);
+  CloseModalDialog(dialog, owner);
   if (pumpResult == 0) PostQuitMessage(static_cast<int>(message.wParam));
-  RestoreModalOwner(owner);
   if (state.font) DeleteObject(state.font);
   if (state.button_font) DeleteObject(state.button_font);
   return state.result;
