@@ -16,6 +16,8 @@ struct TreeItem {
   std::vector<TreeItem> children;
 };
 
+enum class SortDirection { ascending, descending };
+
 // A direct http(s) URL is a legacy but supported form of Connect.  It has no
 // connection key such as WS= and must not be preserved as an unknown field
 // when an editor rewrites it into the keyed form.
@@ -43,6 +45,10 @@ class Catalog {
   bool Remove(std::wstring_view name);
   bool Move(std::wstring_view name, std::wstring parent, size_t position);
   bool MoveBy(std::wstring_view name, int offset);
+  // Sorts direct children of parent and records the resulting portable order
+  // in both OrderInList and OrderInTree.  Folders can optionally form a
+  // leading group while their own names still follow the requested direction.
+  bool SortChildrenByName(std::wstring_view parent, SortDirection direction, bool folders_first);
   // Replaces the saved order of every direct child of parent.  The caller must
   // supply each child exactly once; this prevents a partial reorder from
   // silently changing the placement of entries that are not currently shown.
