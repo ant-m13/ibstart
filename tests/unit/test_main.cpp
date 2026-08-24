@@ -427,6 +427,47 @@ void TestPortableMode() {
   CHECK(!std::filesystem::exists(layout.root / L"tag-styles.json")); CHECK(!std::filesystem::exists(layout.root / L"sorting.json"));
   std::error_code error; std::filesystem::remove_all(directory, error);
 }
+
+void TestStorageSkipsMalformedRecords() {
+  const auto directory = Temp(L"malformed-storage");
+  const ibstart::storage::StorageLayout layout{directory, true};
+  ibstart::storage::EnsureWritable(layout);
+
+  WriteBytes(layout.root / L"settings.json", R"({
+    "active_ibases": "C:\\valid.v8i",
+    "selected_entry": "Valid database",
+    "simple_mode": 1,
+    "recent_lists": [{"recent_list": "bad\q"}, {"recent_list": "C:\\recent.v8i"}],
+    "platform_paths": [{"platform_path": "C:\\platform"}]
+  })");
+  const auto settings = ibstart::storage::LoadSettings(layout);
+  CHECK(settings.active_ibases == L"C:\\valid.v8i");
+  CHECK(settings.selected_entry == L"Valid database");
+  CHECK(settings.simple_mode);
+  CHECK(settings.recent_ibases == std::vector<std::filesystem::path>{L"C:\\recent.v8i"});
+  CHECK(settings.platform_search_paths == std::vector<std::filesystem::path>{L"C:\\platform"});
+
+  WriteBytes(layout.root / L"catalog-state.json", R"({
+    "favorites": [{"favorite": "preserved"}],
+    "history": [
+      {"history_id": "bad\q", "time": 1, "mode": 0},
+      {"history_id": "valid-history", "time": 2, "mode": 1}
+    ],
+    "last_launches": [{"last_launch_id": "valid-launch", "time": 3}],
+    "tag_styles": [{"tag_style": "bad\q", "background": 1, "text": 2}, {"tag_style": "valid-style", "background": 3, "text": 4}],
+    "sorting": {"default_sort_mode": 2, "folders": [{"folder": "bad\q", "mode": 1}, {"folder": "valid-folder", "mode": 3}]}
+  })");
+  const auto state = ibstart::storage::LoadCatalogState(layout);
+  CHECK(state.favorites == std::vector<std::wstring>{L"preserved"});
+  CHECK(state.history.size() == 1 && state.history[0].database_id == L"valid-history");
+  CHECK(state.last_launches.contains(L"valid-launch"));
+  CHECK(state.tag_styles.size() == 1 && state.tag_styles.contains(L"valid-style"));
+  CHECK(state.sorting.default_mode == ibstart::storage::SortMode::last_launch);
+  CHECK(state.sorting.folder_modes.size() == 1 && state.sorting.folder_modes.contains(L"valid-folder"));
+
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
 }
 
 int wmain() {
@@ -454,6 +495,7 @@ int wmain() {
   run(L"SecretMasking", TestSecretMasking);
   run(L"CacheSizeFormatting", TestCacheSizeFormatting);
   run(L"PortableMode", TestPortableMode);
+  run(L"StorageSkipsMalformedRecords", TestStorageSkipsMalformedRecords);
   if (failures) { std::wcerr << failures << L" test(s) failed\n"; return 1; }
   std::wcout << L"All IBStart unit tests passed\n"; return 0;
 }
