@@ -42,6 +42,7 @@ configure_file(src/core/domain/version.hpp.in "${IBSTART_GENERATED_DIR}/core/dom
 configure_file(src/app/IBStart.rc.in "${IBSTART_GENERATED_DIR}/IBStart.rc" @ONLY)
 configure_file(src/app/app.manifest.in "${IBSTART_GENERATED_DIR}/app.manifest" @ONLY)
 file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/ibstart-version.txt" "${IBSTART_VERSION}\n")
+file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/IBStart.portable" "")
 message(STATUS "IBStart product version: ${IBSTART_VERSION} (file version ${IBSTART_FILE_VERSION})")
 
 add_library(ibstart_core STATIC

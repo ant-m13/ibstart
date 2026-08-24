@@ -21,7 +21,7 @@ src/ui (тонкий Win32-слой)
 
 `update` по явной команде пользователя получает небольшой release asset `IBStart.version` через стабильную HTTPS-ссылку GitHub `releases/latest/download`, без обращения к REST API. Модуль читает только SemVer-версию последнего стабильного релиза, строит ссылку на его страницу, сравнивает версии и не скачивает исполняемые файлы, не меняет EXE и не сохраняет историю проверок. Сетевой запрос выполняется вне потока окна; UI получает лишь готовый результат.
 
-Версия продукта задаётся только в `cmake/IBStartVersion.cmake`. На этапе конфигурации CMake из неё генерируются C++ header, Windows VERSIONINFO, manifest и `ibstart-version.txt` для CI. Благодаря этому окно «О программе», свойства PE-файла и release workflow используют одно значение.
+Версия продукта задаётся только в `cmake/IBStartVersion.cmake`. На этапе конфигурации CMake из неё генерируются C++ header, Windows VERSIONINFO, manifest, `ibstart-version.txt` и пустой маркер `IBStart.portable` для portable-архива. Благодаря этому окно «О программе», свойства PE-файла и release workflow используют одно значение.
 
 ## Тестируемость
 

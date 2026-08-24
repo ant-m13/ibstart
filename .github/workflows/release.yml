@@ -65,13 +65,15 @@ jobs:
           IBSTART_VERSION: ${{ steps.version.outputs.version }}
         run: |
           $exe = Get-Item out/build/release/IBStart.exe
-          $archive = "out/build/release/IBStart-$env:IBSTART_VERSION-windows-x64.zip"
+          $archive = "out/build/release/IBStart-$env:IBSTART_VERSION-portable-x64.zip"
           Copy-Item -LiteralPath out/build/release/ibstart-version.txt -Destination out/build/release/IBStart.version
           $assetVersion = (Get-Content -Raw out/build/release/IBStart.version).Trim()
           if ($assetVersion -ne $env:IBSTART_VERSION) {
             throw "IBStart.version '$assetVersion' does not match '$env:IBSTART_VERSION'."
           }
-          Compress-Archive -Path $exe.FullName,README.md,LICENSE,CHANGELOG.md -DestinationPath $archive
+          $portableMarker = Get-Item out/build/release/IBStart.portable
+          if ($portableMarker.Length -ne 0) { throw "IBStart.portable must be empty." }
+          Compress-Archive -Path $exe.FullName,$portableMarker.FullName,README.md,LICENSE,CHANGELOG.md -DestinationPath $archive
           (Get-FileHash $exe -Algorithm SHA256).Hash + "  IBStart.exe" | Out-File -Encoding ascii out/build/release/checksums.txt
           (Get-FileHash $archive -Algorithm SHA256).Hash + "  $(Split-Path $archive -Leaf)" | Add-Content -Encoding ascii out/build/release/checksums.txt
       - name: Create version tag
@@ -104,7 +106,7 @@ jobs:
         run: |
           $files = @(
             "out/build/release/IBStart.exe",
-            "out/build/release/IBStart-$env:RELEASE_VERSION-windows-x64.zip",
+            "out/build/release/IBStart-$env:RELEASE_VERSION-portable-x64.zip",
             "out/build/release/IBStart.version",
             "out/build/release/checksums.txt"
           )
