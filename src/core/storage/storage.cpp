@@ -268,6 +268,7 @@ Settings LoadSettings(const StorageLayout& layout) {
   if (const auto selected = JsonString(json, "selected_entry")) result.selected_entry = *selected;
   if (const auto simple = JsonInteger(json, "simple_mode")) result.simple_mode = *simple != 0;
   if (const auto showTags = JsonInteger(json, "show_tags_in_list")) result.show_tags_in_list = *showTags != 0;
+  if (const auto foldersFirst = JsonInteger(json, "folders_first_when_sorting")) result.folders_first_when_sorting = *foldersFirst != 0;
   if (const auto x = JsonInteger(json, "window_x")) result.window_x = *x;
   if (const auto y = JsonInteger(json, "window_y")) result.window_y = *y;
   if (const auto width = JsonInteger(json, "window_width")) result.window_width = std::clamp(*width, 480, 10000);
@@ -288,6 +289,7 @@ void SaveSettings(const StorageLayout& layout, const Settings& settings) {
   json += "  \"selected_entry\": \"" + Escape(settings.selected_entry) + "\",\n";
   json += "  \"simple_mode\": " + std::string(settings.simple_mode ? "1" : "0") + ",\n";
   json += "  \"show_tags_in_list\": " + std::string(settings.show_tags_in_list ? "1" : "0") + ",\n";
+  json += "  \"folders_first_when_sorting\": " + std::string(settings.folders_first_when_sorting ? "1" : "0") + ",\n";
   json += "  \"window_x\": " + std::to_string(settings.window_x) + ",\n  \"window_y\": " + std::to_string(settings.window_y);
   json += ",\n  \"window_width\": " + std::to_string(settings.window_width) + ",\n  \"window_height\": " + std::to_string(settings.window_height) + ",\n  \"recent_lists\": [";
   for (size_t index = 0; index < settings.recent_ibases.size(); ++index) {

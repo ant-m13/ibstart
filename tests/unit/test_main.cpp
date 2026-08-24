@@ -467,9 +467,9 @@ void TestPortableMode() {
   WriteBytes(layout.root / L"favorites.json", "[\"Устаревшее избранное\"]\n");
   CHECK(ibstart::storage::LoadFavorites(layout).empty());
   std::error_code removeLegacyError; std::filesystem::remove(layout.root / L"favorites.json", removeLegacyError);
-  ibstart::storage::Settings settings; settings.active_ibases = directory / L"База 😀.v8i"; settings.selected_entry = L"Выбранная база 😀"; settings.simple_mode = true; settings.show_tags_in_list = false; settings.recent_ibases = {directory / L"Недавняя 1.v8i", directory / L"Недавняя 2.v8i"}; settings.platform_search_paths = {directory / L"Платформа"}; settings.window_width = 1234;
+  ibstart::storage::Settings settings; settings.active_ibases = directory / L"База 😀.v8i"; settings.selected_entry = L"Выбранная база 😀"; settings.simple_mode = true; settings.show_tags_in_list = false; settings.folders_first_when_sorting = false; settings.recent_ibases = {directory / L"Недавняя 1.v8i", directory / L"Недавняя 2.v8i"}; settings.platform_search_paths = {directory / L"Платформа"}; settings.window_width = 1234;
   ibstart::storage::SaveSettings(layout, settings); const auto loaded = ibstart::storage::LoadSettings(layout);
-  CHECK(loaded.active_ibases == settings.active_ibases); CHECK(loaded.selected_entry == settings.selected_entry); CHECK(loaded.simple_mode); CHECK(!loaded.show_tags_in_list); CHECK(loaded.recent_ibases == settings.recent_ibases); CHECK(loaded.platform_search_paths == settings.platform_search_paths); CHECK(loaded.window_width == 1234);
+  CHECK(loaded.active_ibases == settings.active_ibases); CHECK(loaded.selected_entry == settings.selected_entry); CHECK(loaded.simple_mode); CHECK(!loaded.show_tags_in_list); CHECK(!loaded.folders_first_when_sorting); CHECK(loaded.recent_ibases == settings.recent_ibases); CHECK(loaded.platform_search_paths == settings.platform_search_paths); CHECK(loaded.window_width == 1234);
   const std::vector<std::wstring> favorites = {L"База 😀", L"Строка\nс переводом"}; ibstart::storage::SaveFavorites(layout, favorites); CHECK(ibstart::storage::LoadFavorites(layout) == favorites);
   const ibstart::storage::DatabaseTags tags = {{L"id-😀", {L"Продуктив", L"[Клиент] \"А\""}}, {L"id-2", {L"Тест"}}};
   ibstart::storage::SaveTags(layout, tags); CHECK(ibstart::storage::LoadTags(layout) == tags);
