@@ -5,6 +5,7 @@
 #include "core/domain/utf.hpp"
 #include "core/launcher/command_builder.hpp"
 #include "core/logging/logging.hpp"
+#include "core/platform/platform_discovery.hpp"
 #include "core/scanner/file_base_scanner.hpp"
 #include "core/storage/storage.hpp"
 #include "core/update/update_service.hpp"
@@ -144,6 +145,11 @@ void TestCommandBuilderAndSelection() {
   options.architecture = ibstart::domain::ClientArchitecture::automatic;
   options.version = L"8.3"; const auto versionPrefix = ibstart::launcher::SelectPlatform(platforms, options); CHECK(versionPrefix && versionPrefix->version == L"8.3.24");
   options.version = L"Авто";
+  const std::vector<ibstart::domain::PlatformInstallation> largeVersions = {
+      {L"C:\\1cv8\\8.3.99999999999999999999\\bin\\1cv8.exe", L"8.3.99999999999999999999", ibstart::domain::ClientBitness::x64, true},
+      {L"C:\\1cv8\\8.3.100000000000000000000\\bin\\1cv8.exe", L"8.3.100000000000000000000", ibstart::domain::ClientBitness::x64, true}};
+  const auto largestVersion = ibstart::launcher::SelectPlatform(largeVersions, options);
+  CHECK(largestVersion && largestVersion->version == L"8.3.100000000000000000000");
   CHECK(ibstart::launcher::ParseAppArchitecture(L"x86_64_prt") == ibstart::domain::ClientArchitecture::x64_priority);
   CHECK(ibstart::launcher::ParseAppArchitecture(L"x86") == ibstart::domain::ClientArchitecture::x86);
   CHECK(!ibstart::launcher::ParseAppArchitecture(L"x64"));
@@ -161,6 +167,26 @@ void TestCommandBuilderAndSelection() {
   const auto spacedCommand = ibstart::launcher::BuildCommand(spaced, *chosen, options); CHECK(spacedCommand.arguments[1] == L"/F"); CHECK(spacedCommand.arguments[2] == L"C:\\base;one");
   options.client_type = ibstart::domain::ClientType::thin; options.mode = ibstart::domain::LaunchMode::designer;
   bool invalidThinDesigner = false; try { (void)ibstart::launcher::BuildCommand(file, *chosen, options); } catch (const std::invalid_argument&) { invalidThinDesigner = true; } CHECK(invalidThinDesigner);
+}
+
+void TestPlatformDiscoveryLargeVersions() {
+  const auto root = Temp(L"platform-versions");
+  const auto smaller = root / L"8.3.99999999999999999999" / L"bin";
+  const auto larger = root / L"8.3.100000000000000000000" / L"bin";
+  std::filesystem::create_directories(smaller);
+  std::filesystem::create_directories(larger);
+  WriteBytes(smaller / L"1cv8.exe", "");
+  WriteBytes(larger / L"1cv8.exe", "");
+
+  const auto discovered = ibstart::platform::Discover({root});
+  const auto smallerPosition = std::find_if(discovered.begin(), discovered.end(), [&](const auto& item) { return item.executable == smaller / L"1cv8.exe"; });
+  const auto largerPosition = std::find_if(discovered.begin(), discovered.end(), [&](const auto& item) { return item.executable == larger / L"1cv8.exe"; });
+  CHECK(smallerPosition != discovered.end());
+  CHECK(largerPosition != discovered.end());
+  if (smallerPosition != discovered.end() && largerPosition != discovered.end()) CHECK(largerPosition < smallerPosition);
+
+  std::error_code error;
+  std::filesystem::remove_all(root, error);
 }
 
 void TestWindowsArgumentQuoting() {
@@ -420,6 +446,7 @@ int wmain() {
   run(L"NoBomAndCatalog", TestNoBomAndCatalog);
   run(L"SafeStore", TestSafeStore);
   run(L"CommandBuilderAndSelection", TestCommandBuilderAndSelection);
+  run(L"PlatformDiscoveryLargeVersions", TestPlatformDiscoveryLargeVersions);
   run(L"WindowsArgumentQuoting", TestWindowsArgumentQuoting);
   run(L"CatalogOrderingAndCycles", TestCatalogOrderingAndCycles);
   run(L"StandardFolderPaths", TestStandardFolderPaths);

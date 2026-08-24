@@ -1,9 +1,9 @@
 #include "core/platform/platform_discovery.hpp"
+#include "core/platform/platform_version.hpp"
 
 #include <Windows.h>
 
 #include <algorithm>
-#include <cwchar>
 #include <cwctype>
 #include <optional>
 #include <set>
@@ -19,33 +19,6 @@ std::wstring Environment(std::wstring_view name) {
   if (GetEnvironmentVariableW(std::wstring(name).c_str(), value.data(), required) == 0) return {};
   value.resize(required - 1);
   return value;
-}
-
-std::vector<unsigned long long> VersionParts(std::wstring_view version) {
-  std::vector<unsigned long long> result;
-  size_t start = 0;
-  while (start < version.size()) {
-    while (start < version.size() && !std::iswdigit(version[start])) ++start;
-    if (start == version.size()) break;
-    size_t end = start;
-    while (end < version.size() && std::iswdigit(version[end])) ++end;
-    const std::wstring part(version.substr(start, end - start));
-    result.push_back(std::wcstoull(part.c_str(), nullptr, 10));
-    start = end;
-  }
-  return result;
-}
-
-bool NewerVersion(std::wstring_view left, std::wstring_view right) {
-  const auto leftParts = VersionParts(left);
-  const auto rightParts = VersionParts(right);
-  const size_t count = std::max(leftParts.size(), rightParts.size());
-  for (size_t index = 0; index < count; ++index) {
-    const auto leftPart = index < leftParts.size() ? leftParts[index] : 0;
-    const auto rightPart = index < rightParts.size() ? rightParts[index] : 0;
-    if (leftPart != rightPart) return leftPart > rightPart;
-  }
-  return left > right;
 }
 
 void AddExe(const std::filesystem::path& executable, std::vector<domain::PlatformInstallation>& output,
@@ -155,7 +128,7 @@ std::vector<domain::PlatformInstallation> Discover(const std::vector<std::filesy
   ScanRegistry(HKEY_LOCAL_MACHINE, KEY_WOW64_32KEY, result, known);
   ScanRegistry(HKEY_CURRENT_USER, KEY_WOW64_64KEY, result, known);
   ScanRegistry(HKEY_CURRENT_USER, KEY_WOW64_32KEY, result, known);
-  std::sort(result.begin(), result.end(), [](const auto& left, const auto& right) { return NewerVersion(left.version, right.version); });
+  std::sort(result.begin(), result.end(), [](const auto& left, const auto& right) { return IsNewerVersion(left.version, right.version); });
   return result;
 }
 

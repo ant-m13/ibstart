@@ -1,6 +1,7 @@
 #include "core/launcher/command_builder.hpp"
 
 #include "core/domain/utf.hpp"
+#include "core/platform/platform_version.hpp"
 
 #include <Windows.h>
 
@@ -55,33 +56,6 @@ std::wstring ConnectionValue(std::wstring_view connect, std::wstring_view key) {
     start = index + 1;
   }
   return {};
-}
-
-std::vector<unsigned long long> VersionParts(std::wstring_view version) {
-  std::vector<unsigned long long> result;
-  size_t start = 0;
-  while (start < version.size()) {
-    while (start < version.size() && !std::iswdigit(version[start])) ++start;
-    if (start == version.size()) break;
-    size_t end = start;
-    while (end < version.size() && std::iswdigit(version[end])) ++end;
-    const std::wstring part(version.substr(start, end - start));
-    result.push_back(std::wcstoull(part.c_str(), nullptr, 10));
-    start = end;
-  }
-  return result;
-}
-
-bool NewerVersion(std::wstring_view left, std::wstring_view right) {
-  const auto leftParts = VersionParts(left);
-  const auto rightParts = VersionParts(right);
-  const size_t count = std::max(leftParts.size(), rightParts.size());
-  for (size_t index = 0; index < count; ++index) {
-    const auto leftPart = index < leftParts.size() ? leftParts[index] : 0;
-    const auto rightPart = index < rightParts.size() ? rightParts[index] : 0;
-    if (leftPart != rightPart) return leftPart > rightPart;
-  }
-  return left > right;
 }
 
 bool VersionMatches(std::wstring_view installed, std::wstring_view requested) {
@@ -182,7 +156,7 @@ std::optional<domain::PlatformInstallation> SelectPlatform(
     filtered.push_back(candidate);
   }
   std::sort(filtered.begin(), filtered.end(), [architecture](const auto& left, const auto& right) {
-    if (left.version != right.version) return NewerVersion(left.version, right.version);
+    if (left.version != right.version) return platform::IsNewerVersion(left.version, right.version);
     const bool prefer64 = architecture == domain::ClientArchitecture::x64_priority;
     const int leftRank = left.bitness == (prefer64 ? domain::ClientBitness::x64 : domain::ClientBitness::x86) ? 0 : 1;
     const int rightRank = right.bitness == (prefer64 ? domain::ClientBitness::x64 : domain::ClientBitness::x86) ? 0 : 1;
