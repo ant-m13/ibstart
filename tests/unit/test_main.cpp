@@ -630,16 +630,22 @@ void TestStorageSkipsMalformedRecords() {
     "favorites": [{"favorite": "preserved"}],
     "history": [
       {"history_id": "bad\q", "time": 1, "mode": 0},
-      {"history_id": "valid-history", "time": 2, "mode": 1}
+      {"mode": 1, "history_id": "valid-history", "time": 2}
     ],
     "last_launches": [{"last_launch_id": "valid-launch", "time": 3}],
-    "tag_styles": [{"tag_style": "bad\q", "background": 1, "text": 2}, {"tag_style": "valid-style", "background": 3, "text": 4}],
+    "tags": [
+      {"tag_id": "bad-tags", "values": ["bad\q"]},
+      {"values": ["First", "Second"], "tag_id": "valid-tags"}
+    ],
+    "tag_styles": [{"tag_style": "bad\q", "background": 1, "text": 2}, {"text": 4, "tag_style": "valid-style", "background": 3}],
     "sorting": {"default_sort_mode": 2, "folders": [{"folder": "valid-folder", "mode": 2}]}
   })");
   const auto state = ibstart::storage::LoadCatalogState(layout);
   CHECK(state.favorites == std::vector<std::wstring>{L"preserved"});
   CHECK(state.history.size() == 1 && state.history[0].database_id == L"valid-history");
   CHECK(state.last_launches.contains(L"valid-launch"));
+  CHECK(state.tags.size() == 1 && state.tags.contains(L"valid-tags"));
+  CHECK(state.tags.at(L"valid-tags") == std::vector<std::wstring>{L"First", L"Second"});
   CHECK(state.tag_styles.size() == 1 && state.tag_styles.contains(L"valid-style"));
   ibstart::storage::SaveCatalogState(layout, state);
   CHECK(ReadBytes(layout.root / L"catalog-state.json").find("\"sorting\"") == std::string::npos);

@@ -5,10 +5,13 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <charconv>
 #include <chrono>
+#include <ctime>
 #include <fstream>
-#include <regex>
+#include <limits>
 #include <stdexcept>
+#include <system_error>
 #include <utility>
 
 namespace ibstart::storage {
@@ -161,49 +164,181 @@ std::string ReadFile(const std::filesystem::path& path) {
   return contents;
 }
 
-std::optional<std::wstring> JsonString(std::string_view json, std::string_view key) {
-  const std::regex expression("\\\"" + std::string(key) + "\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"");
-  std::smatch match;
-  const std::string body(json);
-  if (!std::regex_search(body, match, expression)) return std::nullopt;
-  return TryUnescape(match[1].str());
-}
-
-std::optional<int> JsonInteger(std::string_view json, std::string_view key) {
-  const std::regex expression("\\\"" + std::string(key) + "\\\"\\s*:\\s*(-?[0-9]+)");
-  std::smatch match;
-  const std::string body(json);
-  if (!std::regex_search(body, match, expression)) return std::nullopt;
-  try { return std::stoi(match[1].str()); } catch (...) { return std::nullopt; }
-}
-
 void SkipJsonWhitespace(std::string_view json, size_t& position) {
   while (position < json.size() && (json[position] == ' ' || json[position] == '\t' || json[position] == '\r' || json[position] == '\n')) ++position;
 }
 
-std::optional<std::string> ReadJsonRawString(std::string_view json, size_t& position) {
+std::optional<std::string_view> ReadJsonRawString(std::string_view json, size_t& position) {
   SkipJsonWhitespace(json, position);
   if (position >= json.size() || json[position++] != '"') return std::nullopt;
-  std::string result;
+  const size_t start = position;
   while (position < json.size()) {
     const char character = json[position++];
-    if (character == '"') return result;
+    if (character == '"') return json.substr(start, position - start - 1);
     if (character == '\\') {
       if (position >= json.size()) return std::nullopt;
-      result.push_back(character);
-      result.push_back(json[position++]);
-    } else {
-      result.push_back(character);
+      ++position;
     }
   }
   return std::nullopt;
 }
 
-bool ConsumeJsonCharacter(std::string_view json, size_t& position, char expected) {
+enum class JsonValueKind { string, scalar, array, object };
+
+struct JsonValue {
+  JsonValueKind kind{};
+  std::string_view raw;
+};
+
+struct JsonProperty {
+  std::string key;
+  JsonValue value;
+};
+
+using JsonObject = std::vector<JsonProperty>;
+
+bool SkipJsonComposite(std::string_view json, size_t& position) {
+  if (position >= json.size() || (json[position] != '[' && json[position] != '{')) return false;
+  std::vector<char> closing;
+  const auto push = [&closing](char opening) { closing.push_back(opening == '[' ? ']' : '}'); };
+  push(json[position++]);
+  bool quoted = false;
+  while (position < json.size()) {
+    const char character = json[position++];
+    if (quoted) {
+      if (character == '\\') {
+        if (position >= json.size()) return false;
+        ++position;
+      } else if (character == '"') {
+        quoted = false;
+      }
+      continue;
+    }
+    if (character == '"') quoted = true;
+    else if (character == '[' || character == '{') push(character);
+    else if (!closing.empty() && character == closing.back()) {
+      closing.pop_back();
+      if (closing.empty()) return true;
+    } else if (character == ']' || character == '}') {
+      return false;
+    }
+  }
+  return false;
+}
+
+std::optional<JsonValue> ReadJsonValue(std::string_view json, size_t& position) {
   SkipJsonWhitespace(json, position);
-  if (position >= json.size() || json[position] != expected) return false;
-  ++position;
-  return true;
+  if (position >= json.size()) return std::nullopt;
+  if (json[position] == '"') {
+    const auto raw = ReadJsonRawString(json, position);
+    if (!raw) return std::nullopt;
+    return JsonValue{JsonValueKind::string, *raw};
+  }
+  if (json[position] == '[' || json[position] == '{') {
+    const size_t start = position;
+    const JsonValueKind kind = json[position] == '[' ? JsonValueKind::array : JsonValueKind::object;
+    if (!SkipJsonComposite(json, position)) return std::nullopt;
+    return JsonValue{kind, json.substr(start, position - start)};
+  }
+  const size_t start = position;
+  while (position < json.size() && json[position] != ',' && json[position] != ']' && json[position] != '}' &&
+      json[position] != ' ' && json[position] != '\t' && json[position] != '\r' && json[position] != '\n') {
+    ++position;
+  }
+  if (position == start) return std::nullopt;
+  return JsonValue{JsonValueKind::scalar, json.substr(start, position - start)};
+}
+
+std::optional<JsonObject> ReadJsonObject(std::string_view json, size_t position) {
+  SkipJsonWhitespace(json, position);
+  if (position >= json.size() || json[position++] != '{') return std::nullopt;
+  JsonObject result;
+  for (;;) {
+    SkipJsonWhitespace(json, position);
+    if (position >= json.size()) return std::nullopt;
+    if (json[position] == '}') return result;
+    const auto rawKey = ReadJsonRawString(json, position);
+    const auto key = rawKey ? TryUnescape(*rawKey) : std::nullopt;
+    if (!key) return std::nullopt;
+    SkipJsonWhitespace(json, position);
+    if (position >= json.size() || json[position++] != ':') return std::nullopt;
+    const auto value = ReadJsonValue(json, position);
+    if (!value) return std::nullopt;
+    result.push_back({utf::ToUtf8(*key), *value});
+    SkipJsonWhitespace(json, position);
+    if (position >= json.size()) return std::nullopt;
+    const char separator = json[position++];
+    if (separator == '}') return result;
+    if (separator != ',') return std::nullopt;
+  }
+}
+
+const JsonValue* ObjectValue(const JsonObject& object, std::string_view key) {
+  const auto found = std::find_if(object.begin(), object.end(), [&](const JsonProperty& property) { return property.key == key; });
+  return found == object.end() ? nullptr : &found->value;
+}
+
+std::optional<std::wstring> ObjectString(const JsonObject& object, std::string_view key) {
+  const auto* value = ObjectValue(object, key);
+  return value && value->kind == JsonValueKind::string ? TryUnescape(value->raw) : std::nullopt;
+}
+
+std::optional<long long> ObjectInteger(const JsonObject& object, std::string_view key) {
+  const auto* value = ObjectValue(object, key);
+  if (!value || value->kind != JsonValueKind::scalar) return std::nullopt;
+  long long result{};
+  const auto [end, error] = std::from_chars(value->raw.data(), value->raw.data() + value->raw.size(), result);
+  if (error != std::errc{} || end != value->raw.data() + value->raw.size()) return std::nullopt;
+  return result;
+}
+
+std::optional<int> ObjectInt(const JsonObject& object, std::string_view key) {
+  const auto value = ObjectInteger(object, key);
+  if (!value || *value < std::numeric_limits<int>::min() || *value > std::numeric_limits<int>::max()) return std::nullopt;
+  return static_cast<int>(*value);
+}
+
+std::optional<std::vector<std::wstring>> StringArray(const JsonValue* value) {
+  if (!value || value->kind != JsonValueKind::array || value->raw.size() < 2) return std::nullopt;
+  size_t position = 1;
+  std::vector<std::wstring> result;
+  for (;;) {
+    SkipJsonWhitespace(value->raw, position);
+    if (position >= value->raw.size()) return std::nullopt;
+    if (value->raw[position] == ']') return result;
+    const auto rawItem = ReadJsonRawString(value->raw, position);
+    const auto item = rawItem ? TryUnescape(*rawItem) : std::nullopt;
+    if (!item) return std::nullopt;
+    result.push_back(*item);
+    SkipJsonWhitespace(value->raw, position);
+    if (position >= value->raw.size()) return std::nullopt;
+    const char separator = value->raw[position++];
+    if (separator == ']') return result;
+    if (separator != ',') return std::nullopt;
+  }
+}
+
+template <typename Visitor>
+void ForEachJsonObject(std::string_view json, Visitor visitor) {
+  bool quoted = false;
+  for (size_t position = 0; position < json.size(); ++position) {
+    const char character = json[position];
+    if (quoted) {
+      if (character == '\\' && position + 1 < json.size()) ++position;
+      else if (character == '"') quoted = false;
+      continue;
+    }
+    if (character == '"') quoted = true;
+    else if (character == '{') {
+      if (const auto object = ReadJsonObject(json, position)) visitor(*object);
+    }
+  }
+}
+
+std::optional<JsonObject> RootJsonObject(std::string_view json) {
+  size_t position = 0;
+  SkipJsonWhitespace(json, position);
+  return ReadJsonObject(json, position);
 }
 
 void AppendHistoryToState(CatalogState& state, domain::HistoryItem item) {
@@ -257,23 +392,21 @@ void EnsureWritable(const StorageLayout& layout) {
 Settings LoadSettings(const StorageLayout& layout) {
   Settings result;
   const auto json = ReadFile(PathFor(layout, L"settings.json"));
-  if (const auto active = JsonString(json, "active_ibases")) result.active_ibases = *active;
-  if (const auto selected = JsonString(json, "selected_entry")) result.selected_entry = *selected;
-  if (const auto simple = JsonInteger(json, "simple_mode")) result.simple_mode = *simple != 0;
-  if (const auto showTags = JsonInteger(json, "show_tags_in_list")) result.show_tags_in_list = *showTags != 0;
-  if (const auto foldersFirst = JsonInteger(json, "folders_first_when_sorting")) result.folders_first_when_sorting = *foldersFirst != 0;
-  if (const auto x = JsonInteger(json, "window_x")) result.window_x = *x;
-  if (const auto y = JsonInteger(json, "window_y")) result.window_y = *y;
-  if (const auto width = JsonInteger(json, "window_width")) result.window_width = std::clamp(*width, 480, 10000);
-  if (const auto height = JsonInteger(json, "window_height")) result.window_height = std::clamp(*height, 320, 10000);
-  const std::regex pathExpression("\\\"platform_path\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"");
-  for (std::sregex_iterator it(json.begin(), json.end(), pathExpression), end; it != end; ++it) {
-    if (const auto path = TryUnescape((*it)[1].str())) result.platform_search_paths.emplace_back(*path);
+  if (const auto root = RootJsonObject(json)) {
+    if (const auto active = ObjectString(*root, "active_ibases")) result.active_ibases = *active;
+    if (const auto selected = ObjectString(*root, "selected_entry")) result.selected_entry = *selected;
+    if (const auto simple = ObjectInt(*root, "simple_mode")) result.simple_mode = *simple != 0;
+    if (const auto showTags = ObjectInt(*root, "show_tags_in_list")) result.show_tags_in_list = *showTags != 0;
+    if (const auto foldersFirst = ObjectInt(*root, "folders_first_when_sorting")) result.folders_first_when_sorting = *foldersFirst != 0;
+    if (const auto x = ObjectInt(*root, "window_x")) result.window_x = *x;
+    if (const auto y = ObjectInt(*root, "window_y")) result.window_y = *y;
+    if (const auto width = ObjectInt(*root, "window_width")) result.window_width = std::clamp(*width, 480, 10000);
+    if (const auto height = ObjectInt(*root, "window_height")) result.window_height = std::clamp(*height, 320, 10000);
   }
-  const std::regex recentExpression("\\\"recent_list\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"");
-  for (std::sregex_iterator it(json.begin(), json.end(), recentExpression), end; it != end; ++it) {
-    if (const auto recent = TryUnescape((*it)[1].str())) result.recent_ibases.emplace_back(*recent);
-  }
+  ForEachJsonObject(json, [&](const JsonObject& object) {
+    if (const auto path = ObjectString(object, "platform_path")) result.platform_search_paths.emplace_back(*path);
+    if (const auto recent = ObjectString(object, "recent_list")) result.recent_ibases.emplace_back(*recent);
+  });
   return result;
 }
 
@@ -301,72 +434,37 @@ void SaveSettings(const StorageLayout& layout, const Settings& settings) {
 CatalogState LoadCatalogState(const StorageLayout& layout) {
   CatalogState result;
   const auto json = ReadFile(PathFor(layout, L"catalog-state.json"));
-  const std::regex favorite("\\\"favorite\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"");
-  for (std::sregex_iterator it(json.begin(), json.end(), favorite), end; it != end; ++it) {
-    if (const auto value = TryUnescape((*it)[1].str())) result.favorites.push_back(*value);
-  }
+  ForEachJsonObject(json, [&](const JsonObject& object) {
+    if (const auto favorite = ObjectString(object, "favorite")) result.favorites.push_back(*favorite);
 
-  const std::regex history("\\{\\s*\\\"history_id\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"time\\\"\\s*:\\s*([0-9]+)\\s*,\\s*\\\"mode\\\"\\s*:\\s*([0-9]+)\\s*\\}");
-  for (std::sregex_iterator it(json.begin(), json.end(), history), end; it != end; ++it) {
-    try {
-      const int mode = std::stoi((*it)[3].str());
-      const auto id = TryUnescape((*it)[1].str());
-      if (id && mode >= static_cast<int>(domain::LaunchMode::enterprise) && mode <= static_cast<int>(domain::LaunchMode::web_client)) {
-        result.history.push_back({*id, std::chrono::system_clock::from_time_t(std::stoll((*it)[2].str())), static_cast<domain::LaunchMode>(mode)});
-      }
-    } catch (const std::exception&) {
+    const auto historyId = ObjectString(object, "history_id");
+    const auto historyTime = ObjectInteger(object, "time");
+    const auto historyMode = ObjectInt(object, "mode");
+    if (historyId && historyTime && historyMode &&
+        *historyMode >= static_cast<int>(domain::LaunchMode::enterprise) &&
+        *historyMode <= static_cast<int>(domain::LaunchMode::web_client)) {
+      result.history.push_back({*historyId, std::chrono::system_clock::from_time_t(static_cast<std::time_t>(*historyTime)),
+          static_cast<domain::LaunchMode>(*historyMode)});
     }
-  }
 
-  const std::regex launch("\\{\\s*\\\"last_launch_id\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"time\\\"\\s*:\\s*([0-9]+)\\s*\\}");
-  for (std::sregex_iterator it(json.begin(), json.end(), launch), end; it != end; ++it) {
-    try {
-      const auto id = TryUnescape((*it)[1].str());
-      if (id && !id->empty()) result.last_launches[*id] = std::chrono::system_clock::from_time_t(std::stoll((*it)[2].str()));
-    } catch (const std::exception&) {
+    const auto launchId = ObjectString(object, "last_launch_id");
+    const auto launchTime = ObjectInteger(object, "time");
+    if (launchId && launchTime && !launchId->empty()) {
+      result.last_launches[*launchId] = std::chrono::system_clock::from_time_t(static_cast<std::time_t>(*launchTime));
     }
-  }
 
-  size_t position = 0;
-  while (position < json.size()) {
-    while (position < json.size() && json[position] != '{') ++position;
-    if (position == json.size()) break;
-    ++position;
-    const auto idKey = ReadJsonRawString(json, position);
-    if (!idKey || *idKey != "tag_id" || !ConsumeJsonCharacter(json, position, ':')) continue;
-    const auto rawId = ReadJsonRawString(json, position);
-    if (!rawId || !ConsumeJsonCharacter(json, position, ',')) continue;
-    const auto valuesKey = ReadJsonRawString(json, position);
-    if (!valuesKey || *valuesKey != "values" || !ConsumeJsonCharacter(json, position, ':') || !ConsumeJsonCharacter(json, position, '[')) continue;
-    std::vector<std::wstring> values;
-    for (;;) {
-      SkipJsonWhitespace(json, position);
-      if (position < json.size() && json[position] == ']') { ++position; break; }
-      const auto rawTag = ReadJsonRawString(json, position);
-      const auto tag = rawTag ? TryUnescape(*rawTag) : std::nullopt;
-      if (!tag) { values.clear(); break; }
-      values.push_back(*tag);
-      SkipJsonWhitespace(json, position);
-      if (position < json.size() && json[position] == ',') { ++position; continue; }
-      if (position < json.size() && json[position] == ']') { ++position; break; }
-      values.clear();
-      break;
-    }
-    if (!ConsumeJsonCharacter(json, position, '}')) continue;
-    const auto id = TryUnescape(*rawId);
-    if (id && !id->empty() && !values.empty()) result.tags[*id] = std::move(values);
-  }
+    const auto tagId = ObjectString(object, "tag_id");
+    const auto tags = StringArray(ObjectValue(object, "values"));
+    if (tagId && !tagId->empty() && tags && !tags->empty()) result.tags[*tagId] = *tags;
 
-  const std::regex style("\\{\\s*\\\"tag_style\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"background\\\"\\s*:\\s*([0-9]+)\\s*,\\s*\\\"text\\\"\\s*:\\s*([0-9]+)\\s*\\}");
-  for (std::sregex_iterator it(json.begin(), json.end(), style), end; it != end; ++it) {
-    try {
-      const auto tag = TryUnescape((*it)[1].str());
-      const auto background = std::stoul((*it)[2].str());
-      const auto text = std::stoul((*it)[3].str());
-      if (tag && !tag->empty() && background <= 0xFFFFFFu && text <= 0xFFFFFFu) result.tag_styles[*tag] = {static_cast<COLORREF>(background), static_cast<COLORREF>(text)};
-    } catch (const std::exception&) {
+    const auto styleName = ObjectString(object, "tag_style");
+    const auto background = ObjectInteger(object, "background");
+    const auto text = ObjectInteger(object, "text");
+    if (styleName && !styleName->empty() && background && text && *background >= 0 && *text >= 0 &&
+        *background <= 0xFFFFFF && *text <= 0xFFFFFF) {
+      result.tag_styles[*styleName] = {static_cast<COLORREF>(*background), static_cast<COLORREF>(*text)};
     }
-  }
+  });
 
   for (const auto& history : result.history) if (!history.database_id.empty() && !result.last_launches.contains(history.database_id)) result.last_launches[history.database_id] = history.timestamp;
   return result;
