@@ -22,6 +22,7 @@ struct Settings {
   std::wstring selected_entry;
   bool simple_mode{false};
   bool show_tags_in_list{true};
+  bool folders_first_when_sorting{true};
   std::vector<std::filesystem::path> recent_ibases;
   std::vector<std::filesystem::path> platform_search_paths;
   int window_x{CW_USEDEFAULT};
