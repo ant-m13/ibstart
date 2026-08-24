@@ -5,6 +5,7 @@
 #include "core/logging/logging.hpp"
 #include "core/storage/storage.hpp"
 #include "core/v8i/v8i_file_store.hpp"
+#include "ui/owner_draw_menu.hpp"
 
 #include <Windows.h>
 #include <CommCtrl.h>
@@ -26,12 +27,6 @@ class MainWindow {
   void Activate();
 
  private:
-  struct ContextMenuItem {
-    UINT command{};
-    HICON icon{};
-    std::wstring text;
-    std::wstring shortcut;
-  };
   enum class NewDatabaseKind { file, server };
   struct UpdateCheckState;
   struct CacheOperationState;
@@ -54,8 +49,7 @@ class MainWindow {
   LRESULT DrawDetailsList(NMLVCUSTOMDRAW* draw) const;
   bool MeasureContextMenuItem(MEASUREITEMSTRUCT* measure) const;
   bool DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const;
-  void ClearContextMenuItems() noexcept;
-  void ClearMainMenuItems() noexcept;
+  [[nodiscard]] const OwnerDrawMenuItem* FindMenuItem(ULONG_PTR item_data) const noexcept;
   [[nodiscard]] std::wstring SelectedName() const;
   [[nodiscard]] bool SelectedItemIsRecentRoot() const;
   void BeginTreeDrag(HTREEITEM item, POINT tree_point);
@@ -137,9 +131,9 @@ class MainWindow {
   HMENU view_menu_{};
   HMENU help_menu_{};
   std::vector<HIMAGELIST> button_images_;
-  std::vector<ContextMenuItem> context_menu_items_;
-  std::vector<ContextMenuItem> main_menu_items_;
-  std::vector<ContextMenuItem> file_menu_items_;
+  OwnerDrawMenuItems context_menu_items_;
+  OwnerDrawMenuItems main_menu_items_;
+  OwnerDrawMenuItems file_menu_items_;
   std::filesystem::path executable_;
   storage::StorageLayout layout_;
   storage::Settings settings_;
