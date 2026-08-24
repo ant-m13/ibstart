@@ -1,0 +1,41 @@
+name: CodeQL
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  schedule:
+    - cron: '17 3 * * 1'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  security-events: write
+
+concurrency:
+  group: codeql-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  analyze:
+    name: Analyze C/C++
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@v4
+        with:
+          languages: c-cpp
+          build-mode: manual
+      - name: Configure MSVC environment
+        shell: pwsh
+        run: ./.github/scripts/setup-msvc.ps1
+      - name: Configure CMake
+        run: cmake -S . -B out/build/codeql -G Ninja -DCMAKE_BUILD_TYPE=Release -DBUILD_TESTING=OFF
+      - name: Build Release
+        run: cmake --build out/build/codeql --parallel
+      - name: Analyze C/C++
+        uses: github/codeql-action/analyze@v4
+        with:
+          category: /language:c-cpp
