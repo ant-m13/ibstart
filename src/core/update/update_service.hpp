@@ -16,11 +16,11 @@ struct Release {
 // prefixed with a single 'v'.
 [[nodiscard]] int CompareVersions(std::wstring_view left, std::wstring_view right);
 
-// Parses the fields of the GitHub "latest release" response that IBStart uses.
-[[nodiscard]] Release ParseLatestReleaseResponse(std::string_view response);
+// Parses the plain-text IBStart.version asset published with a GitHub Release.
+[[nodiscard]] Release ParseLatestVersionFile(std::string_view response);
 
-// Requests the latest published stable release for the IBStart GitHub repository. A missing
-// stable release is reported as std::nullopt; transport and malformed-response errors throw.
+// Downloads the version asset of the latest published stable GitHub Release. A missing
+// stable release or asset is reported as std::nullopt; transport and malformed-response errors throw.
 [[nodiscard]] std::optional<Release> FetchLatestRelease();
 
 }  // namespace ibstart::update
