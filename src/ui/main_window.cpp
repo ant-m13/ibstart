@@ -2024,7 +2024,11 @@ void MainWindow::Layout(int width, int height) {
   }
 
   constexpr int statusHeight = 22;
-  constexpr int top = 74;
+  // The tree starts below the tag filter, while the details panel can use the
+  // same vertical band as that filter.  Keeping these anchors separate avoids
+  // an unused gap above the selected database information.
+  constexpr int treeTop = 74;
+  constexpr int detailsTop = 39;
   constexpr int bottom = statusHeight + 10;
   constexpr int buttonGap = 8;
   constexpr int buttonRowGap = 6;
@@ -2054,8 +2058,8 @@ void MainWindow::Layout(int width, int height) {
     buttonX += button.width + buttonGap;
   }
   const int buttonsHeight = buttonRows * buttonHeight + (buttonRows - 1) * buttonRowGap;
-  const int buttonsY = std::max(top + 100, height - bottom - buttonsHeight);
-  const int connectionY = top + 58;
+  const int buttonsY = std::max(treeTop + 100, height - bottom - buttonsHeight);
+  const int connectionY = detailsTop + 58;
   const int detailsY = connectionY + 28;
   const int detailsHeight = std::max(42, buttonsY - detailsY - 10);
   const int keyWidth = std::clamp(rightWidth * 35 / 100, 80, 190);
@@ -2068,9 +2072,9 @@ void MainWindow::Layout(int width, int height) {
   };
   defer(search_, 58, 7, width - 66, 25);
   defer(tag_filter_, 116, 39, 258, 25);
-  defer(tree_, 8, top, leftWidth, height - top - bottom);
-  defer(details_title_, rightX + 10, top + 7, rightWidth - 20, 26);
-  defer(details_subtitle_, rightX + 10, top + 34, rightWidth - 20, 20);
+  defer(tree_, 8, treeTop, leftWidth, height - treeTop - bottom);
+  defer(details_title_, rightX + 10, detailsTop + 7, rightWidth - 20, 26);
+  defer(details_subtitle_, rightX + 10, detailsTop + 34, rightWidth - 20, 20);
   defer(details_, rightX, detailsY, rightWidth, detailsHeight);
   defer(connection_, rightX, connectionY, rightWidth, 22);
   for (const auto& button : buttons) defer(button.window, rightX + button.x, buttonsY + button.y, button.width, buttonHeight);
@@ -2080,9 +2084,9 @@ void MainWindow::Layout(int width, int height) {
     // complete fallback layout instead of leaving controls at old positions.
     MoveWindow(search_, 58, 7, std::max(1, width - 66), 25, TRUE);
     MoveWindow(tag_filter_, 116, 39, 258, 25, TRUE);
-    MoveWindow(tree_, 8, top, leftWidth, std::max(1, height - top - bottom), TRUE);
-    MoveWindow(details_title_, rightX + 10, top + 7, std::max(1, rightWidth - 20), 26, TRUE);
-    MoveWindow(details_subtitle_, rightX + 10, top + 34, std::max(1, rightWidth - 20), 20, TRUE);
+    MoveWindow(tree_, 8, treeTop, leftWidth, std::max(1, height - treeTop - bottom), TRUE);
+    MoveWindow(details_title_, rightX + 10, detailsTop + 7, std::max(1, rightWidth - 20), 26, TRUE);
+    MoveWindow(details_subtitle_, rightX + 10, detailsTop + 34, std::max(1, rightWidth - 20), 20, TRUE);
     MoveWindow(details_, rightX, detailsY, rightWidth, detailsHeight, TRUE);
     MoveWindow(connection_, rightX, connectionY, rightWidth, 22, TRUE);
     for (const auto& button : buttons) MoveWindow(button.window, rightX + button.x, buttonsY + button.y, button.width, buttonHeight, TRUE);
