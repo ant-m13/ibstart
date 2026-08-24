@@ -13,6 +13,7 @@
 #include "core/storage/storage.hpp"
 #include "core/update/update_service.hpp"
 #include "core/v8i/v8i_file_store.hpp"
+#include "ui/tree_presentation.hpp"
 
 #include <Windows.h>
 #include <shellapi.h>
@@ -404,6 +405,41 @@ void TestCatalogSearch() {
   CHECK(entry && !ibstart::catalog::MatchesSearchText(entry->entry, L"не найдено"));
 }
 
+void TestTreeFilters() {
+  auto document = ibstart::v8i::V8iDocument::ParseUtf8(
+      "[Folder]\nFolder=/\n"
+      "[Alpha]\nConnect=File=\"C:\\\\alpha\"\nFolder=/Folder\n"
+      "[Beta]\nConnect=File=\"C:\\\\beta\"\nFolder=/Folder\n"
+      "[Other]\nConnect=File=\"C:\\\\other\"\n");
+  ibstart::catalog::Catalog catalog(std::move(document));
+  const ibstart::storage::DatabaseTags tags = {
+      {L"Alpha", {L"Production", L"Shared"}},
+      {L"Beta", {L"test", L"shared"}},
+  };
+  const auto available = ibstart::ui::presentation::CollectFilterTags(catalog, tags);
+  CHECK(available == std::vector<std::wstring>{L"Production", L"Shared", L"test"});
+
+  const auto tree = catalog.Tree();
+  const auto folder = std::find_if(tree.begin(), tree.end(), [](const auto& item) { return item.name == L"Folder"; });
+  CHECK(folder != tree.end());
+  if (folder == tree.end()) return;
+
+  CHECK(ibstart::ui::presentation::MatchesSearchFilter(catalog, *folder, L"prod", tags));
+  CHECK(!ibstart::ui::presentation::MatchesSearchFilter(catalog, *folder, L"release", tags));
+
+  ibstart::ui::presentation::TreeTagFilter favorites;
+  favorites.kind = ibstart::ui::presentation::TreeTagFilterKind::favorites;
+  CHECK(ibstart::ui::presentation::MatchesTagFilter(catalog, *folder, favorites, tags, {L"Alpha"}));
+  CHECK(!ibstart::ui::presentation::MatchesTagFilter(catalog, *folder, favorites, tags, {L"Other"}));
+
+  ibstart::ui::presentation::TreeTagFilter tag;
+  tag.kind = ibstart::ui::presentation::TreeTagFilterKind::tag;
+  tag.tag = L"TEST";
+  CHECK(ibstart::ui::presentation::MatchesTagFilter(catalog, *folder, tag, tags, {}));
+  tag.tag = L"Unknown";
+  CHECK(!ibstart::ui::presentation::MatchesTagFilter(catalog, *folder, tag, tags, {}));
+}
+
 void TestStandardFolderPaths() {
   auto document = ibstart::v8i::V8iDocument::ParseUtf8(
       "[Root database]\nConnect=File=\"C:\\\\root\"\nFolder=/\n"
@@ -752,6 +788,7 @@ int wmain() {
   run(L"ConnectionStringParsing", TestConnectionStringParsing);
   run(L"InstanceActivationPayload", TestInstanceActivationPayload);
   run(L"CatalogSearch", TestCatalogSearch);
+  run(L"TreeFilters", TestTreeFilters);
   run(L"NoBomAndCatalog", TestNoBomAndCatalog);
   run(L"SafeStore", TestSafeStore);
   run(L"V8iSaveRejectsActiveWriter", TestV8iSaveRejectsActiveWriter);

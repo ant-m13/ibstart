@@ -11,6 +11,13 @@
 
 namespace ibstart::ui::presentation {
 
+enum class TreeTagFilterKind { all, favorites, tag };
+
+struct TreeTagFilter {
+  TreeTagFilterKind kind{TreeTagFilterKind::all};
+  std::wstring tag;
+};
+
 [[nodiscard]] std::vector<std::wstring> ParseTags(std::wstring_view text);
 [[nodiscard]] std::wstring TagsText(const std::vector<std::wstring>& tags);
 [[nodiscard]] std::wstring TagId(const domain::Entry& entry);
@@ -19,6 +26,11 @@ namespace ibstart::ui::presentation {
 [[nodiscard]] std::vector<std::wstring> KnownTags(const storage::DatabaseTags& tags, const storage::TagStyles& styles);
 void EraseTagStyle(storage::TagStyles& styles, std::wstring_view name);
 [[nodiscard]] bool ContainsTag(const std::vector<std::wstring>& tags, std::wstring_view value);
+[[nodiscard]] std::vector<std::wstring> CollectFilterTags(const catalog::Catalog& catalog, const storage::DatabaseTags& tags);
+[[nodiscard]] bool MatchesSearchFilter(const catalog::Catalog& catalog, const catalog::TreeItem& item,
+    std::wstring_view search_filter, const storage::DatabaseTags& tags);
+[[nodiscard]] bool MatchesTagFilter(const catalog::Catalog& catalog, const catalog::TreeItem& item,
+    const TreeTagFilter& filter, const storage::DatabaseTags& tags, const std::vector<std::wstring>& favorites);
 
 [[nodiscard]] LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Catalog* catalog,
     const storage::Settings& settings, const storage::DatabaseTags& tags, const storage::TagStyles& styles,

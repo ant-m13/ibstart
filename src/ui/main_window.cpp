@@ -2177,31 +2177,6 @@ bool MainWindow::SaveCatalog() {
   return false;
 }
 
-bool MainWindow::ItemMatches(const catalog::TreeItem& item, std::wstring_view filter) const {
-  if (filter.empty()) return true;
-  if (catalog_) {
-    if (const auto* entry = catalog_->Find(item.name); entry) {
-      if (catalog::MatchesSearchText(*entry, filter)) return true;
-      if (entry->IsDatabase()) {
-        const auto& tags = TagsFor(catalog_state_.Read().tags, *entry);
-        if (std::any_of(tags.begin(), tags.end(), [&](const auto& tag) { return utf::FindNoCaseOrdinal(tag, filter) != std::wstring_view::npos; })) return true;
-      }
-    }
-  }
-  return std::any_of(item.children.begin(), item.children.end(), [&](const auto& child) { return ItemMatches(child, filter); });
-}
-bool MainWindow::ItemMatchesTagFilter(const catalog::TreeItem& item) const {
-  if (settings_.simple_mode) return true;
-  const int selection = tag_filter_ ? static_cast<int>(SendMessageW(tag_filter_, CB_GETCURSEL, 0, 0)) : 0;
-  if (selection <= 0 || !catalog_) return true;
-  const auto* entry = catalog_->Find(item.name);
-  if (entry && entry->IsDatabase()) {
-    if (selection == 1) return ContainsTag(filter_favorites_, entry->name);
-    const size_t tag = static_cast<size_t>(selection - 2);
-    return tag < filter_tags_.size() && ContainsTag(TagsFor(catalog_state_.Read().tags, *entry), filter_tags_[tag]);
-  }
-  return std::any_of(item.children.begin(), item.children.end(), [&](const auto& child) { return ItemMatchesTagFilter(child); });
-}
 void MainWindow::RefreshTagFilter() {
   int selection = tag_filter_ ? static_cast<int>(SendMessageW(tag_filter_, CB_GETCURSEL, 0, 0)) : 0;
   const bool favoritesSelected = selection == 1;
@@ -2209,15 +2184,7 @@ void MainWindow::RefreshTagFilter() {
   if (selection >= 2 && static_cast<size_t>(selection - 2) < filter_tags_.size()) selectedTag = filter_tags_[selection - 2];
 
   filter_favorites_ = catalog_state_.Read().favorites;
-  filter_tags_.clear();
-  if (catalog_) {
-    for (const auto* entry : catalog_->Databases()) {
-      for (const auto& tag : TagsFor(catalog_state_.Read().tags, *entry)) {
-        if (std::none_of(filter_tags_.begin(), filter_tags_.end(), [&](const auto& existing) { return EqualNoCase(existing, tag); })) filter_tags_.push_back(tag);
-      }
-    }
-  }
-  std::sort(filter_tags_.begin(), filter_tags_.end(), [](const auto& left, const auto& right) { return _wcsicmp(left.c_str(), right.c_str()) < 0; });
+  filter_tags_ = catalog_ ? presentation::CollectFilterTags(*catalog_, catalog_state_.Read().tags) : std::vector<std::wstring>{};
   if (!tag_filter_) return;
 
   SendMessageW(tag_filter_, CB_RESETCONTENT, 0, 0);
@@ -2231,6 +2198,17 @@ void MainWindow::RefreshTagFilter() {
     }
   }
   SendMessageW(tag_filter_, CB_SETCURSEL, selection, 0);
+}
+presentation::TreeTagFilter MainWindow::CurrentTagFilter() const {
+  presentation::TreeTagFilter filter;
+  if (settings_.simple_mode || !tag_filter_) return filter;
+  const int selection = static_cast<int>(SendMessageW(tag_filter_, CB_GETCURSEL, 0, 0));
+  if (selection == 1) filter.kind = presentation::TreeTagFilterKind::favorites;
+  else if (selection >= 2 && static_cast<size_t>(selection - 2) < filter_tags_.size()) {
+    filter.kind = presentation::TreeTagFilterKind::tag;
+    filter.tag = filter_tags_[selection - 2];
+  }
+  return filter;
 }
 std::optional<size_t> MainWindow::CatalogPosition(std::wstring_view name, std::wstring_view parent) const {
   if (!catalog_) return std::nullopt;
@@ -2269,9 +2247,13 @@ void MainWindow::ToggleFoldersFirstWhenSorting() {
     Message(window_, L"Не удалось сохранить настройку сортировки.", L"ИБ Старт", MB_OK | MB_ICONERROR);
   }
 }
-void MainWindow::AddTreeItems(const std::vector<catalog::TreeItem>& items, HTREEITEM parent, std::wstring_view filter) {
+void MainWindow::AddTreeItems(const std::vector<catalog::TreeItem>& items, HTREEITEM parent, std::wstring_view filter,
+    const presentation::TreeTagFilter& tag_filter) {
+  if (!catalog_) return;
+  const auto& catalog_state = catalog_state_.Read();
   for (const auto& item : items) {
-    if (!ItemMatches(item, filter) || !ItemMatchesTagFilter(item)) continue;
+    if (!presentation::MatchesSearchFilter(*catalog_, item, filter, catalog_state.tags) ||
+        !presentation::MatchesTagFilter(*catalog_, item, tag_filter, catalog_state.tags, filter_favorites_)) continue;
     TVINSERTSTRUCTW row{}; row.hParent = parent; row.hInsertAfter = TVI_LAST;
     row.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE;
     row.item.pszText = const_cast<wchar_t*>(item.name.c_str());
@@ -2279,7 +2261,7 @@ void MainWindow::AddTreeItems(const std::vector<catalog::TreeItem>& items, HTREE
     row.item.iImage = row.item.iSelectedImage = item.database ? DatabaseTreeImage(entry) : kFolderImage;
     const HTREEITEM handle = TreeView_InsertItem(tree_, &row);
     if (!item.database) {
-      AddTreeItems(item.children, handle, filter);
+      AddTreeItems(item.children, handle, filter, tag_filter);
       if (!filter.empty()) TreeView_Expand(tree_, handle, TVE_EXPAND);
     }
   }
@@ -2288,6 +2270,8 @@ void MainWindow::PopulateTree() {
   if (!tree_) return;
   wchar_t text[512]{}; GetWindowTextW(search_, text, 512); search_filter_ = text; const std::wstring_view filter = search_filter_; TreeView_DeleteAllItems(tree_);
   if (catalog_) {
+    const auto tag_filter = CurrentTagFilter();
+    const auto& catalog_state = catalog_state_.Read();
     TVINSERTSTRUCTW catalogRoot{};
     catalogRoot.hParent = TVI_ROOT;
     catalogRoot.hInsertAfter = TVI_LAST;
@@ -2298,7 +2282,7 @@ void MainWindow::PopulateTree() {
     catalogRoot.item.stateMask = TVIS_EXPANDED;
     catalogRoot.item.state = TVIS_EXPANDED;
     const HTREEITEM catalogRootHandle = TreeView_InsertItem(tree_, &catalogRoot);
-    AddTreeItems(catalog_->Tree(), catalogRootHandle, filter);
+    AddTreeItems(catalog_->Tree(), catalogRootHandle, filter, tag_filter);
     if (catalogRootHandle) TreeView_Expand(tree_, catalogRootHandle, TVE_EXPAND);
 
     const auto addSpecialRoot = [&](std::wstring_view rootName, const std::vector<std::wstring>& names, int image, LPARAM itemData = 0) {
@@ -2310,7 +2294,8 @@ void MainWindow::PopulateTree() {
       for (const auto& name : names) {
         const auto* entry = catalog_->Find(name);
         const catalog::TreeItem item{name, true, {}, {}};
-        if (!entry || !entry->IsDatabase() || !ItemMatches(item, filter) || !ItemMatchesTagFilter(item)) continue;
+        if (!entry || !entry->IsDatabase() || !presentation::MatchesSearchFilter(*catalog_, item, filter, catalog_state.tags) ||
+            !presentation::MatchesTagFilter(*catalog_, item, tag_filter, catalog_state.tags, filter_favorites_)) continue;
         TVINSERTSTRUCTW row{}; row.hParent = rootHandle; row.hInsertAfter = TVI_LAST;
         row.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE; row.item.pszText = const_cast<wchar_t*>(entry->name.c_str());
         row.item.iImage = row.item.iSelectedImage = DatabaseTreeImage(entry); TreeView_InsertItem(tree_, &row); any = true;
@@ -2318,10 +2303,9 @@ void MainWindow::PopulateTree() {
       if (any) TreeView_Expand(tree_, rootHandle, TVE_EXPAND); else TreeView_DeleteItem(tree_, rootHandle);
     };
     if (!settings_.simple_mode) {
-      const auto& catalogState = catalog_state_.Read();
-      addSpecialRoot(L"Избранное", catalogState.favorites, kFavoriteImage, kFavoritesRootItemData);
+      addSpecialRoot(L"Избранное", catalog_state.favorites, kFavoriteImage, kFavoritesRootItemData);
       std::vector<std::wstring> recent;
-      for (const auto& history : catalogState.history) for (const auto* entry : catalog_->Databases()) if (entry->ValueOr(L"ID", entry->name) == history.database_id) { recent.push_back(entry->name); break; }
+      for (const auto& history : catalog_state.history) for (const auto* entry : catalog_->Databases()) if (entry->ValueOr(L"ID", entry->name) == history.database_id) { recent.push_back(entry->name); break; }
       addSpecialRoot(L"Недавние", recent, kRecentImage, kRecentRootItemData);
     }
   }
