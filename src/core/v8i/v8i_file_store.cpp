@@ -112,16 +112,18 @@ std::vector<std::filesystem::path> V8iFileStore::Backups() const {
   std::filesystem::directory_iterator it(path_.parent_path(), std::filesystem::directory_options::skip_permission_denied, error);
   if (error) throw std::runtime_error(FilesystemFailure("Cannot enumerate ibases.v8i backups", path_.parent_path(), error));
   const std::filesystem::directory_iterator end;
-  for (; it != end; it.increment(error)) {
-    if (error) throw std::runtime_error(FilesystemFailure("Cannot enumerate ibases.v8i backups", path_.parent_path(), error));
-    if (!it->path().filename().wstring().starts_with(prefix)) continue;
-    if (!it->is_regular_file(error)) {
-      if (error) throw std::runtime_error(FilesystemFailure("Cannot inspect ibases.v8i backup", it->path(), error));
-      continue;
+  while (it != end) {
+    if (it->path().filename().wstring().starts_with(prefix)) {
+      if (!it->is_regular_file(error)) {
+        if (error) throw std::runtime_error(FilesystemFailure("Cannot inspect ibases.v8i backup", it->path(), error));
+      } else {
+        const auto time = it->last_write_time(error);
+        if (error) throw std::runtime_error(FilesystemFailure("Cannot inspect ibases.v8i backup", it->path(), error));
+        dated.emplace_back(time, it->path());
+      }
     }
-    const auto time = it->last_write_time(error);
-    if (error) throw std::runtime_error(FilesystemFailure("Cannot inspect ibases.v8i backup", it->path(), error));
-    dated.emplace_back(time, it->path());
+    it.increment(error);
+    if (error) throw std::runtime_error(FilesystemFailure("Cannot enumerate ibases.v8i backups", path_.parent_path(), error));
   }
   std::sort(dated.begin(), dated.end(), [](const auto& a, const auto& b) { return a.first > b.first; });
   std::vector<std::filesystem::path> result;
