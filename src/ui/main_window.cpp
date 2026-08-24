@@ -1,4 +1,5 @@
 #include "ui/main_window.hpp"
+#include "ui/tree_presentation.hpp"
 
 #include "app/instance_activation.hpp"
 #include "app/resource.h"
@@ -35,6 +36,14 @@
 #include <thread>
 
 namespace ibstart::ui {
+using presentation::ContainsTag;
+using presentation::EraseTagStyle;
+using presentation::KnownTags;
+using presentation::ParseTags;
+using presentation::TagId;
+using presentation::TagStyleFor;
+using presentation::TagsFor;
+using presentation::TagsText;
 namespace {
 constexpr wchar_t kClassName[] = L"IBStart.MainWindow";
 constexpr wchar_t kInputBoxClass[] = L"IBStart.InputBox";
@@ -558,47 +567,6 @@ void ShowAdvancedParameterHelp(HWND owner, int command) {
   }
   Message(owner, text, title, MB_OK | MB_ICONINFORMATION);
 }
-std::vector<std::wstring> ParseTags(std::wstring_view text) {
-  std::vector<std::wstring> result;
-  size_t start = 0;
-  while (start <= text.size()) {
-    const size_t end = text.find_first_of(L",;\r\n", start);
-    const auto tag = TrimText(text.substr(start, end == std::wstring_view::npos ? text.size() - start : end - start));
-    if (!tag.empty() && std::none_of(result.begin(), result.end(), [&](const auto& existing) { return EqualNoCase(existing, tag); })) result.push_back(tag);
-    if (end == std::wstring_view::npos) break;
-    start = end + 1;
-  }
-  return result;
-}
-std::wstring TagsText(const std::vector<std::wstring>& tags) {
-  std::wstring result;
-  for (const auto& tag : tags) {
-    if (!result.empty()) result += L", ";
-    result += tag;
-  }
-  return result;
-}
-std::wstring TagId(const domain::Entry& entry) { return entry.ValueOr(L"ID", entry.name); }
-const std::vector<std::wstring>& TagsFor(const storage::DatabaseTags& tags, const domain::Entry& entry) {
-  static const std::vector<std::wstring> empty;
-  const auto found = tags.find(TagId(entry));
-  return found == tags.end() ? empty : found->second;
-}
-const storage::TagStyle* TagStyleFor(const storage::TagStyles& styles, std::wstring_view tag) {
-  if (const auto exact = styles.find(std::wstring(tag)); exact != styles.end()) return &exact->second;
-  const auto found = std::find_if(styles.begin(), styles.end(), [&](const auto& item) { return EqualNoCase(item.first, tag); });
-  return found == styles.end() ? nullptr : &found->second;
-}
-std::vector<std::wstring> KnownTags(const storage::DatabaseTags& tags, const storage::TagStyles& styles) {
-  std::vector<std::wstring> result;
-  const auto append = [&](std::wstring_view tag) {
-    if (!tag.empty() && std::none_of(result.begin(), result.end(), [&](const auto& existing) { return EqualNoCase(existing, tag); })) result.emplace_back(tag);
-  };
-  for (const auto& [_, values] : tags) for (const auto& tag : values) append(tag);
-  for (const auto& [tag, _] : styles) append(tag);
-  std::sort(result.begin(), result.end(), [](const auto& left, const auto& right) { return _wcsicmp(left.c_str(), right.c_str()) < 0; });
-  return result;
-}
 std::wstring ColorText(COLORREF color) {
   wchar_t value[8]{};
   swprintf_s(value, L"#%02X%02X%02X", GetRValue(color), GetGValue(color), GetBValue(color));
@@ -625,16 +593,6 @@ std::optional<COLORREF> ParseColorText(std::wstring_view value) {
   if (!red || !green || !blue) return std::nullopt;
   return RGB(*red, *green, *blue);
 }
-void EraseTagStyle(storage::TagStyles& styles, std::wstring_view name) {
-  for (auto it = styles.begin(); it != styles.end();) {
-    if (EqualNoCase(it->first, name)) it = styles.erase(it);
-    else ++it;
-  }
-}
-bool ContainsTag(const std::vector<std::wstring>& tags, std::wstring_view value) {
-  return std::any_of(tags.begin(), tags.end(), [&](const auto& tag) { return EqualNoCase(tag, value); });
-}
-
 void RestoreModalOwner(HWND owner) {
   if (!owner || !IsWindow(owner)) return;
   EnableWindow(owner, TRUE);
@@ -2381,162 +2339,8 @@ void MainWindow::PopulateTreeWithoutFlicker(std::wstring_view selected, bool sel
   resumeDrawing();
 }
 LRESULT MainWindow::DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const {
-  if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
-  if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) return (!settings_.simple_mode && settings_.show_tags_in_list) || !search_filter_.empty() ? CDRF_NOTIFYPOSTPAINT : CDRF_DODEFAULT;
-  if (draw->nmcd.dwDrawStage != CDDS_ITEMPOSTPAINT) return CDRF_DODEFAULT;
-
-  const auto item = reinterpret_cast<HTREEITEM>(draw->nmcd.dwItemSpec);
-  wchar_t text[512]{};
-  TVITEMW treeItem{}; treeItem.mask = TVIF_TEXT; treeItem.hItem = item; treeItem.pszText = text; treeItem.cchTextMax = 512;
-  if (!TreeView_GetItem(tree_, &treeItem)) return CDRF_DODEFAULT;
-  const std::wstring_view label(text);
-
-  RECT labelRect{};
-  if (!TreeView_GetItemRect(tree_, item, &labelRect, TRUE)) return CDRF_DODEFAULT;
-  if (catalog_ && TreeItemData(tree_, item) == 0) {
-    if (const auto* entry = catalog_->Find(label); entry && entry->IsDatabase()) {
-      const auto& tags = TagsFor(catalog_state_.Read().tags, *entry);
-      const bool tagMatchesSearch = !search_filter_.empty() && std::any_of(tags.begin(), tags.end(), [&](const auto& tag) {
-        return utf::FindNoCaseOrdinal(tag, search_filter_) != std::wstring_view::npos;
-      });
-      if (!tags.empty() && !settings_.simple_mode && (settings_.show_tags_in_list || tagMatchesSearch)) {
-        RECT client{};
-        GetClientRect(tree_, &client);
-        const int saved = SaveDC(draw->nmcd.hdc);
-        const HFONT font = controls_font_ ? controls_font_ : reinterpret_cast<HFONT>(SendMessageW(tree_, WM_GETFONT, 0, 0));
-        HFONT boldFont{};
-        LOGFONTW boldDescription{};
-        if (font && GetObjectW(font, static_cast<int>(sizeof(boldDescription)), &boldDescription) == static_cast<int>(sizeof(boldDescription))) {
-          boldDescription.lfWeight = FW_BOLD;
-          boldFont = CreateFontIndirectW(&boldDescription);
-        }
-        if (font) SelectObject(draw->nmcd.hdc, font);
-        SetBkMode(draw->nmcd.hdc, TRANSPARENT);
-        int x = labelRect.right + 8;
-        const int labelHeight = static_cast<int>(labelRect.bottom - labelRect.top);
-        const int height = std::max(16, labelHeight - 2);
-        const int y = static_cast<int>(labelRect.top) + (labelHeight - height) / 2;
-        const auto measure = [&](std::wstring_view fragment, HFONT selectedFont) {
-          SIZE size{};
-          const HGDIOBJ previous = selectedFont ? SelectObject(draw->nmcd.hdc, selectedFont) : nullptr;
-          GetTextExtentPoint32W(draw->nmcd.hdc, fragment.data(), static_cast<int>(fragment.size()), &size);
-          if (previous) SelectObject(draw->nmcd.hdc, previous);
-          return size.cx;
-        };
-        const auto tagIsVisible = [&](const std::wstring& tag) {
-          return settings_.show_tags_in_list || (!search_filter_.empty() && utf::FindNoCaseOrdinal(tag, search_filter_) != std::wstring_view::npos);
-        };
-        const int overflowWidth = measure(L"…", font) + 14;
-        const auto drawOverflow = [&](int chipX) {
-          const storage::TagStyle style{};
-          const HBRUSH brush = CreateSolidBrush(style.background);
-          const HPEN pen = CreatePen(PS_SOLID, 1, style.background);
-          if (brush && pen) {
-            const auto oldBrush = SelectObject(draw->nmcd.hdc, brush);
-            const auto oldPen = SelectObject(draw->nmcd.hdc, pen);
-            RoundRect(draw->nmcd.hdc, chipX, y, chipX + overflowWidth, y + height, height, height);
-            SelectObject(draw->nmcd.hdc, oldBrush);
-            SelectObject(draw->nmcd.hdc, oldPen);
-            SetTextColor(draw->nmcd.hdc, style.text);
-            RECT textRect{chipX + 7, y, chipX + overflowWidth - 7, y + height};
-            DrawTextW(draw->nmcd.hdc, L"…", 1, &textRect, DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
-          }
-          if (brush) DeleteObject(brush);
-          if (pen) DeleteObject(pen);
-        };
-        for (size_t tagIndex = 0; tagIndex < tags.size(); ++tagIndex) {
-          const auto& tag = tags[tagIndex];
-          const bool matches = !search_filter_.empty() && utf::FindNoCaseOrdinal(tag, search_filter_) != std::wstring_view::npos;
-          if (!tagIsVisible(tag)) continue;
-          int textWidth = 0;
-          if (matches) {
-            size_t start = 0;
-            size_t match = utf::FindNoCaseOrdinal(tag, search_filter_, start);
-            while (match != std::wstring_view::npos) {
-              textWidth += measure(std::wstring_view(tag).substr(start, match - start), font);
-              textWidth += measure(std::wstring_view(tag).substr(match, search_filter_.size()), boldFont ? boldFont : font);
-              start = match + search_filter_.size();
-              match = utf::FindNoCaseOrdinal(tag, search_filter_, start);
-            }
-            textWidth += measure(std::wstring_view(tag).substr(start), font);
-          } else {
-            textWidth = measure(tag, font);
-          }
-          const int width = textWidth + 14;
-          const bool hasMoreTags = std::any_of(tags.begin() + static_cast<std::ptrdiff_t>(tagIndex + 1), tags.end(), tagIsVisible);
-          if (x + width + (hasMoreTags ? overflowWidth + 4 : 0) > client.right - 4) {
-            if (x + overflowWidth <= client.right - 4) drawOverflow(x);
-            break;
-          }
-          const auto* configured = TagStyleFor(catalog_state_.Read().tag_styles, tag);
-          const storage::TagStyle style = configured ? *configured : storage::TagStyle{};
-          const HBRUSH brush = CreateSolidBrush(style.background);
-          const HPEN pen = CreatePen(PS_SOLID, 1, style.background);
-          if (brush && pen) {
-            const auto oldBrush = SelectObject(draw->nmcd.hdc, brush);
-            const auto oldPen = SelectObject(draw->nmcd.hdc, pen);
-            RoundRect(draw->nmcd.hdc, x, y, x + width, y + height, height, height);
-            SelectObject(draw->nmcd.hdc, oldBrush);
-            SelectObject(draw->nmcd.hdc, oldPen);
-            SetTextColor(draw->nmcd.hdc, style.text);
-            int textX = x + 7;
-            const auto drawSegment = [&](std::wstring_view fragment, HFONT selectedFont) {
-              if (fragment.empty()) return;
-              const HGDIOBJ previous = selectedFont ? SelectObject(draw->nmcd.hdc, selectedFont) : nullptr;
-              SIZE size{};
-              GetTextExtentPoint32W(draw->nmcd.hdc, fragment.data(), static_cast<int>(fragment.size()), &size);
-              RECT textRect{textX, y, textX + size.cx, y + height};
-              DrawTextW(draw->nmcd.hdc, fragment.data(), static_cast<int>(fragment.size()), &textRect, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-              textX += size.cx;
-              if (previous) SelectObject(draw->nmcd.hdc, previous);
-            };
-            if (matches) {
-              size_t start = 0;
-              size_t match = utf::FindNoCaseOrdinal(tag, search_filter_, start);
-              while (match != std::wstring_view::npos) {
-                drawSegment(std::wstring_view(tag).substr(start, match - start), font);
-                drawSegment(std::wstring_view(tag).substr(match, search_filter_.size()), boldFont ? boldFont : font);
-                start = match + search_filter_.size();
-                match = utf::FindNoCaseOrdinal(tag, search_filter_, start);
-              }
-              drawSegment(std::wstring_view(tag).substr(start), font);
-            } else {
-              drawSegment(tag, font);
-            }
-          }
-          if (brush) DeleteObject(brush);
-          if (pen) DeleteObject(pen);
-          x += width + 4;
-        }
-        if (boldFont) DeleteObject(boldFont);
-        RestoreDC(draw->nmcd.hdc, saved);
-      }
-    }
-  }
-  if (search_filter_.empty() || utf::FindNoCaseOrdinal(label, search_filter_) == std::wstring_view::npos) return CDRF_DODEFAULT;
-  const int saved = SaveDC(draw->nmcd.hdc);
-  if (const auto font = reinterpret_cast<HFONT>(SendMessageW(tree_, WM_GETFONT, 0, 0))) SelectObject(draw->nmcd.hdc, font);
-  SetBkMode(draw->nmcd.hdc, TRANSPARENT);
-  SetTextColor(draw->nmcd.hdc, RGB(0, 97, 0));
-  const HBRUSH matchBrush = CreateSolidBrush(RGB(198, 239, 206));
-  if (!matchBrush) { RestoreDC(draw->nmcd.hdc, saved); return CDRF_DODEFAULT; }
-
-  size_t start = 0;
-  size_t match = utf::FindNoCaseOrdinal(label, search_filter_, start);
-  while (match != std::wstring_view::npos) {
-    SIZE prefixSize{}, matchSize{};
-    GetTextExtentPoint32W(draw->nmcd.hdc, label.data(), static_cast<int>(match), &prefixSize);
-    GetTextExtentPoint32W(draw->nmcd.hdc, label.data() + match, static_cast<int>(search_filter_.size()), &matchSize);
-    RECT matchRect{labelRect.left + prefixSize.cx, labelRect.top + 1, labelRect.left + prefixSize.cx + matchSize.cx, labelRect.bottom - 1};
-    FillRect(draw->nmcd.hdc, &matchRect, matchBrush);
-    RECT textRect{matchRect.left, labelRect.top, matchRect.right, labelRect.bottom};
-    DrawTextW(draw->nmcd.hdc, label.data() + match, static_cast<int>(search_filter_.size()), &textRect, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-    start = match + search_filter_.size();
-    match = utf::FindNoCaseOrdinal(label, search_filter_, start);
-  }
-  DeleteObject(matchBrush);
-  RestoreDC(draw->nmcd.hdc, saved);
-  return CDRF_DODEFAULT;
+  return presentation::DrawTreeSearchMatches(tree_, draw, catalog_ ? &*catalog_ : nullptr, settings_,
+      catalog_state_.Read().tags, catalog_state_.Read().tag_styles, search_filter_, controls_font_);
 }
 LRESULT MainWindow::DrawDetailsList(NMLVCUSTOMDRAW* draw) const {
   if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
