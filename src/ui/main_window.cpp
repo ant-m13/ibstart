@@ -68,7 +68,7 @@ constexpr UINT kCacheOperationFinishedMessage = WM_APP + 26;
 constexpr int kMinimumWindowWidth = 940;
 constexpr int kMinimumSimpleWindowWidth = 520;
 constexpr int kMinimumWindowHeight = 460;
-enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kCheckForUpdates, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kCopyDetailValue, kCopyDetailPair, kEditTags, kConfigureTagColors, kSortAscending, kSortDescending, kToggleFoldersFirstWhenSorting, kMoveToFolder, kOpenStandardList, kShowTagsInList, kNewTagForSelected, kFavorite1 = 200 };
+enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddDatabase, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kCheckForUpdates, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kCopyDetailValue, kCopyDetailPair, kEditTags, kConfigureTagColors, kSortAscending, kSortDescending, kToggleFoldersFirstWhenSorting, kMoveToFolder, kOpenStandardList, kShowTagsInList, kNewTagForSelected, kFavorite1 = 200 };
 constexpr UINT kRecentList1 = 300;
 constexpr UINT kQuickTag1 = 400;
 constexpr UINT kTagsContextMenu = 250;
@@ -1489,7 +1489,7 @@ int MainWindow::Show(int show_command) {
   constexpr BYTE controlShift = FVIRTKEY | FCONTROL | FSHIFT;
   constexpr BYTE altShift = FVIRTKEY | FALT | FSHIFT;
   ACCEL accelerators[] = {{FVIRTKEY, VK_F1, kAbout}, {FVIRTKEY, VK_F2, kEdit}, {FVIRTKEY, VK_F3, kEnterprise}, {FVIRTKEY, VK_F4, kDesigner}, {FVIRTKEY, VK_F5, kRefresh},
-      {control, 'F', kFocusSearch}, {control, 'O', kOpenList}, {controlAlt, 'F', kAddFile}, {controlAlt, 'S', kAddServer}, {controlAlt, 'G', kAddGroup},
+      {control, 'F', kFocusSearch}, {control, 'O', kOpenList}, {controlAlt, 'F', kAddDatabase}, {controlAlt, 'G', kAddGroup},
       {controlAlt, 'I', kToggleFavorite}, {controlAlt, 'M', kSimpleMode}, {controlShift, VK_DELETE, kCache}, {controlShift, 'S', kShortcut}, {controlShift, 'O', kOpenFolder},
       {controlShift, VK_UP, kMoveUp}, {controlShift, VK_DOWN, kMoveDown}, {altShift, VK_DELETE, kDelete},
       {static_cast<BYTE>(FVIRTKEY | FALT), '1', kFavorite1}, {static_cast<BYTE>(FVIRTKEY | FALT), '2', kFavorite1 + 1}, {static_cast<BYTE>(FVIRTKEY | FALT), '3', kFavorite1 + 2},
@@ -1559,7 +1559,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       if (reinterpret_cast<HWND>(lparam) == tag_filter_ && HIWORD(wparam) == CBN_SELCHANGE) { PopulateTree(); return 0; }
       switch (LOWORD(wparam)) {
         case kEnterprise: LaunchSelected(domain::LaunchMode::enterprise); break; case kDesigner: LaunchSelected(domain::LaunchMode::designer); break;
-        case kAddFile: AddFileDatabase(); break; case kAddServer: AddServerDatabase(); break; case kAddGroup: AddGroup(); break; case kOpenList: OpenList(); break; case kOpenStandardList: OpenStandardList(); break;
+        case kAddDatabase: AddDatabase(); break; case kAddGroup: AddGroup(); break; case kOpenList: OpenList(); break; case kOpenStandardList: OpenStandardList(); break;
         case kRefresh: {
           const std::wstring selected = SelectedName();
           LoadCatalog();
@@ -2509,8 +2509,7 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
     append(true, false, kSortDescending, 0, L"Сортировать по убыванию");
   }
   separator();
-  append(!settings_.simple_mode, false, kAddFile, IDI_ACTION_ADD, group ? L"Добавить файловую базу в группу…" : L"Добавить файловую базу…", L"Ctrl+Alt+F");
-  append(!settings_.simple_mode, false, kAddServer, IDI_ACTION_ADD, group ? L"Добавить серверную базу в группу…" : L"Добавить серверную базу…", L"Ctrl+Alt+S");
+  append(!settings_.simple_mode, false, kAddDatabase, IDI_ACTION_ADD, group ? L"Добавить базу в группу…" : L"Добавить базу…", L"Ctrl+Alt+F");
   append(!settings_.simple_mode, false, kAddGroup, IDI_TREE_FOLDER, group ? L"Добавить вложенную группу…" : L"Добавить группу…", L"Ctrl+Alt+G");
   separator();
   append(true, false, kRefresh, IDI_ACTION_REFRESH, L"Обновить список", L"F5");
@@ -2522,8 +2521,7 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   if (!command) return;
   const size_t quickTagIndex = command >= kQuickTag1 ? static_cast<size_t>(command - kQuickTag1) : quick_tags.size();
   if (quickTagIndex < quick_tags.size()) AddTagToSelected(quick_tags[quickTagIndex]);
-  else if (command == kAddFile) AddFileDatabase(addParent);
-  else if (command == kAddServer) AddServerDatabase(addParent);
+  else if (command == kAddDatabase) AddDatabase(addParent);
   else if (command == kAddGroup) AddGroup(addParent);
   else if (sortTarget && command == kSortAscending) SortFolder(sortParent, catalog::SortDirection::ascending);
   else if (sortTarget && command == kSortDescending) SortFolder(sortParent, catalog::SortDirection::descending);
@@ -2655,20 +2653,11 @@ void MainWindow::OpenSelectedFolder() {
   const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
   if (result <= 32) Message(window_, L"Не удалось открыть каталог базы.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
 }
-void MainWindow::AddFileDatabase(std::wstring parent) {
-  AddDatabase(NewDatabaseKind::file, std::move(parent));
-}
-
-void MainWindow::AddServerDatabase(std::wstring parent) {
-  AddDatabase(NewDatabaseKind::server, std::move(parent));
-}
-
-void MainWindow::AddDatabase(NewDatabaseKind kind, std::wstring parent) {
+void MainWindow::AddDatabase(std::wstring parent) {
   if (settings_.simple_mode || !catalog_) return;
   DatabaseEditorData initial;
-  const bool file_default = kind == NewDatabaseKind::file;
-  initial.name = NextName(file_default ? L"Файловая база" : L"Серверная база");
-  initial.kind = file_default ? DatabaseConnectionKind::file : DatabaseConnectionKind::server;
+  initial.name = NextName(L"Файловая база");
+  initial.kind = DatabaseConnectionKind::file;
   auto entered = EditDatabase(window_, L"Добавление информационной базы", std::move(initial), platforms_);
   if (!entered) return;
   bool added = false;
@@ -2966,8 +2955,7 @@ void MainWindow::RefreshFileMenu() {
   }
   if (!settings_.simple_mode) {
     AppendMenuW(file_menu_, MF_SEPARATOR, 0, nullptr);
-    append(true, false, kAddFile, IDI_ACTION_ADD, L"Добавить файловую базу…", L"Ctrl+Alt+F");
-    append(true, false, kAddServer, IDI_ACTION_ADD, L"Добавить серверную базу…", L"Ctrl+Alt+S");
+    append(true, false, kAddDatabase, IDI_ACTION_ADD, L"Добавить базу…", L"Ctrl+Alt+F");
     append(true, false, kAddGroup, IDI_TREE_FOLDER, L"Добавить группу…", L"Ctrl+Alt+G");
     AppendMenuW(file_menu_, MF_SEPARATOR, 0, nullptr);
     append(true, false, kRefresh, IDI_ACTION_REFRESH, L"Обновить список", L"F5");
@@ -2983,7 +2971,8 @@ void MainWindow::RefreshMainMenuBar() {
   main_menu_items_.Clear();
   const auto append = [&](HMENU target, UINT command, int iconResource, std::wstring text, std::wstring shortcut = {}, bool checked = false) {
     main_menu_items_.Append(target, command, iconResource == 0 ? nullptr : LoadResourceIcon(instance_, iconResource, 20),
-        std::move(text), std::move(shortcut), MenuIconForCommand(command), true, checked);
+        std::move(text), std::move(shortcut), MenuIconForCommand(command), true, checked, nullptr,
+        command == kToggleFoldersFirstWhenSorting);
   };
   if (settings_.simple_mode) {
     append(view_menu_, kSimpleMode, 0, L"Выйти из простого режима", L"Ctrl+Alt+M", true);

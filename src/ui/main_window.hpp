@@ -31,7 +31,6 @@ class MainWindow {
   void Activate();
 
  private:
-  enum class NewDatabaseKind { file, server };
   struct UpdateCheckState;
   struct CacheOperationState;
 
@@ -68,9 +67,7 @@ class MainWindow {
   void CopySelectedDetail(bool include_name);
   void DisplaySelected();
   void LaunchSelected(domain::LaunchMode mode);
-  void AddDatabase(NewDatabaseKind kind, std::wstring parent);
-  void AddFileDatabase(std::wstring parent = {});
-  void AddServerDatabase(std::wstring parent = {});
+  void AddDatabase(std::wstring parent = {});
   void AddGroup(std::wstring parent = {});
   void EditSelected();
   void EditSelectedTags();
