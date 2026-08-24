@@ -198,30 +198,11 @@ std::optional<std::string> ReadJsonRawString(std::string_view json, size_t& posi
   return std::nullopt;
 }
 
-std::optional<int> ReadJsonIntegerValue(std::string_view json, size_t& position) {
-  SkipJsonWhitespace(json, position);
-  const size_t begin = position;
-  if (position < json.size() && json[position] == '-') ++position;
-  const size_t digits = position;
-  while (position < json.size() && json[position] >= '0' && json[position] <= '9') ++position;
-  if (position == digits) return std::nullopt;
-  try {
-    return std::stoi(std::string(json.substr(begin, position - begin)));
-  } catch (const std::exception&) {
-    return std::nullopt;
-  }
-}
-
 bool ConsumeJsonCharacter(std::string_view json, size_t& position, char expected) {
   SkipJsonWhitespace(json, position);
   if (position >= json.size() || json[position] != expected) return false;
   ++position;
   return true;
-}
-
-std::optional<SortMode> ParseSortMode(int value) {
-  if (value < static_cast<int>(SortMode::catalog_order) || value > static_cast<int>(SortMode::last_launch)) return std::nullopt;
-  return static_cast<SortMode>(value);
 }
 
 }  // namespace
@@ -375,23 +356,6 @@ CatalogState LoadCatalogState(const StorageLayout& layout) {
     }
   }
 
-  if (const auto mode = JsonInteger(json, "default_sort_mode")) if (const auto parsed = ParseSortMode(*mode)) result.sorting.default_mode = *parsed;
-  constexpr std::string_view folder_key = "\"folder\"";
-  size_t folder_scan = 0;
-  while ((folder_scan = json.find(folder_key, folder_scan)) != std::string::npos) {
-    folder_scan += folder_key.size();
-    size_t position = folder_scan;
-    if (!ConsumeJsonCharacter(json, position, ':')) continue;
-    const auto raw_name = ReadJsonRawString(json, position);
-    if (!raw_name || !ConsumeJsonCharacter(json, position, ',')) continue;
-    const auto mode_key = ReadJsonRawString(json, position);
-    if (!mode_key || *mode_key != "mode" || !ConsumeJsonCharacter(json, position, ':')) continue;
-    const auto raw_mode = ReadJsonIntegerValue(json, position);
-    const auto name = TryUnescape(*raw_name);
-    if (name && !name->empty() && raw_mode) {
-      if (const auto mode = ParseSortMode(*raw_mode)) result.sorting.folder_modes[*name] = *mode;
-    }
-  }
   for (const auto& history : result.history) if (!history.database_id.empty() && !result.last_launches.contains(history.database_id)) result.last_launches[history.database_id] = history.timestamp;
   return result;
 }
@@ -434,14 +398,7 @@ void SaveCatalogState(const StorageLayout& layout, const CatalogState& state) {
     if (written++) json += ", ";
     json += "{\"tag_style\": \"" + Escape(tag) + "\", \"background\": " + std::to_string(style.background) + ", \"text\": " + std::to_string(style.text) + "}";
   }
-  json += "],\n  \"sorting\": {\"default_sort_mode\": " + std::to_string(static_cast<int>(state.sorting.default_mode)) + ", \"folders\": [";
-  written = 0;
-  for (const auto& [folder, mode] : state.sorting.folder_modes) {
-    if (folder.empty()) continue;
-    if (written++) json += ", ";
-    json += "{\"folder\": \"" + Escape(folder) + "\", \"mode\": " + std::to_string(static_cast<int>(mode)) + "}";
-  }
-  json += "]}\n}\n";
+  json += "]\n}\n";
   WriteAtomically(PathFor(layout, L"catalog-state.json"), json);
 }
 
@@ -472,7 +429,5 @@ void SaveTagsAndStyles(const StorageLayout& layout, const DatabaseTags& tags, co
   state.tag_styles = styles;
   SaveCatalogState(layout, state);
 }
-SortSettings LoadSortSettings(const StorageLayout& layout) { return LoadCatalogState(layout).sorting; }
-void SaveSortSettings(const StorageLayout& layout, const SortSettings& settings) { auto state = LoadCatalogState(layout); state.sorting = settings; SaveCatalogState(layout, state); }
 
 }  // namespace ibstart::storage

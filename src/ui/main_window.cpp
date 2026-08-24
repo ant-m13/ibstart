@@ -49,7 +49,7 @@ constexpr UINT kCacheOperationFinishedMessage = WM_APP + 26;
 constexpr int kMinimumWindowWidth = 940;
 constexpr int kMinimumSimpleWindowWidth = 520;
 constexpr int kMinimumWindowHeight = 460;
-enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kCheckForUpdates, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kCopyDetailValue, kCopyDetailPair, kEditTags, kConfigureTagColors, kFolderSortDefault, kFolderSortCatalog, kFolderSortName, kFolderSortLastLaunch, kFolderSortMenu, kApplyCurrentSort, kMoveToFolder, kOpenStandardList, kShowTagsInList, kNewTagForSelected, kFavorite1 = 200 };
+enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddFile, kAddServer, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kCheckForUpdates, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kCopyDetailValue, kCopyDetailPair, kEditTags, kConfigureTagColors, kSortAscending, kSortDescending, kToggleFoldersFirstWhenSorting, kMoveToFolder, kOpenStandardList, kShowTagsInList, kNewTagForSelected, kFavorite1 = 200 };
 constexpr UINT kRecentList1 = 300;
 constexpr UINT kQuickTag1 = 400;
 constexpr UINT kTagsContextMenu = 250;
@@ -57,6 +57,8 @@ constexpr UINT kRecentListsMenu = 299;
 enum TreeImage : int { kFileDatabaseImage, kServerDatabaseImage, kWebDatabaseImage, kFolderImage, kFavoriteImage, kRecentImage };
 constexpr LPARAM kRecentRootItemData = 1;
 constexpr LPARAM kFavoritesRootItemData = 2;
+constexpr LPARAM kCatalogRootItemData = 3;
+constexpr wchar_t kCatalogRootName[] = L"Информационные базы";
 
 void Message(HWND owner, std::wstring_view text, std::wstring_view title = L"ИБ Старт", UINT type = MB_OK | MB_ICONINFORMATION) { MessageBoxW(owner, std::wstring(text).c_str(), std::wstring(title).c_str(), type); }
 std::wstring WideErrorText(std::string_view message) noexcept {
@@ -215,7 +217,10 @@ LPARAM TreeItemData(HWND tree, HTREEITEM item) {
   return TreeView_GetItem(tree, &data) ? data.lParam : 0;
 }
 bool IsVirtualTreeBranch(HWND tree, HTREEITEM item) {
-  for (auto current = item; current; current = TreeView_GetParent(tree, current)) if (TreeItemData(tree, current) != 0) return true;
+  for (auto current = item; current; current = TreeView_GetParent(tree, current)) {
+    const LPARAM data = TreeItemData(tree, current);
+    if (data == kRecentRootItemData || data == kFavoritesRootItemData) return true;
+  }
   return false;
 }
 void SetControlFont(HWND control, HFONT font) {
@@ -1729,7 +1734,7 @@ MainWindow::MainWindow(HINSTANCE instance, std::filesystem::path executable, sto
 MainWindow::~MainWindow() {
   CancelTreeDrag();
   if (window_ && IsWindow(window_)) {
-    settings_.selected_entry = SelectedName();
+    settings_.selected_entry = catalog_ && catalog_->Find(SelectedName()) ? SelectedName() : std::wstring();
     DestroyWindow(window_);
   }
   ClearContextMenuItems();
@@ -1834,11 +1839,6 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       }
       if (reinterpret_cast<HWND>(lparam) == connection_ && HIWORD(wparam) == EN_SETFOCUS) { SendMessageW(connection_, EM_SETSEL, 0, -1); return 0; }
       if (reinterpret_cast<HWND>(lparam) == tag_filter_ && HIWORD(wparam) == CBN_SELCHANGE) { PopulateTree(); return 0; }
-      if (reinterpret_cast<HWND>(lparam) == sort_mode_ && HIWORD(wparam) == CBN_SELCHANGE) {
-        const int selection = static_cast<int>(SendMessageW(sort_mode_, CB_GETCURSEL, 0, 0));
-        if (selection >= static_cast<int>(storage::SortMode::catalog_order) && selection <= static_cast<int>(storage::SortMode::last_launch)) SetDefaultSortMode(static_cast<storage::SortMode>(selection));
-        return 0;
-      }
       switch (LOWORD(wparam)) {
         case kEnterprise: LaunchSelected(domain::LaunchMode::enterprise); break; case kDesigner: LaunchSelected(domain::LaunchMode::designer); break;
         case kAddFile: AddFileDatabase(); break; case kAddServer: AddServerDatabase(); break; case kAddGroup: AddGroup(); break; case kOpenList: OpenList(); break; case kOpenStandardList: OpenStandardList(); break;
@@ -1852,7 +1852,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
         case kCopyDetailValue: CopySelectedDetail(false); break; case kCopyDetailPair: CopySelectedDetail(true); break; case kEditTags: EditSelectedTags(); break; case kConfigureTagColors: ConfigureTagColors(); break;
         case kSimpleMode: SetSimpleMode(!settings_.simple_mode); break; case kToggleFavorite: ToggleFavorite(); break; case kShowTagsInList: ToggleTagDisplay(); break; case kFocusSearch: SetFocus(search_); break; case kCheckForUpdates: CheckForUpdates(); break; case kAbout: ShowAbout(); break;
         case kMoveUp: MoveSelected(-1); break; case kMoveDown: MoveSelected(1); break; case kMoveToFolder: MoveSelectedToFolder(); break; case kNewTagForSelected: AddNewTagToSelected(); break;
-        case kApplyCurrentSort: ApplyCurrentSortToFile(); break;
+        case kToggleFoldersFirstWhenSorting: ToggleFoldersFirstWhenSorting(); break;
         default:
           if (LOWORD(wparam) >= kFavorite1 && LOWORD(wparam) < kFavorite1 + 9) LaunchFavorite(LOWORD(wparam) - kFavorite1);
           else if (LOWORD(wparam) >= kRecentList1 && LOWORD(wparam) < kRecentList1 + 10) OpenRecentList(LOWORD(wparam) - kRecentList1);
@@ -1862,6 +1862,10 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       if (lparam && reinterpret_cast<NMHDR*>(lparam)->hwndFrom == tree_) {
         const auto* notification = reinterpret_cast<NMHDR*>(lparam);
         if (notification->code == NM_CUSTOMDRAW) return DrawTreeSearchMatches(reinterpret_cast<NMTVCUSTOMDRAW*>(lparam));
+        if (notification->code == TVN_ITEMEXPANDINGW) {
+          const auto* expanding = reinterpret_cast<NMTREEVIEWW*>(lparam);
+          if (expanding && TreeItemData(tree_, expanding->itemNew.hItem) == kCatalogRootItemData && expanding->action == TVE_COLLAPSE) return TRUE;
+        }
         if (notification->code == TVN_SELCHANGEDW) { DisplaySelected(); return 0; }
         if (notification->code == TVN_GETINFOTIPW) {
           const auto* hint = reinterpret_cast<NMTVGETINFOTIPW*>(lparam);
@@ -1960,13 +1964,13 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
         Message(window_, L"Дождитесь завершения очистки кэша перед закрытием приложения.", L"Очистка кэша", MB_OK | MB_ICONINFORMATION);
         return 0;
       }
-      settings_.selected_entry = SelectedName();
+      settings_.selected_entry = catalog_ && catalog_->Find(SelectedName()) ? SelectedName() : std::wstring();
       DestroyWindow(window);
       return 0;
     case WM_DESTROY: {
       WINDOWPLACEMENT placement{sizeof(placement)};
       if (GetWindowPlacement(window, &placement)) { const RECT& rect = placement.rcNormalPosition; settings_.window_x = rect.left; settings_.window_y = rect.top; settings_.window_width = rect.right - rect.left; settings_.window_height = rect.bottom - rect.top; }
-      if (tree_ && IsWindow(tree_)) settings_.selected_entry = SelectedName();
+      if (tree_ && IsWindow(tree_)) settings_.selected_entry = catalog_ && catalog_->Find(SelectedName()) ? SelectedName() : std::wstring();
       try { storage::SaveSettings(layout_, settings_); } catch (...) {}
       window_ = nullptr;
       PostQuitMessage(0); return 0;
@@ -1984,12 +1988,6 @@ void MainWindow::CreateControls() {
   SendMessageW(tag_filter_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Все базы"));
   SendMessageW(tag_filter_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Избранные"));
   SendMessageW(tag_filter_, CB_SETCURSEL, 0, 0);
-  sort_label_ = CreateWindowW(L"STATIC", L"Сортировка:", WS_CHILD | WS_VISIBLE, 388, 42, 86, 20, window_, nullptr, instance_, nullptr);
-  sort_mode_ = CreateWindowExW(0, WC_COMBOBOXW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST, 476, 39, 230, 100, window_, nullptr, instance_, nullptr);
-  SendMessageW(sort_mode_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Исходный порядок"));
-  SendMessageW(sort_mode_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"По названию"));
-  SendMessageW(sort_mode_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"По последнему запуску"));
-  SendMessageW(sort_mode_, CB_SETCURSEL, 0, 0);
   tree_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS | TVS_INFOTIP, 8, 74, 360, 420, window_, nullptr, instance_, nullptr);
   TreeView_SetExtendedStyle(tree_, TVS_EX_DOUBLEBUFFER, TVS_EX_DOUBLEBUFFER);
   details_title_ = CreateWindowW(L"STATIC", L"Выберите базу или группу", WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX,
@@ -2003,7 +2001,7 @@ void MainWindow::CreateControls() {
   controls_font_ = CreateUiFont(window_, 9, FW_NORMAL);
   button_font_ = CreateUiFont(window_, 9, FW_NORMAL);
   if (controls_font_) {
-    for (const HWND control : {searchLabel, search_, tag_filter_label_, tag_filter_, sort_label_, sort_mode_, tree_, details_, connection_}) {
+    for (const HWND control : {searchLabel, search_, tag_filter_label_, tag_filter_, tree_, details_, connection_}) {
       if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(controls_font_), TRUE);
     }
   }
@@ -2135,7 +2133,7 @@ void MainWindow::Layout(int width, int height) {
   const int detailsHeight = std::max(42, buttonsY - detailsY - 10);
   const int keyWidth = std::clamp(rightWidth * 35 / 100, 80, 190);
 
-  HDWP positions = BeginDeferWindowPos(14);
+  HDWP positions = BeginDeferWindowPos(13);
   const auto defer = [&positions](HWND control, int x, int y, int controlWidth, int controlHeight) {
     if (!positions || !control) return;
     positions = DeferWindowPos(positions, control, nullptr, x, y, std::max(1, controlWidth), std::max(1, controlHeight),
@@ -2143,7 +2141,6 @@ void MainWindow::Layout(int width, int height) {
   };
   defer(search_, 58, 7, width - 66, 25);
   defer(tag_filter_, 116, 39, 258, 25);
-  defer(sort_mode_, 476, 39, std::max(1, std::min(260, width - 484)), 25);
   defer(tree_, 8, top, leftWidth, height - top - bottom);
   defer(details_title_, rightX + 10, top + 7, rightWidth - 20, 26);
   defer(details_subtitle_, rightX + 10, top + 34, rightWidth - 20, 20);
@@ -2156,7 +2153,6 @@ void MainWindow::Layout(int width, int height) {
     // complete fallback layout instead of leaving controls at old positions.
     MoveWindow(search_, 58, 7, std::max(1, width - 66), 25, TRUE);
     MoveWindow(tag_filter_, 116, 39, 258, 25, TRUE);
-    MoveWindow(sort_mode_, 476, 39, std::max(1, std::min(260, width - 484)), 25, TRUE);
     MoveWindow(tree_, 8, top, leftWidth, std::max(1, height - top - bottom), TRUE);
     MoveWindow(details_title_, rightX + 10, top + 7, std::max(1, rightWidth - 20), 26, TRUE);
     MoveWindow(details_subtitle_, rightX + 10, top + 34, std::max(1, rightWidth - 20), 20, TRUE);
@@ -2195,10 +2191,7 @@ void MainWindow::LoadCatalog(bool report_error) {
     }
     tags_ = storage::LoadTags(layout_);
     tag_styles_ = storage::LoadTagStyles(layout_);
-    sort_settings_ = storage::LoadSortSettings(layout_);
-    last_launches_ = storage::LoadLastLaunchTimes(layout_);
     RefreshTagFilter();
-    RefreshSortControl();
     PopulateTree();
     if (!hasInitialLaunch) {
       const std::wstring& restore = selected.empty() ? settings_.selected_entry : selected;
@@ -2293,72 +2286,6 @@ void MainWindow::RefreshTagFilter() {
   }
   SendMessageW(tag_filter_, CB_SETCURSEL, selection, 0);
 }
-void MainWindow::RefreshSortControl() {
-  if (sort_mode_) SendMessageW(sort_mode_, CB_SETCURSEL, static_cast<WPARAM>(sort_settings_.default_mode), 0);
-}
-storage::SortMode MainWindow::SortModeForFolder(std::wstring_view folder) const {
-  const auto found = sort_settings_.folder_modes.find(std::wstring(folder));
-  return found == sort_settings_.folder_modes.end() ? sort_settings_.default_mode : found->second;
-}
-void MainWindow::SortTreeItems(std::vector<catalog::TreeItem>& items, std::wstring_view parent) const {
-  for (auto& item : items) if (!item.database) SortTreeItems(item.children, item.name);
-  const auto mode = SortModeForFolder(parent);
-  const auto foldersFirst = [](const catalog::TreeItem& left, const catalog::TreeItem& right) {
-    return left.database != right.database && !left.database;
-  };
-  // The catalog order is the explicitly saved manual order.  Do not move
-  // folders ahead of databases here: manual placement may intentionally put a
-  // database above a folder.
-  if (mode == storage::SortMode::catalog_order) return;
-  const auto nameLess = [](const catalog::TreeItem& left, const catalog::TreeItem& right) { return _wcsicmp(left.name.c_str(), right.name.c_str()) < 0; };
-  if (mode == storage::SortMode::name) {
-    std::stable_sort(items.begin(), items.end(), [&](const auto& left, const auto& right) {
-      if (left.database != right.database) return !left.database;
-      return nameLess(left, right);
-    });
-    return;
-  }
-  const auto lastLaunch = [&](const catalog::TreeItem& item) -> std::optional<std::chrono::system_clock::time_point> {
-    if (!item.database || !catalog_) return std::nullopt;
-    const auto* entry = catalog_->Find(item.name);
-    if (!entry) return std::nullopt;
-    const auto found = last_launches_.find(entry->ValueOr(L"ID", entry->name));
-    return found == last_launches_.end() ? std::nullopt : std::optional(found->second);
-  };
-  std::stable_sort(items.begin(), items.end(), [&](const auto& left, const auto& right) {
-    if (left.database != right.database) return !left.database;
-    if (!left.database) return nameLess(left, right);
-    const auto leftTime = lastLaunch(left);
-    const auto rightTime = lastLaunch(right);
-    if (leftTime && rightTime && *leftTime != *rightTime) return *leftTime > *rightTime;
-    if (leftTime.has_value() != rightTime.has_value()) return leftTime.has_value();
-    return nameLess(left, right);
-  });
-}
-std::vector<catalog::TreeItem> MainWindow::SortedTree() const {
-  if (!catalog_) return {};
-  auto items = catalog_->Tree();
-  if (!settings_.simple_mode) SortTreeItems(items, L"");
-  return items;
-}
-std::vector<std::wstring> MainWindow::SortedChildNames(std::wstring_view parent) const {
-  const auto items = SortedTree();
-  const auto find = [&](auto&& self, const std::vector<catalog::TreeItem>& siblings) -> const std::vector<catalog::TreeItem>* {
-    for (const auto& item : siblings) {
-      if (!item.database && EqualNoCase(item.name, parent)) return &item.children;
-      if (!item.database) {
-        if (const auto* found = self(self, item.children)) return found;
-      }
-    }
-    return nullptr;
-  };
-  const auto* children = parent.empty() ? &items : find(find, items);
-  if (!children) return {};
-  std::vector<std::wstring> names;
-  names.reserve(children->size());
-  for (const auto& item : *children) names.push_back(item.name);
-  return names;
-}
 std::optional<size_t> MainWindow::CatalogPosition(std::wstring_view name, std::wstring_view parent) const {
   if (!catalog_) return std::nullopt;
   const auto find = [&](auto&& self, const std::vector<catalog::TreeItem>& items, std::wstring_view currentParent) -> std::optional<size_t> {
@@ -2371,62 +2298,32 @@ std::optional<size_t> MainWindow::CatalogPosition(std::wstring_view name, std::w
   };
   return find(find, catalog_->Tree(), L"");
 }
-void MainWindow::SetDefaultSortMode(storage::SortMode mode) {
-  if (sort_settings_.default_mode == mode) return;
-  const auto previous = sort_settings_;
-  sort_settings_.default_mode = mode;
-  try {
-    storage::SaveSortSettings(layout_, sort_settings_);
-  } catch (const std::exception& error) {
-    sort_settings_ = previous;
-    RefreshSortControl();
-    logger_.Error(L"Ошибка сохранения сортировки: " + ibstart::utf::FromUtf8(error.what()));
-    Message(window_, L"Не удалось сохранить настройку сортировки.", L"ИБ Старт", MB_OK | MB_ICONERROR);
-    return;
-  }
-  const auto selected = SelectedName();
-  PopulateTree();
-  SelectTreeItem(selected);
-  SetStatus(L"Общая сортировка списка изменена.");
-}
-void MainWindow::SetFolderSortMode(std::wstring_view folder, std::optional<storage::SortMode> mode) {
-  if (folder.empty()) return;
-  const auto previous = sort_settings_;
-  if (mode) sort_settings_.folder_modes[std::wstring(folder)] = *mode;
-  else sort_settings_.folder_modes.erase(std::wstring(folder));
-  try {
-    storage::SaveSortSettings(layout_, sort_settings_);
-  } catch (const std::exception& error) {
-    sort_settings_ = previous;
-    logger_.Error(L"Ошибка сохранения сортировки папки: " + ibstart::utf::FromUtf8(error.what()));
-    Message(window_, L"Не удалось сохранить сортировку папки.", L"ИБ Старт", MB_OK | MB_ICONERROR);
-    return;
-  }
-  PopulateTree();
-  SelectTreeItem(folder);
-  SetStatus(L"Сортировка папки изменена.");
-}
-void MainWindow::ApplyCurrentSortToFile() {
-  if (settings_.simple_mode || !catalog_) return;
-  const HTREEITEM selectedItem = TreeView_GetSelection(tree_);
-  if (TreeItemData(tree_, selectedItem) != 0) {
-    Message(window_, L"Выберите папку, базу или свободное место в основном списке.", L"Сортировка", MB_OK | MB_ICONWARNING);
-    return;
-  }
-
-  const auto selected = SelectedName();
-  const auto* entry = catalog_->Find(selected);
-  const std::wstring parent = entry && entry->IsGroup() ? entry->name : entry ? catalog_->ParentOf(entry->name) : std::wstring();
-  const auto names = SortedChildNames(parent);
-  if (!catalog_->SetChildOrder(parent, names)) {
-    Message(window_, L"Не удалось определить полный порядок элементов для сохранения.", L"Сортировка", MB_OK | MB_ICONERROR);
-    return;
-  }
+void MainWindow::SortFolder(std::wstring_view folder, catalog::SortDirection direction) {
+  if (!catalog_ || !catalog_->SortChildrenByName(folder, direction, settings_.folders_first_when_sorting)) return;
   if (!SaveCatalog()) return;
-
   PopulateTree();
-  if (!selected.empty()) SelectTreeItem(selected);
-  SetStatus(parent.empty() ? L"Текущая сортировка корня сохранена в файле ibases.v8i." : L"Текущая сортировка папки сохранена в файле ibases.v8i.");
+  if (folder.empty()) SelectCatalogRoot();
+  else SelectTreeItem(folder);
+  if (folder.empty()) {
+    SetStatus(direction == catalog::SortDirection::ascending ? L"Корень списка отсортирован по возрастанию и сохранён в ibases.v8i." :
+        L"Корень списка отсортирован по убыванию и сохранён в ibases.v8i.");
+  } else {
+    SetStatus(direction == catalog::SortDirection::ascending ? L"Папка отсортирована по возрастанию и сохранена в ibases.v8i." :
+        L"Папка отсортирована по убыванию и сохранена в ibases.v8i.");
+  }
+}
+void MainWindow::ToggleFoldersFirstWhenSorting() {
+  const bool previous = settings_.folders_first_when_sorting;
+  settings_.folders_first_when_sorting = !previous;
+  try {
+    storage::SaveSettings(layout_, settings_);
+    RefreshMainMenuBar();
+    SetStatus(settings_.folders_first_when_sorting ? L"При сортировке папки будут размещаться сверху." : L"При сортировке папки будут участвовать в общем порядке по имени.");
+  } catch (const std::exception& error) {
+    settings_.folders_first_when_sorting = previous;
+    logger_.Error(L"Ошибка сохранения настройки сортировки: " + ibstart::utf::FromUtf8(error.what()));
+    Message(window_, L"Не удалось сохранить настройку сортировки.", L"ИБ Старт", MB_OK | MB_ICONERROR);
+  }
 }
 void MainWindow::AddTreeItems(const std::vector<catalog::TreeItem>& items, HTREEITEM parent, std::wstring_view filter) {
   for (const auto& item : items) {
@@ -2447,6 +2344,19 @@ void MainWindow::PopulateTree() {
   if (!tree_) return;
   wchar_t text[512]{}; GetWindowTextW(search_, text, 512); search_filter_ = text; const std::wstring_view filter = search_filter_; TreeView_DeleteAllItems(tree_);
   if (catalog_) {
+    TVINSERTSTRUCTW catalogRoot{};
+    catalogRoot.hParent = TVI_ROOT;
+    catalogRoot.hInsertAfter = TVI_LAST;
+    catalogRoot.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE | TVIF_PARAM | TVIF_STATE;
+    catalogRoot.item.pszText = const_cast<wchar_t*>(kCatalogRootName);
+    catalogRoot.item.iImage = catalogRoot.item.iSelectedImage = kFolderImage;
+    catalogRoot.item.lParam = kCatalogRootItemData;
+    catalogRoot.item.stateMask = TVIS_EXPANDED;
+    catalogRoot.item.state = TVIS_EXPANDED;
+    const HTREEITEM catalogRootHandle = TreeView_InsertItem(tree_, &catalogRoot);
+    AddTreeItems(catalog_->Tree(), catalogRootHandle, filter);
+    if (catalogRootHandle) TreeView_Expand(tree_, catalogRootHandle, TVE_EXPAND);
+
     const auto addSpecialRoot = [&](std::wstring_view rootName, const std::vector<std::wstring>& names, int image, LPARAM itemData = 0) {
       TVINSERTSTRUCTW root{}; root.hParent = TVI_ROOT; root.hInsertAfter = TVI_LAST;
       root.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE | TVIF_PARAM; root.item.pszText = const_cast<wchar_t*>(rootName.data()); root.item.lParam = itemData;
@@ -2469,7 +2379,6 @@ void MainWindow::PopulateTree() {
       for (const auto& history : storage::LoadHistory(layout_)) for (const auto* entry : catalog_->Databases()) if (entry->ValueOr(L"ID", entry->name) == history.database_id) { recent.push_back(entry->name); break; }
       addSpecialRoot(L"Недавние", recent, kRecentImage, kRecentRootItemData);
     }
-    AddTreeItems(SortedTree(), TVI_ROOT, filter);
   }
   if (initial_launch_id_ && catalog_) {
     auto wanted = *initial_launch_id_; initial_launch_id_.reset();
@@ -2706,9 +2615,8 @@ bool MainWindow::DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const {
   const bool checked = (draw->itemState & ODS_CHECKED) != 0;
   const bool tagIcon = item->command == kTagsContextMenu || item->command == kEditTags || item->command == kConfigureTagColors || item->command == kShowTagsInList;
   const bool simpleModeIcon = item->command == kSimpleMode;
-  const bool sortIcon = item->command == kFolderSortMenu || item->command == kFolderSortDefault || item->command == kFolderSortCatalog ||
-      item->command == kFolderSortName || item->command == kFolderSortLastLaunch || item->command == kApplyCurrentSort;
-  const bool hasSubmenuArrow = item->command == kTagsContextMenu || item->command == kRecentListsMenu || item->command == kFolderSortMenu;
+  const bool sortIcon = item->command == kSortAscending || item->command == kSortDescending;
+  const bool hasSubmenuArrow = item->command == kTagsContextMenu || item->command == kRecentListsMenu;
   const int saved = SaveDC(draw->hDC);
   FillRect(draw->hDC, &draw->rcItem, GetSysColorBrush(selected ? COLOR_HIGHLIGHT : COLOR_MENU));
   const int iconX = draw->rcItem.left + 7;
@@ -2775,36 +2683,18 @@ bool MainWindow::DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const {
     const COLORREF color = disabled ? GetSysColor(COLOR_GRAYTEXT) : selected ? RGB(218, 242, 255) : RGB(0, 144, 162);
     const HPEN pen = CreatePen(PS_SOLID, 2, color);
     const auto previousPen = SelectObject(draw->hDC, pen);
-    if (item->command == kFolderSortName) {
-      const HFONT previousFont = static_cast<HFONT>(SelectObject(draw->hDC, GetStockObject(DEFAULT_GUI_FONT)));
-      SetTextColor(draw->hDC, color);
-      SetBkMode(draw->hDC, TRANSPARENT);
-      TextOutW(draw->hDC, iconX + 2, iconY + 1, L"A", 1);
-      TextOutW(draw->hDC, iconX + 11, iconY + 10, L"Z", 1);
-      MoveToEx(draw->hDC, iconX + 17, iconY + 3, nullptr);
-      LineTo(draw->hDC, iconX + 17, iconY + 16);
-      MoveToEx(draw->hDC, iconX + 14, iconY + 13, nullptr);
-      LineTo(draw->hDC, iconX + 17, iconY + 16);
-      LineTo(draw->hDC, iconX + 20, iconY + 13);
-      SelectObject(draw->hDC, previousFont);
-    } else if (item->command == kFolderSortLastLaunch) {
-      SelectObject(draw->hDC, GetStockObject(HOLLOW_BRUSH));
-      Ellipse(draw->hDC, iconX + 3, iconY + 3, iconX + 18, iconY + 18);
-      MoveToEx(draw->hDC, iconX + 10, iconY + 6, nullptr);
-      LineTo(draw->hDC, iconX + 10, iconY + 11);
-      LineTo(draw->hDC, iconX + 14, iconY + 13);
-    } else {
-      for (int offset = 0; offset != 3; ++offset) {
-        const int y = iconY + 5 + offset * 5;
-        MoveToEx(draw->hDC, iconX + 4, y, nullptr);
-        LineTo(draw->hDC, iconX + 18, y);
-      }
-      if (item->command == kApplyCurrentSort) {
-        MoveToEx(draw->hDC, iconX + 12, iconY + 14, nullptr);
-        LineTo(draw->hDC, iconX + 15, iconY + 17);
-        LineTo(draw->hDC, iconX + 20, iconY + 11);
-      }
-    }
+    const HFONT previousFont = static_cast<HFONT>(SelectObject(draw->hDC, GetStockObject(DEFAULT_GUI_FONT)));
+    SetTextColor(draw->hDC, color);
+    SetBkMode(draw->hDC, TRANSPARENT);
+    const bool ascending = item->command == kSortAscending;
+    TextOutW(draw->hDC, iconX + 2, iconY + 1, ascending ? L"А" : L"Я", 1);
+    TextOutW(draw->hDC, iconX + 11, iconY + 10, ascending ? L"Я" : L"А", 1);
+    MoveToEx(draw->hDC, iconX + 17, iconY + 3, nullptr);
+    LineTo(draw->hDC, iconX + 17, iconY + 16);
+    MoveToEx(draw->hDC, iconX + 14, iconY + 13, nullptr);
+    LineTo(draw->hDC, iconX + 17, iconY + 16);
+    LineTo(draw->hDC, iconX + 20, iconY + 13);
+    SelectObject(draw->hDC, previousFont);
     SelectObject(draw->hDC, previousPen);
     DeleteObject(pen);
   } else if (item->icon) {
@@ -2885,7 +2775,10 @@ void MainWindow::ClearMainMenuItems() noexcept {
   file_menu_items_.clear();
 }
 
-std::wstring MainWindow::SelectedName() const { return TreeItemName(tree_, TreeView_GetSelection(tree_)); }
+std::wstring MainWindow::SelectedName() const {
+  const HTREEITEM selected = TreeView_GetSelection(tree_);
+  return TreeItemData(tree_, selected) == 0 ? TreeItemName(tree_, selected) : L"";
+}
 bool MainWindow::SelectedItemIsRecentRoot() const { return TreeItemData(tree_, TreeView_GetSelection(tree_)) == kRecentRootItemData; }
 void MainWindow::BeginTreeDrag(HTREEITEM item, POINT treePoint) {
   if (!tree_ || !catalog_ || !item || TreeItemData(tree_, item) != 0) return;
@@ -2908,7 +2801,6 @@ void MainWindow::UpdateTreeDrag(POINT windowPoint) {
   if (drag_image_) ImageList_DragMove(treePoint.x, treePoint.y);
 
   const auto* dragged = catalog_->Find(dragging_name_);
-  const std::wstring sourceParent = dragged ? catalog_->ParentOf(dragging_name_) : std::wstring();
   std::wstring targetName;
   bool targetIsGroup = false;
   bool insertAfter = false;
@@ -2921,6 +2813,9 @@ void MainWindow::UpdateTreeDrag(POINT windowPoint) {
     TreeView_HitTest(tree_, &hit);
     if (!hit.hItem) {
       toRoot = true;
+    } else if (TreeItemData(tree_, hit.hItem) == kCatalogRootItemData) {
+      toRoot = true;
+      targetItem = hit.hItem;
     } else if (!IsVirtualTreeBranch(tree_, hit.hItem)) {
       targetName = TreeItemName(tree_, hit.hItem);
       const auto* target = catalog_->Find(targetName);
@@ -2941,9 +2836,7 @@ void MainWindow::UpdateTreeDrag(POINT windowPoint) {
         if (cycle) targetName.clear();
         else {
           targetItem = hit.hItem;
-          const bool manualPosition = SortModeForFolder(sourceParent) == storage::SortMode::catalog_order &&
-              SortModeForFolder(targetParent) == storage::SortMode::catalog_order;
-          if (!targetIsGroup && manualPosition) {
+          if (!targetIsGroup) {
             RECT itemBounds{};
             if (TreeView_GetItemRect(tree_, hit.hItem, &itemBounds, TRUE)) insertAfter = treePoint.y >= (itemBounds.top + itemBounds.bottom) / 2;
           }
@@ -2952,18 +2845,15 @@ void MainWindow::UpdateTreeDrag(POINT windowPoint) {
     }
   }
 
-  TreeView_SelectDropTarget(tree_, targetName.empty() || !targetIsGroup ? nullptr : targetItem);
-  const bool manualPosition = dragged && !targetName.empty() && !targetIsGroup &&
-      SortModeForFolder(sourceParent) == storage::SortMode::catalog_order &&
-      SortModeForFolder(catalog_->ParentOf(targetName)) == storage::SortMode::catalog_order;
-  TreeView_SetInsertMark(tree_, manualPosition ? targetItem : nullptr, insertAfter);
+  const HTREEITEM dropTarget = (targetIsGroup || (toRoot && targetItem)) ? targetItem : nullptr;
+  TreeView_SelectDropTarget(tree_, dropTarget);
+  TreeView_SetInsertMark(tree_, !targetName.empty() && !targetIsGroup ? targetItem : nullptr, insertAfter);
   drag_target_name_ = std::move(targetName);
   drag_insert_after_ = insertAfter;
   drag_to_root_ = toRoot;
   if (drag_to_root_) SetStatus(L"Отпустите мышь, чтобы переместить в корень списка.");
   else if (!drag_target_name_.empty() && targetIsGroup) SetStatus(L"Отпустите мышь, чтобы переместить в группу: " + drag_target_name_);
-  else if (!drag_target_name_.empty() && manualPosition) SetStatus(L"Отпустите мышь, чтобы вставить " + std::wstring(drag_insert_after_ ? L"после: " : L"перед: ") + drag_target_name_);
-  else if (!drag_target_name_.empty()) SetStatus(L"Отпустите мышь, чтобы переместить в папку элемента: " + drag_target_name_);
+  else if (!drag_target_name_.empty()) SetStatus(L"Отпустите мышь, чтобы вставить " + std::wstring(drag_insert_after_ ? L"после: " : L"перед: ") + drag_target_name_);
   else SetStatus(L"Наведите указатель на базу, группу или свободное место дерева.");
 }
 void MainWindow::EndTreeDrag(POINT windowPoint) {
@@ -2987,15 +2877,10 @@ void MainWindow::EndTreeDrag(POINT windowPoint) {
     const auto* target = catalog_->Find(targetName);
     if (!target || EqualNoCase(target->name, draggedName)) { SetStatus(L"Перемещение отменено."); return; }
     targetParent = target->IsGroup() ? target->name : catalog_->ParentOf(target->name);
-    const bool manualPosition = SortModeForFolder(sourceParent) == storage::SortMode::catalog_order &&
-        SortModeForFolder(targetParent) == storage::SortMode::catalog_order;
-    if (!target->IsGroup() && manualPosition) {
+    if (!target->IsGroup()) {
       const auto targetPosition = CatalogPosition(target->name, targetParent);
       if (!targetPosition) { SetStatus(L"Не удалось определить место вставки."); return; }
       position = *targetPosition + (insertAfter ? 1 : 0);
-    } else if (!target->IsGroup() && EqualNoCase(sourceParent, targetParent)) {
-      SetStatus(L"Положение в этой папке задаётся её автоматической сортировкой.");
-      return;
     }
   }
   if (position != std::numeric_limits<size_t>::max() && EqualNoCase(sourceParent, targetParent)) {
@@ -3005,12 +2890,7 @@ void MainWindow::EndTreeDrag(POINT windowPoint) {
   if (!SaveCatalog()) return;
   PopulateTree();
   SelectTreeItem(draggedName);
-  if (SortModeForFolder(targetParent) != storage::SortMode::catalog_order) {
-    SetStatus(targetParent.empty() ? L"Элемент перемещён в корень; его положение задаёт текущая сортировка." :
-        L"Элемент перемещён в папку; его положение задаёт её текущая сортировка.");
-  } else {
-    SetStatus(targetParent.empty() ? L"Элемент перемещён в корень списка." : L"Элемент перемещён: " + draggedName);
-  }
+  SetStatus(targetParent.empty() ? L"Элемент перемещён в корень списка." : L"Элемент перемещён: " + draggedName);
 }
 void MainWindow::CancelTreeDrag() {
   if (tree_ && IsWindow(tree_)) {
@@ -3078,7 +2958,7 @@ bool MainWindow::SelectTreeItem(std::wstring_view name) {
   const auto find = [&](auto&& self, HTREEITEM item) -> HTREEITEM {
     for (; item; item = TreeView_GetNextSibling(tree_, item)) {
       wchar_t text[512]{}; TVITEMW row{}; row.mask = TVIF_TEXT; row.hItem = item; row.pszText = text; row.cchTextMax = 512;
-      if (TreeView_GetItem(tree_, &row) && name == text) return item;
+      if (TreeItemData(tree_, item) == 0 && TreeView_GetItem(tree_, &row) && name == text) return item;
       if (const auto child = self(self, TreeView_GetChild(tree_, item))) return child;
     }
     return nullptr;
@@ -3088,6 +2968,16 @@ bool MainWindow::SelectTreeItem(std::wstring_view name) {
   TreeView_SelectItem(tree_, item);
   TreeView_EnsureVisible(tree_, item);
   return true;
+}
+bool MainWindow::SelectCatalogRoot() {
+  if (!tree_) return false;
+  for (HTREEITEM item = TreeView_GetRoot(tree_); item; item = TreeView_GetNextSibling(tree_, item)) {
+    if (TreeItemData(tree_, item) != kCatalogRootItemData) continue;
+    TreeView_SelectItem(tree_, item);
+    TreeView_EnsureVisible(tree_, item);
+    return true;
+  }
+  return false;
 }
 
 void MainWindow::ShowTreeContextMenu(POINT screen) {
@@ -3113,16 +3003,19 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
 
   const auto name = SelectedName();
   const auto selectedItem = TreeView_GetSelection(tree_);
-  const bool specialRoot = TreeItemData(tree_, selectedItem) != 0;
+  const LPARAM selectedData = TreeItemData(tree_, selectedItem);
+  const bool catalogRoot = selectedData == kCatalogRootItemData;
+  const bool specialRoot = selectedData != 0 && !catalogRoot;
   const bool recentRoot = SelectedItemIsRecentRoot();
   const auto* entry = specialRoot ? nullptr : catalog_->Find(name);
   const bool database = entry && entry->IsDatabase();
   const bool launch_available = database && !cache_operation_;
   const bool group = entry && entry->IsGroup();
   const bool editable = entry && !settings_.simple_mode;
-  const bool manualOrder = entry && SortModeForFolder(catalog_->ParentOf(entry->name)) == storage::SortMode::catalog_order;
   const bool file = database && !ConnectionValue(entry->ValueOr(L"Connect"), L"File").empty();
   const std::wstring addParent = group ? entry->name : entry ? catalog_->ParentOf(entry->name) : std::wstring();
+  const bool sortTarget = catalogRoot || group;
+  const std::wstring sortParent = catalogRoot ? std::wstring() : group ? entry->name : std::wstring();
   const auto favorites = storage::LoadFavorites(layout_);
   const bool favorite = std::find(favorites.begin(), favorites.end(), name) != favorites.end();
 
@@ -3160,6 +3053,17 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   };
   const auto separator = [&] { AppendMenuW(menu, MF_SEPARATOR, 0, nullptr); };
   if (settings_.simple_mode) {
+    if (sortTarget) {
+      append(true, false, kSortAscending, 0, L"Сортировать по возрастанию");
+      append(true, false, kSortDescending, 0, L"Сортировать по убыванию");
+      SetForegroundWindow(window_);
+      const UINT command = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, window_, nullptr);
+      DestroyMenu(menu);
+      ClearContextMenuItems();
+      if (command == kSortAscending) SortFolder(sortParent, catalog::SortDirection::ascending);
+      else if (command == kSortDescending) SortFolder(sortParent, catalog::SortDirection::descending);
+      return;
+    }
     if (database) {
       append(launch_available, false, kEnterprise, IDI_ACTION_ENTERPRISE, L"Предприятие", L"F3");
       append(launch_available, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор", L"F4");
@@ -3183,59 +3087,47 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
     if (command) SendMessageW(window_, WM_COMMAND, MAKEWPARAM(command, 0), 0);
     return;
   }
-  append(launch_available, false, kEnterprise, IDI_ACTION_ENTERPRISE, L"Предприятие", L"F3");
-  append(launch_available, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор", L"F4");
-  separator();
-  append(database, favorite, kToggleFavorite, IDI_ACTION_FAVORITE, favorite ? L"Убрать из избранного" : L"Добавить в избранное", L"Ctrl+Alt+I");
-  if (database && !settings_.simple_mode) {
-    HMENU tagMenu = CreatePopupMenu();
-    if (tagMenu) {
-      AppendMenuW(tagMenu, MF_STRING, kEditTags, L"Управление тегами…");
-      AppendMenuW(tagMenu, MF_SEPARATOR, 0, nullptr);
-      const auto& assigned = TagsFor(tags_, *entry);
-      bool hasAvailableTags = false;
-      for (const auto& tag : KnownTags(tags_, tag_styles_)) {
-        if (ContainsTag(assigned, tag)) continue;
-        const UINT command = kQuickTag1 + static_cast<UINT>(quick_tags.size());
-        quick_tags.push_back(tag);
-        AppendMenuW(tagMenu, MF_STRING, command, tag.c_str());
-        hasAvailableTags = true;
-      }
-      if (!hasAvailableTags) AppendMenuW(tagMenu, MF_STRING | MF_GRAYED, 0, L"Нет доступных тегов для добавления");
-      AppendMenuW(tagMenu, MF_SEPARATOR, 0, nullptr);
-      AppendMenuW(tagMenu, MF_STRING, kNewTagForSelected, L"Новый тег…");
-      AppendMenuW(tagMenu, MF_STRING, kConfigureTagColors, L"Настроить теги…");
-      appendPopup(tagMenu, kTagsContextMenu, L"Теги");
-    }
-  }
-  append(editable, false, kEdit, IDI_ACTION_EDIT, L"Изменить…", L"F2");
-  append(database && !settings_.simple_mode, false, kCache, IDI_ACTION_CACHE, L"Очистить кэш…", L"Ctrl+Shift+Del");
-  append(database && !settings_.simple_mode, false, kShortcut, IDI_ACTION_SHORTCUT, L"Создать ярлык", L"Ctrl+Shift+S");
-  append(file, false, kOpenFolder, IDI_TREE_FOLDER, L"Открыть папку", L"Ctrl+Shift+O");
-  append(recentRoot, false, kClearRecent, IDI_ACTION_DELETE, L"Очистить недавние базы…");
-  separator();
-  append(editable && manualOrder, false, kMoveUp, 0, L"Переместить вверх", L"Ctrl+Shift+Up");
-  append(editable && manualOrder, false, kMoveDown, 0, L"Переместить вниз", L"Ctrl+Shift+Down");
-  append(database && !settings_.simple_mode, false, kMoveToFolder, IDI_TREE_FOLDER, L"Переместить в папку…");
-  append(editable, false, kDelete, IDI_ACTION_DELETE, L"Удалить…", L"Alt+Shift+Del");
-  if (group) {
+  if (!catalogRoot) {
+    append(launch_available, false, kEnterprise, IDI_ACTION_ENTERPRISE, L"Предприятие", L"F3");
+    append(launch_available, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор", L"F4");
     separator();
-    HMENU sorting = CreatePopupMenu();
-    if (sorting) {
-      const auto configured = sort_settings_.folder_modes.find(entry->name);
-      const auto checked = [&](std::optional<storage::SortMode> mode) {
-        return mode ? configured != sort_settings_.folder_modes.end() && configured->second == *mode : configured == sort_settings_.folder_modes.end();
-      };
-      appendTo(sorting, true, checked(std::nullopt), kFolderSortDefault, 0, L"Как для всего списка");
-      appendTo(sorting, true, checked(storage::SortMode::catalog_order), kFolderSortCatalog, 0, L"Исходный порядок");
-      appendTo(sorting, true, checked(storage::SortMode::name), kFolderSortName, 0, L"По названию");
-      appendTo(sorting, true, checked(storage::SortMode::last_launch), kFolderSortLastLaunch, 0, L"По последнему запуску");
-      appendPopup(sorting, kFolderSortMenu, L"Сортировка отображения");
+    append(database, favorite, kToggleFavorite, IDI_ACTION_FAVORITE, favorite ? L"Убрать из избранного" : L"Добавить в избранное", L"Ctrl+Alt+I");
+    if (database) {
+      HMENU tagMenu = CreatePopupMenu();
+      if (tagMenu) {
+        AppendMenuW(tagMenu, MF_STRING, kEditTags, L"Управление тегами…");
+        AppendMenuW(tagMenu, MF_SEPARATOR, 0, nullptr);
+        const auto& assigned = TagsFor(tags_, *entry);
+        bool hasAvailableTags = false;
+        for (const auto& tag : KnownTags(tags_, tag_styles_)) {
+          if (ContainsTag(assigned, tag)) continue;
+          const UINT command = kQuickTag1 + static_cast<UINT>(quick_tags.size());
+          quick_tags.push_back(tag);
+          AppendMenuW(tagMenu, MF_STRING, command, tag.c_str());
+          hasAvailableTags = true;
+        }
+        if (!hasAvailableTags) AppendMenuW(tagMenu, MF_STRING | MF_GRAYED, 0, L"Нет доступных тегов для добавления");
+        AppendMenuW(tagMenu, MF_SEPARATOR, 0, nullptr);
+        AppendMenuW(tagMenu, MF_STRING, kNewTagForSelected, L"Новый тег…");
+        AppendMenuW(tagMenu, MF_STRING, kConfigureTagColors, L"Настроить теги…");
+        appendPopup(tagMenu, kTagsContextMenu, L"Теги");
+      }
     }
+    append(editable, false, kEdit, IDI_ACTION_EDIT, L"Изменить…", L"F2");
+    append(database && !settings_.simple_mode, false, kCache, IDI_ACTION_CACHE, L"Очистить кэш…", L"Ctrl+Shift+Del");
+    append(database && !settings_.simple_mode, false, kShortcut, IDI_ACTION_SHORTCUT, L"Создать ярлык", L"Ctrl+Shift+S");
+    append(file, false, kOpenFolder, IDI_TREE_FOLDER, L"Открыть папку", L"Ctrl+Shift+O");
+    append(recentRoot, false, kClearRecent, IDI_ACTION_DELETE, L"Очистить недавние базы…");
+    separator();
+    append(editable, false, kMoveUp, 0, L"Переместить вверх", L"Ctrl+Shift+Up");
+    append(editable, false, kMoveDown, 0, L"Переместить вниз", L"Ctrl+Shift+Down");
+    append(database && !settings_.simple_mode, false, kMoveToFolder, IDI_TREE_FOLDER, L"Переместить в папку…");
+    append(editable, false, kDelete, IDI_ACTION_DELETE, L"Удалить…", L"Alt+Shift+Del");
   }
-  if (!specialRoot) {
-    const std::wstring applyText = group ? L"Применить сортировку этой папки к файлу" : database ? L"Применить сортировку текущей папки к файлу" : L"Применить сортировку корня к файлу";
-    append(true, false, kApplyCurrentSort, 0, applyText);
+  if (sortTarget) {
+    if (!catalogRoot) separator();
+    append(true, false, kSortAscending, 0, L"Сортировать по возрастанию");
+    append(true, false, kSortDescending, 0, L"Сортировать по убыванию");
   }
   separator();
   append(!settings_.simple_mode, false, kAddFile, IDI_ACTION_ADD, group ? L"Добавить файловую базу в группу…" : L"Добавить файловую базу…", L"Ctrl+Alt+F");
@@ -3254,11 +3146,8 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   else if (command == kAddFile) AddFileDatabase(addParent);
   else if (command == kAddServer) AddServerDatabase(addParent);
   else if (command == kAddGroup) AddGroup(addParent);
-  else if (group && command == kFolderSortDefault) SetFolderSortMode(entry->name, std::nullopt);
-  else if (group && command == kFolderSortCatalog) SetFolderSortMode(entry->name, storage::SortMode::catalog_order);
-  else if (group && command == kFolderSortName) SetFolderSortMode(entry->name, storage::SortMode::name);
-  else if (group && command == kFolderSortLastLaunch) SetFolderSortMode(entry->name, storage::SortMode::last_launch);
-  else if (command == kApplyCurrentSort) ApplyCurrentSortToFile();
+  else if (sortTarget && command == kSortAscending) SortFolder(sortParent, catalog::SortDirection::ascending);
+  else if (sortTarget && command == kSortDescending) SortFolder(sortParent, catalog::SortDirection::descending);
   else SendMessageW(window_, WM_COMMAND, MAKEWPARAM(command, 0), 0);
 }
 
@@ -3269,10 +3158,11 @@ void MainWindow::DisplaySelected() {
   }
   ListView_DeleteAllItems(details_);
   const auto name = SelectedName();
-  const auto* entry = catalog_ && TreeItemData(tree_, TreeView_GetSelection(tree_)) == 0 ? catalog_->Find(name) : nullptr;
+  const LPARAM selectedData = TreeItemData(tree_, TreeView_GetSelection(tree_));
+  const auto* entry = catalog_ && selectedData == 0 ? catalog_->Find(name) : nullptr;
   if (!entry) {
-    SetWindowTextW(details_title_, name.empty() ? L"Выберите базу или группу" : name.c_str());
-    SetWindowTextW(details_subtitle_, name.empty() ? L"Сведения появятся здесь" : L"Служебный раздел списка");
+    SetWindowTextW(details_title_, selectedData == kCatalogRootItemData ? kCatalogRootName : name.empty() ? L"Выберите базу или группу" : name.c_str());
+    SetWindowTextW(details_subtitle_, selectedData == kCatalogRootItemData ? L"Корневой уровень списка баз" : name.empty() ? L"Сведения появятся здесь" : L"Служебный раздел списка");
     EnableWindow(enterprise_, FALSE); EnableWindow(designer_, FALSE); EnableWindow(edit_, FALSE);
     EnableWindow(cache_, FALSE); EnableWindow(shortcut_, FALSE); EnableWindow(remove_, FALSE);
     UpdateConnection();
@@ -3348,7 +3238,6 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
     const auto rememberLaunch = [&] {
       const auto timestamp = std::chrono::system_clock::now();
       storage::AppendHistory(layout_, {database.id, timestamp, mode});
-      last_launches_[database.id] = timestamp;
       PopulateTree();
       SelectTreeItem(name);
     };
@@ -3466,18 +3355,6 @@ void MainWindow::EditSelected() {
       return;
     }
     const auto renamed = TrimText(*changed);
-    if (const auto configured = sort_settings_.folder_modes.find(selected); configured != sort_settings_.folder_modes.end()) {
-      const auto previousSorting = sort_settings_;
-      sort_settings_.folder_modes[renamed] = configured->second;
-      sort_settings_.folder_modes.erase(selected);
-      try {
-        storage::SaveSortSettings(layout_, sort_settings_);
-      } catch (const std::exception& error) {
-        sort_settings_ = previousSorting;
-        logger_.Error(L"Ошибка переноса сортировки при переименовании группы: " + ibstart::utf::FromUtf8(error.what()));
-        Message(window_, L"Группа переименована, но её настройку сортировки не удалось сохранить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
-      }
-    }
     SaveCatalog();
     PopulateTree();
     SelectTreeItem(renamed);
@@ -3611,7 +3488,6 @@ void MainWindow::DeleteSelected() {
   if (!entry) return;
   if (settings_.simple_mode && !entry->IsDatabase()) return;
   const auto tagId = entry->IsDatabase() ? TagId(*entry) : std::wstring();
-  const bool group = entry->IsGroup();
   const auto item = entry->IsDatabase() ? L"информационную базу" : L"группу";
   const auto message = L"Удалить " + std::wstring(item) + L" \"" + name + L"\" из списка.";
   if (MessageBoxW(window_, message.c_str(), L"ИБ Старт", MB_YESNO) != IDYES) return;
@@ -3627,17 +3503,6 @@ void MainWindow::DeleteSelected() {
       Message(window_, L"База удалена из списка, но её теги не удалось удалить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
     }
   }
-  if (group && sort_settings_.folder_modes.contains(name)) {
-    const auto previousSorting = sort_settings_;
-    sort_settings_.folder_modes.erase(name);
-    try {
-      storage::SaveSortSettings(layout_, sort_settings_);
-    } catch (const std::exception& error) {
-      sort_settings_ = previousSorting;
-      logger_.Error(L"Ошибка удаления сортировки папки: " + ibstart::utf::FromUtf8(error.what()));
-      Message(window_, L"Папка удалена, но её настройку сортировки не удалось удалить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
-    }
-  }
   SaveCatalog();
   RefreshTagFilter();
   PopulateTree();
@@ -3645,12 +3510,6 @@ void MainWindow::DeleteSelected() {
 void MainWindow::MoveSelected(int offset) {
   if (!catalog_) return;
   const auto name = SelectedName();
-  if (!settings_.simple_mode) {
-    if (const auto* entry = catalog_->Find(name); entry && SortModeForFolder(catalog_->ParentOf(entry->name)) != storage::SortMode::catalog_order) {
-      SetStatus(L"Перестановка доступна только при исходном порядке списка.");
-      return;
-    }
-  }
   if (!catalog_->MoveBy(name, offset)) {
     SetStatus(offset < 0 ? L"Элемент уже находится первым в группе." : L"Элемент уже находится последним в группе.");
     return;
@@ -3666,7 +3525,7 @@ void MainWindow::MoveSelectedToFolder() {
     return;
   }
   const auto current = catalog_->ParentOf(entry->name);
-  const auto target = SelectCatalogFolder(window_, SortedTree(), current);
+  const auto target = SelectCatalogFolder(window_, catalog_->Tree(), current);
   if (!target) return;
   if (EqualNoCase(*target, current)) {
     SetStatus(L"База уже находится в выбранной папке.");
@@ -3826,7 +3685,7 @@ void MainWindow::RefreshMainMenuBar() {
     append(view_menu_, kSimpleMode, 0, L"Выйти из простого режима", L"Ctrl+Alt+M", true);
   } else {
     append(view_menu_, kToggleFavorite, IDI_ACTION_FAVORITE, L"Добавить/убрать из избранного", L"Ctrl+Alt+I");
-    append(view_menu_, kApplyCurrentSort, 0, L"Применить текущую сортировку к файлу");
+    append(view_menu_, kToggleFoldersFirstWhenSorting, IDI_TREE_FOLDER, L"Папки всегда сверху при сортировке", {}, settings_.folders_first_when_sorting);
     append(view_menu_, kEditTags, 0, L"Управление тегами выбранной базы…");
     append(view_menu_, kConfigureTagColors, 0, L"Настроить теги…");
     append(view_menu_, kShowTagsInList, 0, L"Показывать теги в списке баз", {}, settings_.show_tags_in_list);
@@ -3943,7 +3802,7 @@ void MainWindow::SetSimpleMode(bool enabled) {
   const std::wstring selected = SelectedName();
   settings_.simple_mode = enabled;
   const int visible = enabled ? SW_HIDE : SW_SHOW;
-  for (const HWND control : {tag_filter_label_, tag_filter_, sort_label_, sort_mode_, details_title_, details_subtitle_, details_, status_,
+  for (const HWND control : {tag_filter_label_, tag_filter_, details_title_, details_subtitle_, details_, status_,
                               edit_, cache_, shortcut_, remove_}) {
     if (control) ShowWindow(control, visible);
   }

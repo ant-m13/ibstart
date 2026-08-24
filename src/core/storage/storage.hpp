@@ -42,13 +42,6 @@ struct TagStyle {
 
 using TagStyles = std::map<std::wstring, TagStyle>;
 
-enum class SortMode { catalog_order, name, last_launch };
-
-struct SortSettings {
-  SortMode default_mode{SortMode::catalog_order};
-  std::map<std::wstring, SortMode> folder_modes;
-};
-
 using LastLaunchTimes = std::map<std::wstring, std::chrono::system_clock::time_point>;
 
 struct CatalogState {
@@ -57,7 +50,6 @@ struct CatalogState {
   LastLaunchTimes last_launches;
   DatabaseTags tags;
   TagStyles tag_styles;
-  SortSettings sorting;
 };
 
 [[nodiscard]] StorageLayout ResolveLayout(const std::filesystem::path& executable_path);
@@ -78,7 +70,5 @@ void SaveTags(const StorageLayout& layout, const DatabaseTags& tags);
 [[nodiscard]] TagStyles LoadTagStyles(const StorageLayout& layout);
 void SaveTagStyles(const StorageLayout& layout, const TagStyles& styles);
 void SaveTagsAndStyles(const StorageLayout& layout, const DatabaseTags& tags, const TagStyles& styles);
-[[nodiscard]] SortSettings LoadSortSettings(const StorageLayout& layout);
-void SaveSortSettings(const StorageLayout& layout, const SortSettings& settings);
 
 }  // namespace ibstart::storage
