@@ -13,6 +13,7 @@
 #include "core/v8i/v8i_file_store.hpp"
 
 #include <Windows.h>
+#include <shellapi.h>
 
 #include <algorithm>
 #include <chrono>
