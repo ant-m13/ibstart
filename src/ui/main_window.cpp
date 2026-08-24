@@ -2492,7 +2492,7 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
     separator();
     append(editable, false, kMoveUp, 0, L"Переместить вверх", L"Ctrl+Shift+Up");
     append(editable, false, kMoveDown, 0, L"Переместить вниз", L"Ctrl+Shift+Down");
-    append(database && !settings_.simple_mode, false, kMoveToFolder, IDI_TREE_FOLDER, L"Переместить в папку…");
+    append(editable, false, kMoveToFolder, IDI_TREE_FOLDER, L"Переместить в папку…");
     append(editable, false, kDelete, IDI_ACTION_DELETE, L"Удалить…", L"Alt+Shift+Del");
   }
   if (sortTarget) {
@@ -2835,24 +2835,27 @@ void MainWindow::MoveSelectedToFolder() {
   if (!catalog_) return;
   const auto name = SelectedName();
   const auto* entry = catalog_->Find(name);
-  if (!entry || !entry->IsDatabase()) {
-    Message(window_, L"Выберите информационную базу для перемещения.", L"Перемещение базы", MB_OK | MB_ICONWARNING);
+  if (!entry) {
+    Message(window_, L"Выберите базу или группу для перемещения.", L"Перемещение в папку", MB_OK | MB_ICONWARNING);
     return;
   }
+  const bool group = entry->IsGroup();
   const auto current = catalog_->ParentOf(entry->name);
-  const auto target = dialog::SelectCatalogFolder(window_, catalog_->Tree(), current);
+  const auto target = dialog::SelectCatalogFolder(window_, catalog_->Tree(), current,
+      group ? std::wstring_view(entry->name) : std::wstring_view{});
   if (!target) return;
   if (EqualNoCase(*target, current)) {
-    SetStatus(L"База уже находится в выбранной папке.");
+    SetStatus(group ? L"Группа уже находится в выбранной папке." : L"База уже находится в выбранной папке.");
     return;
   }
   if (!catalog_->Move(name, *target, std::numeric_limits<size_t>::max())) {
-    Message(window_, L"Не удалось переместить базу в выбранную папку.", L"Перемещение базы", MB_OK | MB_ICONWARNING);
+    Message(window_, L"Не удалось переместить выбранный элемент в папку.", L"Перемещение в папку", MB_OK | MB_ICONWARNING);
     return;
   }
   if (!SaveCatalog()) return;
   PopulateTreeWithoutFlicker(name);
-  SetStatus(target->empty() ? L"База перемещена в корневой уровень." : L"База перемещена в папку: " + *target);
+  const std::wstring item = group ? L"Группа" : L"База";
+  SetStatus(target->empty() ? item + L" перемещена в корневой уровень." : item + L" перемещена в папку: " + *target);
 }
 void MainWindow::ClearSelectedCache() {
   if (settings_.simple_mode || !catalog_) return;

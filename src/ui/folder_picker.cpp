@@ -24,8 +24,10 @@ struct State {
   bool done{false};
 };
 
-HTREEITEM AddItem(State& state, const catalog::TreeItem& source, HTREEITEM parent, std::wstring_view selected) {
+HTREEITEM AddItem(State& state, const catalog::TreeItem& source, HTREEITEM parent, std::wstring_view selected,
+    std::wstring_view excluded_subtree) {
   if (source.database) return nullptr;
+  if (EqualNoCase(source.name, excluded_subtree)) return nullptr;
   const size_t index = state.folders.size();
   state.folders.push_back(source.name);
   TVINSERTSTRUCTW insert{};
@@ -35,7 +37,7 @@ HTREEITEM AddItem(State& state, const catalog::TreeItem& source, HTREEITEM paren
   insert.item.pszText = const_cast<wchar_t*>(source.name.c_str());
   insert.item.lParam = static_cast<LPARAM>(index);
   const HTREEITEM node = TreeView_InsertItem(state.tree, &insert);
-  for (const auto& child : source.children) AddItem(state, child, node, selected);
+  for (const auto& child : source.children) AddItem(state, child, node, selected, excluded_subtree);
   TreeView_Expand(state.tree, node, TVE_EXPAND);
   if (EqualNoCase(source.name, selected)) TreeView_SelectItem(state.tree, node);
   return node;
@@ -78,7 +80,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
 }  // namespace
 
 std::optional<std::wstring> SelectCatalogFolder(HWND owner, const std::vector<catalog::TreeItem>& items,
-    std::wstring_view initial) {
+    std::wstring_view initial, std::wstring_view excluded_subtree) {
   State state;
   static ATOM atom = [] {
     WNDCLASSW klass{};
@@ -104,7 +106,7 @@ std::optional<std::wstring> SelectCatalogFolder(HWND owner, const std::vector<ca
   state.font = CreateUiFont(dialog, 9, FW_NORMAL);
   state.button_font = CreateUiFont(dialog, 9, FW_NORMAL);
   const auto px = [dpi](int logical) { return ScaleForDpi(logical, dpi); };
-  const HWND caption = CreateWindowW(L"STATIC", L"Выберите папку, в которую нужно переместить базу:", WS_CHILD | WS_VISIBLE,
+  const HWND caption = CreateWindowW(L"STATIC", L"Выберите папку, в которую нужно переместить элемент:", WS_CHILD | WS_VISIBLE,
       px(10), px(10), px(440), px(18), dialog, nullptr, nullptr, nullptr);
   state.tree = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS,
       px(10), px(32), px(440), px(315), dialog, reinterpret_cast<HMENU>(kTreeControl), nullptr, nullptr);
@@ -126,7 +128,7 @@ std::optional<std::wstring> SelectCatalogFolder(HWND owner, const std::vector<ca
   root.item.lParam = 0;
   const HTREEITEM root_item = TreeView_InsertItem(state.tree, &root);
   if (initial.empty()) TreeView_SelectItem(state.tree, root_item);
-  for (const auto& item : items) AddItem(state, item, root_item, initial);
+  for (const auto& item : items) AddItem(state, item, root_item, initial, excluded_subtree);
   TreeView_Expand(state.tree, root_item, TVE_EXPAND);
   PositionDialogNearOwner(dialog, owner);
   ShowWindow(dialog, SW_SHOW);
