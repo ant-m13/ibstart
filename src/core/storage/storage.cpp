@@ -198,6 +198,20 @@ std::optional<std::string> ReadJsonRawString(std::string_view json, size_t& posi
   return std::nullopt;
 }
 
+std::optional<int> ReadJsonIntegerValue(std::string_view json, size_t& position) {
+  SkipJsonWhitespace(json, position);
+  const size_t begin = position;
+  if (position < json.size() && json[position] == '-') ++position;
+  const size_t digits = position;
+  while (position < json.size() && json[position] >= '0' && json[position] <= '9') ++position;
+  if (position == digits) return std::nullopt;
+  try {
+    return std::stoi(std::string(json.substr(begin, position - begin)));
+  } catch (const std::exception&) {
+    return std::nullopt;
+  }
+}
+
 bool ConsumeJsonCharacter(std::string_view json, size_t& position, char expected) {
   SkipJsonWhitespace(json, position);
   if (position >= json.size() || json[position] != expected) return false;
@@ -360,12 +374,20 @@ CatalogState LoadCatalogState(const StorageLayout& layout) {
   }
 
   if (const auto mode = JsonInteger(json, "default_sort_mode")) if (const auto parsed = ParseSortMode(*mode)) result.sorting.default_mode = *parsed;
-  const std::regex folder("\\{\\s*\\\"folder\\\"\\s*:\\s*\\\"((?:\\\\.|[^\\\"])*)\\\"\\s*,\\s*\\\"mode\\\"\\s*:\\s*([0-9]+)\\s*\\}");
-  for (std::sregex_iterator it(json.begin(), json.end(), folder), end; it != end; ++it) {
-    try {
-      const auto name = TryUnescape((*it)[1].str());
-      if (const auto mode = ParseSortMode(std::stoi((*it)[2].str())); name && !name->empty() && mode) result.sorting.folder_modes[*name] = *mode;
-    } catch (const std::exception&) {
+  constexpr std::string_view folder_key = "\"folder\"";
+  size_t folder_scan = 0;
+  while ((folder_scan = json.find(folder_key, folder_scan)) != std::string::npos) {
+    folder_scan += folder_key.size();
+    size_t position = folder_scan;
+    if (!ConsumeJsonCharacter(json, position, ':')) continue;
+    const auto raw_name = ReadJsonRawString(json, position);
+    if (!raw_name || !ConsumeJsonCharacter(json, position, ',')) continue;
+    const auto mode_key = ReadJsonRawString(json, position);
+    if (!mode_key || *mode_key != "mode" || !ConsumeJsonCharacter(json, position, ':')) continue;
+    const auto raw_mode = ReadJsonIntegerValue(json, position);
+    const auto name = TryUnescape(*raw_name);
+    if (name && !name->empty() && raw_mode) {
+      if (const auto mode = ParseSortMode(*raw_mode)) result.sorting.folder_modes[*name] = *mode;
     }
   }
   for (const auto& history : result.history) if (!history.database_id.empty() && !result.last_launches.contains(history.database_id)) result.last_launches[history.database_id] = history.timestamp;
