@@ -1,3 +1,5 @@
+#include "app/instance_activation.hpp"
+
 #include "core/domain/utf.hpp"
 #include "core/storage/storage.hpp"
 #include "ui/main_window.hpp"
@@ -49,13 +51,18 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
   }
   const bool alreadyExists = GetLastError() == ERROR_ALREADY_EXISTS;
   const auto launchId = ArgumentValue();
+  if (launchId && !ibstart::app::IsValidLaunchIdLength(launchId->size())) {
+    MessageBoxW(nullptr, L"Идентификатор базы в параметре --launch-id слишком длинный.", L"ИБ Старт", MB_OK | MB_ICONERROR);
+    CloseHandle(mutex);
+    return 1;
+  }
   if (alreadyExists) {
     HWND existing = nullptr;
     for (unsigned attempt = 0; attempt != 150 && !existing; ++attempt) { existing = FindWindowW(L"IBStart.MainWindow", nullptr); if (!existing) Sleep(10); }
     if (existing) {
       if (launchId) {
         COPYDATASTRUCT data{};
-        data.dwData = 0x49425354;
+        data.dwData = ibstart::app::kLaunchCopyData;
         data.cbData = static_cast<DWORD>((launchId->size() + 1) * sizeof(wchar_t));
         data.lpData = const_cast<wchar_t*>(launchId->c_str());
         DWORD_PTR ignored{};

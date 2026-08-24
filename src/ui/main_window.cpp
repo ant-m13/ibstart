@@ -1,5 +1,6 @@
 #include "ui/main_window.hpp"
 
+#include "app/instance_activation.hpp"
 #include "app/resource.h"
 #include "core/cache/cache_service.hpp"
 #include "core/domain/version.hpp"
@@ -44,7 +45,6 @@ constexpr wchar_t kFolderPickerClass[] = L"IBStart.FolderPicker";
 constexpr UINT kActivateMessage = WM_APP + 23;
 constexpr UINT kUpdateCheckFinishedMessage = WM_APP + 24;
 constexpr UINT kFocusShortcutSelectionMessage = WM_APP + 25;
-constexpr ULONG_PTR kLaunchCopyData = 0x49425354;
 constexpr int kMinimumWindowWidth = 940;
 constexpr int kMinimumSimpleWindowWidth = 520;
 constexpr int kMinimumWindowHeight = 460;
@@ -1924,7 +1924,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       break;
     case WM_COPYDATA: {
       const auto* data = reinterpret_cast<const COPYDATASTRUCT*>(lparam);
-      if (!data || data->dwData != kLaunchCopyData || !data->lpData || data->cbData < sizeof(wchar_t) || data->cbData % sizeof(wchar_t) != 0) return FALSE;
+      if (!app::IsValidLaunchCopyData(data)) return FALSE;
       const auto* value = static_cast<const wchar_t*>(data->lpData);
       const size_t length = data->cbData / sizeof(wchar_t);
       if (value[length - 1] != L'\0') return FALSE;
