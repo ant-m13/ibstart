@@ -492,7 +492,7 @@ void TestStorageSkipsMalformedRecords() {
     ],
     "last_launches": [{"last_launch_id": "valid-launch", "time": 3}],
     "tag_styles": [{"tag_style": "bad\q", "background": 1, "text": 2}, {"tag_style": "valid-style", "background": 3, "text": 4}],
-    "sorting": {"default_sort_mode": 2, "folders": [{"folder": "bad\q", "mode": 1}, {"folder": "valid-folder", "mode": 3}]}
+    "sorting": {"default_sort_mode": 2, "folders": [{"folder": "bad\q", "mode": 1}, {"folder": "valid-folder", "mode": 2}]}
   })");
   const auto state = ibstart::storage::LoadCatalogState(layout);
   CHECK(state.favorites == std::vector<std::wstring>{L"preserved"});
@@ -501,6 +501,8 @@ void TestStorageSkipsMalformedRecords() {
   CHECK(state.tag_styles.size() == 1 && state.tag_styles.contains(L"valid-style"));
   CHECK(state.sorting.default_mode == ibstart::storage::SortMode::last_launch);
   CHECK(state.sorting.folder_modes.size() == 1 && state.sorting.folder_modes.contains(L"valid-folder"));
+  const auto valid_folder = state.sorting.folder_modes.find(L"valid-folder");
+  CHECK(valid_folder != state.sorting.folder_modes.end() && valid_folder->second == ibstart::storage::SortMode::last_launch);
 
   std::error_code error;
   std::filesystem::remove_all(directory, error);
