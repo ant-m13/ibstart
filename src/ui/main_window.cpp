@@ -2692,15 +2692,25 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
       return;
     }
     if (options.client_type == domain::ClientType::web) { Message(window_, L"Веб-клиент можно использовать только для веб-базы с адресом http:// или https://.", L"ИБ Старт", MB_OK | MB_ICONWARNING); return; }
-    const auto selected = launcher::SelectPlatform(platforms_, options); if (!selected) {
-      const auto text = webUrl && !selectedVersion.empty() && selectedVersion != L"Авто"
-          ? L"Тонкий клиент 1С версии " + selectedVersion + L" не найден."
-          : L"Подходящая платформа 1С не найдена. Проверьте установку и настройки поиска.";
-      Message(window_, text, L"ИБ Старт", MB_OK | MB_ICONERROR);
+    auto selected = launcher::SelectPlatform(platforms_, options);
+    bool usedNewestThinClient = false;
+    if (!selected && webUrl && !selectedVersion.empty() && selectedVersion != L"Авто") {
+      auto newestThinOptions = options;
+      newestThinOptions.version = L"Авто";
+      selected = launcher::SelectPlatform(platforms_, newestThinOptions);
+      usedNewestThinClient = selected.has_value();
+    }
+    if (!selected) {
+      Message(window_, L"Подходящая платформа 1С не найдена. Проверьте установку и настройки поиска.", L"ИБ Старт", MB_OK | MB_ICONERROR);
       return;
     }
     const auto parameters = database.additional_parameters; if (utf::FindNoCaseOrdinal(parameters, L"/p") != std::wstring_view::npos && MessageBoxW(window_, L"В дополнительных параметрах обнаружен /P. Пароль может храниться в открытом виде в ibases.v8i. Продолжить?", L"Предупреждение", MB_YESNO | MB_ICONWARNING) != IDYES) return;
-    const auto command = launcher::BuildCommand(database, *selected, options); logger_.Info(L"Запуск: " + command.CommandLine()); launcher::Launch(command); rememberLaunch(mode); SetStatus(L"Запущена база: " + database.name);
+    const auto command = launcher::BuildCommand(database, *selected, options);
+    if (usedNewestThinClient) logger_.Info(L"Требуемая версия " + selectedVersion + L" не найдена; для веб-базы выбран тонкий клиент " + selected->version + L".");
+    logger_.Info(L"Запуск: " + command.CommandLine());
+    launcher::Launch(command);
+    rememberLaunch(mode);
+    SetStatus(L"Запущена база: " + database.name);
   } catch (const std::exception& error) { logger_.Error(L"Ошибка запуска: " + ibstart::utf::FromUtf8(error.what())); Message(window_, L"Не удалось запустить базу. Подробности — в последнем логе.", L"ИБ Старт", MB_OK | MB_ICONERROR); }
 }
 
