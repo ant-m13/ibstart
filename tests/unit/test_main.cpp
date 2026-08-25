@@ -58,6 +58,14 @@ void TestV8iRoundTrip() {
   CHECK(reread && reread->entry.ValueOr(L"Connect") == L"File=\"C:\\Рабочие базы\\Моя база\"");
   const auto withoutFinalNewline = ibstart::v8i::V8iDocument::ParseUtf8("[Base]\nConnect=x");
   CHECK(withoutFinalNewline.SerializeUtf8() == "[Base]\nConnect=x");
+
+  constexpr std::string_view interleaved =
+      "[Base]\nConnect=x\n; keep between fields\nUnknown=one\n\nFolder=/\n";
+  auto interleavedDocument = ibstart::v8i::V8iDocument::ParseUtf8(interleaved);
+  CHECK(interleavedDocument.SerializeUtf8() == interleaved);
+  interleavedDocument.Find(L"Base")->entry.Set(L"Connect", L"updated");
+  CHECK(interleavedDocument.SerializeUtf8() ==
+      "[Base]\nConnect=updated\n; keep between fields\nUnknown=one\n\nFolder=/\n");
 }
 
 void TestDemoCatalogFixture() {
