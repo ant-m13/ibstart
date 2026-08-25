@@ -2658,18 +2658,36 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
     const auto database = catalog_->DatabaseFor(name);
     const auto webUrl = catalog::Catalog::WebUrl(database.connect);
     if (webUrl && mode == domain::LaunchMode::designer) {
-      Message(window_, L"Конфигуратор недоступен для веб-базы. Запустите её в режиме Предприятие тонким клиентом.", L"ИБ Старт", MB_OK | MB_ICONINFORMATION);
+      Message(window_, L"Конфигуратор недоступен для веб-базы. Запустите её в режиме Предприятие через веб- или тонкий клиент.", L"ИБ Старт", MB_OK | MB_ICONINFORMATION);
       return;
     }
-    const auto rememberLaunch = [&] {
+    const auto rememberLaunch = [&](domain::LaunchMode launchedMode = mode) {
       const auto timestamp = std::chrono::system_clock::now();
-      catalog_state_.RecordLaunch({database.id, timestamp, mode});
+      catalog_state_.RecordLaunch({database.id, timestamp, launchedMode});
       PopulateTreeWithoutFlicker(name);
     };
     domain::LaunchOptions options;
     options.mode = mode;
     if (webUrl) {
-      options.client_type = domain::ClientType::thin;
+      options.client_type = ClientTypeFromApplication(database.app);
+      if (options.client_type == domain::ClientType::automatic) options.client_type = ClientTypeFromApplication(database.default_app);
+      if (options.client_type == domain::ClientType::automatic) options.client_type = domain::ClientType::thin;
+      if (options.client_type == domain::ClientType::web) {
+        const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", webUrl->c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+        if (result <= 32) {
+          logger_.Error(L"Не удалось открыть веб-клиент для базы: " + database.name);
+          Message(window_, L"Не удалось открыть веб-клиент в браузере.", L"ИБ Старт", MB_OK | MB_ICONERROR);
+          return;
+        }
+        logger_.Info(L"Открыт веб-клиент для базы: " + database.name);
+        rememberLaunch(domain::LaunchMode::web_client);
+        SetStatus(L"Открыта база в веб-клиенте: " + database.name);
+        return;
+      }
+      if (options.client_type == domain::ClientType::thick) {
+        Message(window_, L"Веб-базу нельзя открыть толстым клиентом. Выберите веб- или тонкий клиент.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
+        return;
+      }
     } else {
       options.client_type = ClientTypeFromApplication(database.app);
       if (options.client_type == domain::ClientType::automatic) options.client_type = ClientTypeFromApplication(database.default_app);
