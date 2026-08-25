@@ -33,6 +33,25 @@ std::wstring Timestamp() {
   return stream.str();
 }
 
+bool IsManagedBackupName(std::wstring_view filename, std::wstring_view prefix) {
+  if (!filename.starts_with(prefix)) return false;
+  const auto suffix = filename.substr(prefix.size());
+  constexpr size_t kTimestampLength = 15;  // YYYYMMDD_HHMMSS
+  if (suffix.size() < kTimestampLength) return false;
+  for (size_t index = 0; index < kTimestampLength; ++index) {
+    if (index == 8) {
+      if (suffix[index] != L'_') return false;
+    } else if (suffix[index] < L'0' || suffix[index] > L'9') {
+      return false;
+    }
+  }
+  if (suffix.size() == kTimestampLength) return true;
+  if (suffix[kTimestampLength] != L'_' || suffix.size() == kTimestampLength + 1) return false;
+  return std::all_of(suffix.begin() + kTimestampLength + 1, suffix.end(), [](wchar_t character) {
+    return character >= L'0' && character <= L'9';
+  });
+}
+
 std::filesystem::path UniqueTemporaryPath(const std::filesystem::path& target) {
   const auto base = target.filename().wstring() + L".ibstart.tmp." + std::to_wstring(GetCurrentProcessId());
   for (unsigned attempt = 0; attempt != 100; ++attempt) {
@@ -136,7 +155,7 @@ std::vector<std::filesystem::path> V8iFileStore::Backups() const {
   if (error) throw std::runtime_error(FilesystemFailure("Cannot enumerate ibases.v8i backups", path_.parent_path(), error));
   const std::filesystem::directory_iterator end;
   while (it != end) {
-    if (it->path().filename().wstring().starts_with(prefix)) {
+    if (IsManagedBackupName(it->path().filename().wstring(), prefix)) {
       if (!it->is_regular_file(error)) {
         if (error) throw std::runtime_error(FilesystemFailure("Cannot inspect ibases.v8i backup", it->path(), error));
       } else {

@@ -152,8 +152,12 @@ void TestSafeStore() {
   WriteBytes(file, "[Base]\r\nConnect=File=\"C:\\\\base\"\r\nUnknown=x\r\n");
   ibstart::v8i::V8iFileStore store(file); auto document = store.Read(); document.Find(L"Base")->entry.Set(L"Locale", L"ru_RU"); store.Save(document);
   CHECK(std::filesystem::exists(file)); CHECK(store.Backups().size() == 1); CHECK(store.maintenance_warnings().empty()); CHECK(ReadBytes(file).find("Locale=ru_RU") != std::string::npos);
+  const auto unrelatedBackup = directory / L"ibases.v8i.bak_notes";
+  WriteBytes(unrelatedBackup, "user file");
+  CHECK(store.Backups().size() == 1);
   for (int index = 0; index != 6; ++index) { document.Find(L"Base")->entry.Set(L"OrderInList", std::to_wstring(index)); store.Save(document); }
   CHECK(store.Backups().size() == 5); CHECK(store.maintenance_warnings().empty());
+  CHECK(std::filesystem::exists(unrelatedBackup)); CHECK(ReadBytes(unrelatedBackup) == "user file");
   bool temporaryLeftBehind = false; for (const auto& entry : std::filesystem::directory_iterator(directory)) if (entry.path().filename().wstring().find(L".ibstart.tmp.") != std::wstring::npos) temporaryLeftBehind = true;
   CHECK(!temporaryLeftBehind);
   ibstart::v8i::V8iFileStore conflict(file); auto another = conflict.Read();
