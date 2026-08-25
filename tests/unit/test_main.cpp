@@ -595,8 +595,9 @@ void TestFileBaseScanRegistration() {
 }
 
 void TestSecretMasking() {
-  const auto masked = ibstart::logging::MaskSecrets(L"/N admin /P \"s3cret\" --token=abc password=xyz /Password hunter2");
-  CHECK(masked.find(L"s3cret") == std::wstring::npos); CHECK(masked.find(L"abc") == std::wstring::npos); CHECK(masked.find(L"xyz") == std::wstring::npos); CHECK(masked.find(L"hunter2") == std::wstring::npos); CHECK(masked.find(L"admin") != std::wstring::npos);
+  const auto masked = ibstart::logging::MaskSecrets(
+      L"/N admin /P \"s3cret\" --token=abc password=xyz /Password hunter2 Pwd=db-secret");
+  CHECK(masked.find(L"s3cret") == std::wstring::npos); CHECK(masked.find(L"abc") == std::wstring::npos); CHECK(masked.find(L"xyz") == std::wstring::npos); CHECK(masked.find(L"hunter2") == std::wstring::npos); CHECK(masked.find(L"db-secret") == std::wstring::npos); CHECK(masked.find(L"admin") != std::wstring::npos);
 }
 
 void TestCacheSizeFormatting() {

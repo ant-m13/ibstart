@@ -28,7 +28,9 @@ std::wstring MaskSecrets(std::wstring_view arguments) {
   // Both forms are accepted by 1C: /P secret and /P"secret". Generic token/password forms are also masked.
   const std::wregex paired(LR"mask(((?:/(?:Password|P)|--(?:password|token)|-(?:password|token))\s*(?:=\s*)?)("(?:[^"]*)"|[^\s]+))mask", std::regex_constants::icase);
   result = std::regex_replace(result, paired, L"$1***");
-  const std::wregex assignment(LR"(((?:password|token|secret)\s*=\s*)(\"(?:[^\"]*)\"|[^\s]+))", std::regex_constants::icase);
+  // Pwd is the password key used inside 1C connection strings, including the
+  // fallback /IBConnection form that is written to the launch log.
+  const std::wregex assignment(LR"(((?:password|pwd|token|secret)\s*=\s*)(\"(?:[^\"]*)\"|[^\s]+))", std::regex_constants::icase);
   return std::regex_replace(result, assignment, L"$1***");
 }
 
