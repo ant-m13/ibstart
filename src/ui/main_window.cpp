@@ -2668,7 +2668,12 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
     };
     domain::LaunchOptions options;
     options.mode = mode;
-    if (webUrl) {
+    if (mode == domain::LaunchMode::designer) {
+      // The Configurator is provided only by the full (thick-client) platform.
+      // App/DefaultApp describe the Enterprise launch and must not redirect F4
+      // to a standalone thin client.
+      options.client_type = domain::ClientType::thick;
+    } else if (webUrl) {
       options.client_type = domain::ClientType::thin;
     } else {
       options.client_type = ClientTypeFromApplication(database.app);

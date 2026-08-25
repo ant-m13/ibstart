@@ -189,6 +189,26 @@ void TestCommandBuilderAndSelection() {
       {L"C:\\1cv8\\8.3.27\\bin\\1cv8.exe", L"8.3.27", ibstart::domain::ClientBitness::x86, true}};
   const auto preferredEquivalentVersion = ibstart::launcher::SelectPlatform(equivalentVersions, options);
   CHECK(preferredEquivalentVersion && preferredEquivalentVersion->bitness == ibstart::domain::ClientBitness::x64);
+
+  const std::vector<ibstart::domain::PlatformInstallation> mixedClients = {
+      {L"C:\\1cv8\\8.3.30\\bin\\1cv8c.exe", L"8.3.30", ibstart::domain::ClientBitness::x64, true},
+      {L"C:\\1cv8\\8.3.29\\bin\\1cv8.exe", L"8.3.29", ibstart::domain::ClientBitness::x64, true}};
+  options.mode = ibstart::domain::LaunchMode::designer;
+  options.client_type = ibstart::domain::ClientType::automatic;
+  const auto designerPlatform = ibstart::launcher::SelectPlatform(mixedClients, options);
+  CHECK(designerPlatform && designerPlatform->executable.filename() == L"1cv8.exe");
+  const std::span<const ibstart::domain::PlatformInstallation> standaloneOnly(mixedClients.data(), 1);
+  CHECK(!ibstart::launcher::SelectPlatform(standaloneOnly, options));
+  options.mode = ibstart::domain::LaunchMode::enterprise;
+  options.client_type = ibstart::domain::ClientType::thick;
+  const auto thickPlatform = ibstart::launcher::SelectPlatform(mixedClients, options);
+  CHECK(thickPlatform && thickPlatform->executable.filename() == L"1cv8.exe");
+  options.client_type = ibstart::domain::ClientType::thin;
+  const auto thinOnlyPlatform = ibstart::launcher::SelectPlatform(mixedClients, options);
+  CHECK(thinOnlyPlatform && thinOnlyPlatform->executable.filename() == L"1cv8c.exe");
+  options.client_type = ibstart::domain::ClientType::automatic;
+  options.mode = ibstart::domain::LaunchMode::designer;
+
   CHECK(ibstart::launcher::ParseAppArchitecture(L"x86_64_prt") == ibstart::domain::ClientArchitecture::x64_priority);
   CHECK(ibstart::launcher::ParseAppArchitecture(L"x86") == ibstart::domain::ClientArchitecture::x86);
   CHECK(!ibstart::launcher::ParseAppArchitecture(L"x64"));
@@ -206,6 +226,8 @@ void TestCommandBuilderAndSelection() {
   const auto spacedCommand = ibstart::launcher::BuildCommand(spaced, *chosen, options); CHECK(spacedCommand.arguments[1] == L"/F"); CHECK(spacedCommand.arguments[2] == L"C:\\base;one");
   options.client_type = ibstart::domain::ClientType::thin; options.mode = ibstart::domain::LaunchMode::designer;
   bool invalidThinDesigner = false; try { (void)ibstart::launcher::BuildCommand(file, *chosen, options); } catch (const std::invalid_argument&) { invalidThinDesigner = true; } CHECK(invalidThinDesigner);
+  options.client_type = ibstart::domain::ClientType::thick; options.mode = ibstart::domain::LaunchMode::enterprise;
+  bool invalidStandaloneThick = false; try { (void)ibstart::launcher::BuildCommand(file, mixedClients.front(), options); } catch (const std::invalid_argument&) { invalidStandaloneThick = true; } CHECK(invalidStandaloneThick);
 
   const auto thinDirectory = Temp(L"thin-web-client");
   const auto thickExecutable = thinDirectory / L"1cv8.exe";
@@ -215,6 +237,7 @@ void TestCommandBuilderAndSelection() {
   const ibstart::domain::PlatformInstallation thinPlatform{thickExecutable, L"8.3.27", ibstart::domain::ClientBitness::x64, true};
   ibstart::domain::Database web; web.connect = L"WS = \"https://example.test/base\" ; WA=1";
   options.mode = ibstart::domain::LaunchMode::enterprise;
+  options.client_type = ibstart::domain::ClientType::thin;
   const auto webCommand = ibstart::launcher::BuildCommand(web, thinPlatform, options);
   CHECK(webCommand.executable == thinExecutable);
   CHECK(webCommand.arguments.size() == 3);
