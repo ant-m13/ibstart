@@ -30,7 +30,9 @@
 #include <filesystem>
 #include <functional>
 #include <initializer_list>
+#include <iterator>
 #include <limits>
+#include <map>
 #include <memory>
 #include <mutex>
 #include <sstream>
@@ -80,6 +82,53 @@ constexpr LPARAM kRecentRootItemData = 1;
 constexpr LPARAM kFavoritesRootItemData = 2;
 constexpr LPARAM kCatalogRootItemData = 3;
 constexpr wchar_t kCatalogRootName[] = L"Информационные базы";
+
+using TreeExpansionStates = std::map<std::wstring, bool>;
+
+TreeExpansionStates CaptureTreeExpansionStates(HWND tree) {
+  TreeExpansionStates result;
+  const auto collect = [&](const auto& self, HTREEITEM item) -> void {
+    for (auto current = item; current; current = TreeView_GetNextSibling(tree, current)) {
+      const auto child = TreeView_GetChild(tree, current);
+      if (child) {
+        wchar_t name[512]{};
+        TVITEMW row{};
+        row.mask = TVIF_TEXT;
+        row.hItem = current;
+        row.pszText = name;
+        row.cchTextMax = static_cast<int>(std::size(name));
+        if (TreeView_GetItem(tree, &row)) {
+          result.emplace(name, (TreeView_GetItemState(tree, current, TVIS_EXPANDED) & TVIS_EXPANDED) != 0);
+        }
+        self(self, child);
+      }
+    }
+  };
+  if (tree) collect(collect, TreeView_GetRoot(tree));
+  return result;
+}
+
+void RestoreTreeExpansionStates(HWND tree, const TreeExpansionStates& states) {
+  const auto restore = [&](const auto& self, HTREEITEM item) -> void {
+    for (auto current = item; current; current = TreeView_GetNextSibling(tree, current)) {
+      const auto child = TreeView_GetChild(tree, current);
+      if (!child) continue;
+      wchar_t name[512]{};
+      TVITEMW row{};
+      row.mask = TVIF_TEXT;
+      row.hItem = current;
+      row.pszText = name;
+      row.cchTextMax = static_cast<int>(std::size(name));
+      if (TreeView_GetItem(tree, &row)) {
+        if (const auto found = states.find(name); found != states.end()) {
+          TreeView_Expand(tree, current, found->second ? TVE_EXPAND : TVE_COLLAPSE);
+        }
+      }
+      self(self, child);
+    }
+  };
+  if (tree) restore(restore, TreeView_GetRoot(tree));
+}
 
 OwnerDrawMenuIcon MenuIconForCommand(UINT command) {
   switch (command) {
@@ -2093,6 +2142,7 @@ void MainWindow::PopulateTree() {
 }
 void MainWindow::PopulateTreeWithoutFlicker(std::wstring_view selected, bool select_catalog_root) {
   const bool canSuspendDrawing = tree_ && IsWindow(tree_);
+  const auto expansionStates = CaptureTreeExpansionStates(tree_);
   if (canSuspendDrawing) SendMessageW(tree_, WM_SETREDRAW, FALSE, 0);
   const auto resumeDrawing = [&] {
     if (!canSuspendDrawing) return;
@@ -2101,6 +2151,7 @@ void MainWindow::PopulateTreeWithoutFlicker(std::wstring_view selected, bool sel
   };
   try {
     PopulateTree();
+    RestoreTreeExpansionStates(tree_, expansionStates);
     if (select_catalog_root) SelectCatalogRoot();
     else if (!selected.empty()) SelectTreeItem(selected);
   } catch (...) {
@@ -2613,8 +2664,7 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
     const auto rememberLaunch = [&] {
       const auto timestamp = std::chrono::system_clock::now();
       catalog_state_.RecordLaunch({database.id, timestamp, mode});
-      PopulateTree();
-      SelectTreeItem(name);
+      PopulateTreeWithoutFlicker(name);
     };
     domain::LaunchOptions options;
     options.mode = mode;
