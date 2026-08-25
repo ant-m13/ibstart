@@ -169,10 +169,11 @@ void TestCommandBuilderAndSelection() {
     {L"C:\\Program Files (x86)\\1cv8\\8.3.24\\bin\\1cv8.exe", L"8.3.24", ibstart::domain::ClientBitness::x86, true},
     {L"C:\\Program Files\\1cv8\\8.3.24\\bin\\1cv8.exe", L"8.3.24", ibstart::domain::ClientBitness::x64, true}};
   ibstart::domain::LaunchOptions options; options.mode = ibstart::domain::LaunchMode::designer; const auto chosen = ibstart::launcher::SelectPlatform(platforms, options);
-  CHECK(chosen && chosen->bitness == ibstart::domain::ClientBitness::x86);
+  CHECK(chosen && chosen->bitness == ibstart::domain::ClientBitness::x64);
   options.bitness = ibstart::domain::ClientBitness::x86; const auto x86 = ibstart::launcher::SelectPlatform(platforms, options); CHECK(x86 && x86->bitness == ibstart::domain::ClientBitness::x86); options.bitness = ibstart::domain::ClientBitness::automatic;
   options.architecture = ibstart::domain::ClientArchitecture::x64; const auto x64 = ibstart::launcher::SelectPlatform(platforms, options); CHECK(x64 && x64->bitness == ibstart::domain::ClientBitness::x64);
   options.architecture = ibstart::domain::ClientArchitecture::x64_priority; const auto priority64 = ibstart::launcher::SelectPlatform(platforms, options); CHECK(priority64 && priority64->bitness == ibstart::domain::ClientBitness::x64);
+  options.architecture = ibstart::domain::ClientArchitecture::x86_priority; const auto priority86 = ibstart::launcher::SelectPlatform(platforms, options); CHECK(priority86 && priority86->bitness == ibstart::domain::ClientBitness::x86);
   options.architecture = ibstart::domain::ClientArchitecture::automatic;
   options.version = L"8.3"; const auto versionPrefix = ibstart::launcher::SelectPlatform(platforms, options); CHECK(versionPrefix && versionPrefix->version == L"8.3.24");
   options.version = L"Авто";
@@ -187,7 +188,7 @@ void TestCommandBuilderAndSelection() {
       {L"C:\\1cv8\\8.3.027\\bin\\1cv8.exe", L"8.3.027", ibstart::domain::ClientBitness::x64, true},
       {L"C:\\1cv8\\8.3.27\\bin\\1cv8.exe", L"8.3.27", ibstart::domain::ClientBitness::x86, true}};
   const auto preferredEquivalentVersion = ibstart::launcher::SelectPlatform(equivalentVersions, options);
-  CHECK(preferredEquivalentVersion && preferredEquivalentVersion->bitness == ibstart::domain::ClientBitness::x86);
+  CHECK(preferredEquivalentVersion && preferredEquivalentVersion->bitness == ibstart::domain::ClientBitness::x64);
   CHECK(ibstart::launcher::ParseAppArchitecture(L"x86_64_prt") == ibstart::domain::ClientArchitecture::x64_priority);
   CHECK(ibstart::launcher::ParseAppArchitecture(L"x86") == ibstart::domain::ClientArchitecture::x86);
   CHECK(!ibstart::launcher::ParseAppArchitecture(L"x64"));
