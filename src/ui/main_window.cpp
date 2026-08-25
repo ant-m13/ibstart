@@ -2661,7 +2661,7 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
       Message(window_, L"Конфигуратор недоступен для веб-базы. Запустите её в режиме Предприятие тонким клиентом или в браузере.", L"ИБ Старт", MB_OK | MB_ICONINFORMATION);
       return;
     }
-    const auto rememberLaunch = [&](domain::LaunchMode launchedMode = mode) {
+    const auto rememberLaunch = [&](domain::LaunchMode launchedMode) {
       const auto timestamp = std::chrono::system_clock::now();
       catalog_state_.RecordLaunch({database.id, timestamp, launchedMode});
       PopulateTreeWithoutFlicker(name);
@@ -2700,7 +2700,7 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
       return;
     }
     const auto parameters = database.additional_parameters; if (utf::FindNoCaseOrdinal(parameters, L"/p") != std::wstring_view::npos && MessageBoxW(window_, L"В дополнительных параметрах обнаружен /P. Пароль может храниться в открытом виде в ibases.v8i. Продолжить?", L"Предупреждение", MB_YESNO | MB_ICONWARNING) != IDYES) return;
-    const auto command = launcher::BuildCommand(database, *selected, options); logger_.Info(L"Запуск: " + command.CommandLine()); launcher::Launch(command); rememberLaunch(); SetStatus(L"Запущена база: " + database.name);
+    const auto command = launcher::BuildCommand(database, *selected, options); logger_.Info(L"Запуск: " + command.CommandLine()); launcher::Launch(command); rememberLaunch(mode); SetStatus(L"Запущена база: " + database.name);
   } catch (const std::exception& error) { logger_.Error(L"Ошибка запуска: " + ibstart::utf::FromUtf8(error.what())); Message(window_, L"Не удалось запустить базу. Подробности — в последнем логе.", L"ИБ Старт", MB_OK | MB_ICONERROR); }
 }
 
