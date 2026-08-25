@@ -2,6 +2,7 @@
 
 #include "core/domain/model.hpp"
 
+#include <cstddef>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -14,6 +15,10 @@ struct Section {
   std::vector<std::wstring> leading_lines;
   domain::Entry entry;
   std::vector<std::wstring> opaque_lines;
+  // For every opaque line, records how many fields preceded it in the source.
+  // Fields are only updated or appended, so this preserves comments and blank
+  // lines relative to every original known or unknown key.
+  std::vector<size_t> opaque_field_positions;
 };
 
 class V8iDocument {

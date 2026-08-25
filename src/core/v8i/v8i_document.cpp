@@ -62,6 +62,7 @@ V8iDocument V8iDocument::ParseUtf8(std::string_view bytes) {
       current->entry.fields.push_back({line.substr(0, separator), line.substr(separator + 1)});
     } else if (current != nullptr) {
       current->opaque_lines.push_back(line);
+      current->opaque_field_positions.push_back(current->entry.fields.size());
     } else {
       pending.push_back(line);
     }
@@ -82,8 +83,24 @@ std::string V8iDocument::SerializeUtf8() const {
   for (const auto& section : sections) {
     for (const auto& line : section.leading_lines) append_line(line);
     append_line(L"[" + section.entry.name + L"]");
-    for (const auto& field : section.entry.fields) append_line(field.key + L"=" + field.value);
-    for (const auto& line : section.opaque_lines) append_line(line);
+    if (section.opaque_field_positions.size() == section.opaque_lines.size()) {
+      size_t opaque = 0;
+      for (size_t field = 0; field <= section.entry.fields.size(); ++field) {
+        while (opaque < section.opaque_lines.size() && section.opaque_field_positions[opaque] == field) {
+          append_line(section.opaque_lines[opaque++]);
+        }
+        if (field < section.entry.fields.size()) {
+          const auto& value = section.entry.fields[field];
+          append_line(value.key + L"=" + value.value);
+        }
+      }
+      while (opaque < section.opaque_lines.size()) append_line(section.opaque_lines[opaque++]);
+    } else {
+      // Preserve compatibility with programmatically constructed Section
+      // values that predate the position metadata.
+      for (const auto& field : section.entry.fields) append_line(field.key + L"=" + field.value);
+      for (const auto& line : section.opaque_lines) append_line(line);
+    }
   }
   if (hasLine && trailing_newline) output.append(newline);
   std::string bytes = utf::ToUtf8(output);
@@ -103,7 +120,7 @@ const Section* V8iDocument::Find(std::wstring_view name) const {
 }
 
 Section& V8iDocument::Add(std::wstring name) {
-  sections.push_back({{}, {std::move(name), {}}, {}});
+  sections.push_back({{}, {std::move(name), {}}, {}, {}});
   return sections.back();
 }
 
