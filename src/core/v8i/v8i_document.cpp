@@ -51,7 +51,7 @@ V8iDocument V8iDocument::ParseUtf8(std::string_view bytes) {
   for (const auto& line : lines) {
     if (IsSectionHeader(line)) {
       Section section;
-      section.leading_lines = std::move(pending);
+      if (current == nullptr) document.preamble = std::move(pending);
       section.entry.name = line.substr(1, line.size() - 2);
       document.sections.push_back(std::move(section));
       current = &document.sections.back();
@@ -67,7 +67,7 @@ V8iDocument V8iDocument::ParseUtf8(std::string_view bytes) {
       pending.push_back(line);
     }
   }
-  document.preamble = std::move(pending);
+  if (document.sections.empty()) document.preamble = std::move(pending);
   return document;
 }
 
