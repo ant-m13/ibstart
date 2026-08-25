@@ -66,6 +66,11 @@ void TestV8iRoundTrip() {
   interleavedDocument.Find(L"Base")->entry.Set(L"Connect", L"updated");
   CHECK(interleavedDocument.SerializeUtf8() ==
       "[Base]\nConnect=updated\n; keep between fields\nUnknown=one\n\nFolder=/\n");
+
+  auto removableFirstSection = ibstart::v8i::V8iDocument::ParseUtf8(
+      "; file header\n[First]\nConnect=x\n[Second]\nConnect=y\n");
+  CHECK(removableFirstSection.Remove(L"First"));
+  CHECK(removableFirstSection.SerializeUtf8() == "; file header\n[Second]\nConnect=y\n");
 }
 
 void TestDemoCatalogFixture() {
