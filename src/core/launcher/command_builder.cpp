@@ -139,7 +139,10 @@ std::optional<domain::PlatformInstallation> SelectPlatform(
       if (platform::IsNewerVersion(left.version, right.version)) return true;
       if (platform::IsNewerVersion(right.version, left.version)) return false;
     }
-    const bool prefer64 = architecture == domain::ClientArchitecture::x64_priority;
+    // Automatic selection follows the product default: prefer a 64-bit client
+    // when both bitnesses are available.  Only an explicit x86 priority reverses
+    // that order; the strict x86/x64 modes were already filtered above.
+    const bool prefer64 = architecture != domain::ClientArchitecture::x86_priority;
     const int leftRank = left.bitness == (prefer64 ? domain::ClientBitness::x64 : domain::ClientBitness::x86) ? 0 : 1;
     const int rightRank = right.bitness == (prefer64 ? domain::ClientBitness::x64 : domain::ClientBitness::x86) ? 0 : 1;
     if (leftRank != rightRank) return leftRank < rightRank;
