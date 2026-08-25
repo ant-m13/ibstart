@@ -21,7 +21,7 @@ std::wstring Environment(std::wstring_view name) {
   return value;
 }
 
-void AddExe(const std::filesystem::path& executable, std::vector<domain::PlatformInstallation>& output,
+void AddClient(const std::filesystem::path& executable, std::vector<domain::PlatformInstallation>& output,
     std::set<std::wstring>& known, std::optional<domain::ClientBitness> bitness = std::nullopt) {
   std::error_code error;
   if (!std::filesystem::is_regular_file(executable, error)) return;
@@ -38,26 +38,42 @@ void AddExe(const std::filesystem::path& executable, std::vector<domain::Platfor
   const auto detectedBitness = bitness.value_or(x86Path ? domain::ClientBitness::x86 : domain::ClientBitness::x64);
   error.clear();
   output.push_back({executable, version, detectedBitness,
-      std::filesystem::exists(bin / L"1cv8c.exe", error)});
+      executable.filename() == L"1cv8c.exe" || std::filesystem::exists(bin / L"1cv8c.exe", error)});
+}
+
+// A separate installation of the thin client contains 1cv8c.exe but not
+// 1cv8.exe.  It is sufficient for web bases, so it must participate in the
+// same discovery flow as a full platform installation.
+void AddInstallation(const std::filesystem::path& directory, std::vector<domain::PlatformInstallation>& output,
+    std::set<std::wstring>& known, std::optional<domain::ClientBitness> bitness = std::nullopt) {
+  const auto thick = directory / L"1cv8.exe";
+  std::error_code error;
+  if (std::filesystem::is_regular_file(thick, error)) {
+    AddClient(thick, output, known, bitness);
+    return;
+  }
+  error.clear();
+  AddClient(directory / L"1cv8c.exe", output, known, bitness);
 }
 
 void ScanRoot(const std::filesystem::path& root, std::vector<domain::PlatformInstallation>& output, std::set<std::wstring>& known) {
   std::error_code error;
   if (!std::filesystem::exists(root, error)) return;
-  AddExe(root / L"1cv8.exe", output, known);
-  AddExe(root / L"bin" / L"1cv8.exe", output, known);
+  if (root.filename() == L"1cv8.exe" || root.filename() == L"1cv8c.exe") AddInstallation(root.parent_path(), output, known);
+  AddInstallation(root, output, known);
+  AddInstallation(root / L"bin", output, known);
   error.clear();
   for (std::filesystem::directory_iterator firstIt(root, std::filesystem::directory_options::skip_permission_denied, error), end; firstIt != end; firstIt.increment(error)) {
     if (error) { error.clear(); continue; }
     const auto& first = *firstIt;
     if (!first.is_directory(error)) { error.clear(); continue; }
-    AddExe(first.path() / L"bin" / L"1cv8.exe", output, known);
+    AddInstallation(first.path() / L"bin", output, known);
     error.clear();
     for (std::filesystem::directory_iterator secondIt(first.path(), std::filesystem::directory_options::skip_permission_denied, error), secondEnd; secondIt != secondEnd; secondIt.increment(error)) {
       if (error) { error.clear(); continue; }
       const auto& second = *secondIt;
       if (!second.is_directory(error)) { error.clear(); continue; }
-      AddExe(second.path() / L"bin" / L"1cv8.exe", output, known);
+      AddInstallation(second.path() / L"bin", output, known);
     }
     error.clear();
   }
@@ -91,13 +107,13 @@ void ScanRegistry(HKEY hive, REGSAM view, std::vector<domain::PlatformInstallati
     HKEY version{};
     if (RegOpenKeyExW(root, firstName, 0, KEY_READ | view, &version) != ERROR_SUCCESS) continue;
     const auto bitness = view == KEY_WOW64_32KEY ? domain::ClientBitness::x86 : domain::ClientBitness::x64;
-    if (const auto location = RegistryInstallLocation(version)) { AddExe(*location / L"1cv8.exe", output, known, bitness); AddExe(*location / L"bin" / L"1cv8.exe", output, known, bitness); }
+    if (const auto location = RegistryInstallLocation(version)) { AddInstallation(*location, output, known, bitness); AddInstallation(*location / L"bin", output, known, bitness); }
     for (DWORD secondIndex = 0;; ++secondIndex) {
       wchar_t secondName[256]; DWORD secondLength = 256;
       if (RegEnumKeyExW(version, secondIndex, secondName, &secondLength, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS) break;
       HKEY install{};
       if (RegOpenKeyExW(version, secondName, 0, KEY_READ | view, &install) != ERROR_SUCCESS) continue;
-      if (const auto location = RegistryInstallLocation(install)) { AddExe(*location / L"1cv8.exe", output, known, bitness); AddExe(*location / L"bin" / L"1cv8.exe", output, known, bitness); }
+      if (const auto location = RegistryInstallLocation(install)) { AddInstallation(*location, output, known, bitness); AddInstallation(*location / L"bin", output, known, bitness); }
       RegCloseKey(install);
     }
     RegCloseKey(version);
