@@ -2,7 +2,7 @@
 
 <img src="assets/branding/ibstart-icon.png" alt="Значок IBStart" width="96">
 
-> Лёгкий нативный менеджер запуска информационных баз 1С:Предприятие 8.3/8.5 для Windows.
+> Менеджер запуска 1С — лёгкое нативное приложение для Windows.
 
 [![Сборка](https://github.com/ant-m13/ibstart/actions/workflows/build.yml/badge.svg)](https://github.com/ant-m13/ibstart/actions/workflows/build.yml)
 [![Последний релиз](https://img.shields.io/github/v/release/ant-m13/ibstart?display_name=tag&label=%D1%80%D0%B5%D0%BB%D0%B8%D0%B7)](https://github.com/ant-m13/ibstart/releases/latest)

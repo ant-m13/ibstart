@@ -36,7 +36,7 @@ BEGIN
         BLOCK "041904B0"
         BEGIN
             VALUE "CompanyName", "IBStart open-source contributors\0"
-            VALUE "FileDescription", "ИБ Старт — менеджер запусков информационных баз\0"
+            VALUE "FileDescription", "ИБ Старт — менеджер запуска 1С\0"
             VALUE "FileVersion", "@IBSTART_FILE_VERSION@\0"
             VALUE "InternalName", "IBStart\0"
             VALUE "LegalCopyright", "MIT License\0"
