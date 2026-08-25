@@ -61,19 +61,30 @@ std::vector<std::filesystem::path> AllowedCacheRoots() {
 }
 
 // The <id> folder under the 1C roots may shadow licence storage; IBStart never clears these.
-bool IsReservedCacheFolder(const std::filesystem::path& path) {
-  std::wstring name = path.filename().wstring();
-  std::transform(name.begin(), name.end(), name.begin(), [](wchar_t character) { return static_cast<wchar_t>(std::towlower(character)); });
+bool IsReservedCacheFolder(std::wstring_view name) {
   return name == L"licenses" || name == L"license" || name == L"lic";
 }
 
+bool ContainsReservedCacheFolder(std::wstring_view relative) {
+  size_t start = 0;
+  while (start < relative.size()) {
+    const size_t end = relative.find_first_of(L"\\/", start);
+    const auto component = relative.substr(start, end == std::wstring_view::npos ? relative.size() - start : end - start);
+    if (IsReservedCacheFolder(component)) return true;
+    if (end == std::wstring_view::npos) break;
+    start = end + 1;
+  }
+  return false;
+}
+
 bool IsSafeCachePath(const std::filesystem::path& path) {
-  if (IsReservedCacheFolder(path)) return false;
   const auto candidate = NormalizedLower(path);
   for (const auto& rootPath : AllowedCacheRoots()) {
     auto root = NormalizedLower(rootPath);
     if (!root.ends_with(L'\\')) root.push_back(L'\\');
-    if (candidate.starts_with(root) && candidate.size() > root.size()) return true;
+    if (candidate.starts_with(root) && candidate.size() > root.size()) {
+      return !ContainsReservedCacheFolder(std::wstring_view(candidate).substr(root.size()));
+    }
   }
   return false;
 }

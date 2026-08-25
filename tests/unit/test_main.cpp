@@ -610,6 +610,29 @@ void TestCacheSizeFormatting() {
   CHECK(ibstart::cache::FormatSize(1024ULL * 1024ULL * 1024ULL) == L"1 ГБ");
 }
 
+void TestCacheRejectsLicenseDescendants() {
+  const auto directory = Temp(L"cache-license-safety");
+  const auto local = directory / L"local";
+  const auto protectedDirectory = local / L"1C" / L"1Cv8" / L"licenses" / L"nested";
+  std::filesystem::create_directories(protectedDirectory);
+  WriteBytes(protectedDirectory / L"license.dat", "keep");
+
+  const DWORD required = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
+  std::wstring previous(required, L'\0');
+  if (required != 0) {
+    const DWORD copied = GetEnvironmentVariableW(L"LOCALAPPDATA", previous.data(), required);
+    previous.resize(copied);
+  }
+  SetEnvironmentVariableW(L"LOCALAPPDATA", local.c_str());
+  const auto result = ibstart::cache::Clear({{protectedDirectory, 0}});
+  SetEnvironmentVariableW(L"LOCALAPPDATA", required == 0 ? nullptr : previous.c_str());
+
+  CHECK(!result.errors.empty());
+  CHECK(std::filesystem::exists(protectedDirectory / L"license.dat"));
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
 void TestPortableMode() {
   const auto directory = Temp(L"portable"); const auto executable = directory / L"IBStart.exe"; WriteBytes(executable, ""); WriteBytes(directory / L"IBStart.portable", "");
   const auto layout = ibstart::storage::ResolveLayout(executable); CHECK(layout.portable); CHECK(layout.root == directory / L"data"); ibstart::storage::EnsureWritable(layout);
@@ -864,6 +887,7 @@ int wmain() {
   run(L"FileBaseScanRegistration", TestFileBaseScanRegistration);
   run(L"SecretMasking", TestSecretMasking);
   run(L"CacheSizeFormatting", TestCacheSizeFormatting);
+  run(L"CacheRejectsLicenseDescendants", TestCacheRejectsLicenseDescendants);
   run(L"PortableMode", TestPortableMode);
   run(L"CatalogStateRepository", TestCatalogStateRepository);
   run(L"CatalogMetadataService", TestCatalogMetadataService);
