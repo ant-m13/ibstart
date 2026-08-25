@@ -245,6 +245,37 @@ void TestPlatformDiscoveryLargeVersions() {
   std::filesystem::remove_all(root, error);
 }
 
+void TestStandaloneThinClientDiscovery() {
+  constexpr std::wstring_view kVersion = L"8.3.27.1688";
+  const auto root = Temp(L"standalone-thin-client");
+  const auto bin = root / kVersion / L"bin";
+  std::filesystem::create_directories(bin);
+  const auto thin = bin / L"1cv8c.exe";
+  WriteBytes(thin, "");
+
+  const auto discovered = ibstart::platform::Discover({root});
+  const auto found = std::find_if(discovered.begin(), discovered.end(), [&](const auto& item) { return item.executable == thin; });
+  CHECK(found != discovered.end());
+  CHECK(found != discovered.end() && found->version == kVersion);
+  CHECK(found != discovered.end() && found->has_thin_client);
+
+  ibstart::domain::LaunchOptions options;
+  options.mode = ibstart::domain::LaunchMode::enterprise;
+  options.client_type = ibstart::domain::ClientType::thin;
+  options.version = std::wstring(kVersion);
+  const auto selected = ibstart::launcher::SelectPlatform(discovered, options);
+  CHECK(selected && selected->executable == thin);
+
+  ibstart::domain::Database web;
+  web.connect = L"WS=\"https://example.test/base\"";
+  const auto command = selected ? ibstart::launcher::BuildCommand(web, *selected, options) : ibstart::domain::LaunchCommand{};
+  CHECK(command.executable == thin);
+  CHECK(command.arguments == std::vector<std::wstring>{L"ENTERPRISE", L"/WS", L"https://example.test/base"});
+
+  std::error_code error;
+  std::filesystem::remove_all(root, error);
+}
+
 void TestWindowsArgumentQuoting() {
   const std::vector<std::wstring> expected = {
       L"", L"plain", L"with spaces", L"with\ttab", L"embedded\"quote", L"slash-before-quote\\\"",
@@ -795,6 +826,7 @@ int wmain() {
   run(L"V8iSaveRejectsActiveWriter", TestV8iSaveRejectsActiveWriter);
   run(L"CommandBuilderAndSelection", TestCommandBuilderAndSelection);
   run(L"PlatformDiscoveryLargeVersions", TestPlatformDiscoveryLargeVersions);
+  run(L"StandaloneThinClientDiscovery", TestStandaloneThinClientDiscovery);
   run(L"WindowsArgumentQuoting", TestWindowsArgumentQuoting);
   run(L"CatalogOrderingAndCycles", TestCatalogOrderingAndCycles);
   run(L"CatalogSetChildOrder", TestCatalogSetChildOrder);
