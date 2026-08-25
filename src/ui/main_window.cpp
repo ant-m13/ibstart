@@ -2658,7 +2658,7 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
     const auto database = catalog_->DatabaseFor(name);
     const auto webUrl = catalog::Catalog::WebUrl(database.connect);
     if (webUrl && mode == domain::LaunchMode::designer) {
-      Message(window_, L"Конфигуратор недоступен для веб-базы. Запустите её в режиме Предприятие через веб- или тонкий клиент.", L"ИБ Старт", MB_OK | MB_ICONINFORMATION);
+      Message(window_, L"Конфигуратор недоступен для веб-базы. Запустите её в режиме Предприятие тонким клиентом или в браузере.", L"ИБ Старт", MB_OK | MB_ICONINFORMATION);
       return;
     }
     const auto rememberLaunch = [&](domain::LaunchMode launchedMode = mode) {
@@ -2669,25 +2669,7 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
     domain::LaunchOptions options;
     options.mode = mode;
     if (webUrl) {
-      options.client_type = ClientTypeFromApplication(database.app);
-      if (options.client_type == domain::ClientType::automatic) options.client_type = ClientTypeFromApplication(database.default_app);
-      if (options.client_type == domain::ClientType::automatic) options.client_type = domain::ClientType::thin;
-      if (options.client_type == domain::ClientType::web) {
-        const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", webUrl->c_str(), nullptr, nullptr, SW_SHOWNORMAL));
-        if (result <= 32) {
-          logger_.Error(L"Не удалось открыть веб-клиент для базы: " + database.name);
-          Message(window_, L"Не удалось открыть веб-клиент в браузере.", L"ИБ Старт", MB_OK | MB_ICONERROR);
-          return;
-        }
-        logger_.Info(L"Открыт веб-клиент для базы: " + database.name);
-        rememberLaunch(domain::LaunchMode::web_client);
-        SetStatus(L"Открыта база в веб-клиенте: " + database.name);
-        return;
-      }
-      if (options.client_type == domain::ClientType::thick) {
-        Message(window_, L"Веб-базу нельзя открыть толстым клиентом. Выберите веб- или тонкий клиент.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
-        return;
-      }
+      options.client_type = domain::ClientType::thin;
     } else {
       options.client_type = ClientTypeFromApplication(database.app);
       if (options.client_type == domain::ClientType::automatic) options.client_type = ClientTypeFromApplication(database.default_app);
@@ -2696,8 +2678,27 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
     else if (const auto fromDatabase = launcher::ParseAppArchitecture(database.app_arch)) options.architecture = *fromDatabase;
     const auto& selectedVersion = database.version.empty() ? database.default_version : database.version;
     if (selectedVersion != L"" && selectedVersion != L"Авто") options.version = selectedVersion;
+    const bool hasThinClient = std::any_of(platforms_.begin(), platforms_.end(), [](const auto& platform) { return platform.has_thin_client; });
+    if (webUrl && !hasThinClient) {
+      const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", webUrl->c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+      if (result <= 32) {
+        logger_.Error(L"Не удалось открыть веб-базу в браузере: " + database.name);
+        Message(window_, L"Не удалось открыть веб-базу в браузере.", L"ИБ Старт", MB_OK | MB_ICONERROR);
+        return;
+      }
+      logger_.Info(L"Открыта веб-база в браузере: " + database.name);
+      rememberLaunch(domain::LaunchMode::web_client);
+      SetStatus(L"Открыта база в браузере: " + database.name);
+      return;
+    }
     if (options.client_type == domain::ClientType::web) { Message(window_, L"Веб-клиент можно использовать только для веб-базы с адресом http:// или https://.", L"ИБ Старт", MB_OK | MB_ICONWARNING); return; }
-    const auto selected = launcher::SelectPlatform(platforms_, options); if (!selected) { Message(window_, L"Подходящая платформа 1С не найдена. Проверьте установку и настройки поиска.", L"ИБ Старт", MB_OK | MB_ICONERROR); return; }
+    const auto selected = launcher::SelectPlatform(platforms_, options); if (!selected) {
+      const auto text = webUrl && !selectedVersion.empty() && selectedVersion != L"Авто"
+          ? L"Тонкий клиент 1С версии " + selectedVersion + L" не найден."
+          : L"Подходящая платформа 1С не найдена. Проверьте установку и настройки поиска.";
+      Message(window_, text, L"ИБ Старт", MB_OK | MB_ICONERROR);
+      return;
+    }
     const auto parameters = database.additional_parameters; if (utf::FindNoCaseOrdinal(parameters, L"/p") != std::wstring_view::npos && MessageBoxW(window_, L"В дополнительных параметрах обнаружен /P. Пароль может храниться в открытом виде в ibases.v8i. Продолжить?", L"Предупреждение", MB_YESNO | MB_ICONWARNING) != IDYES) return;
     const auto command = launcher::BuildCommand(database, *selected, options); logger_.Info(L"Запуск: " + command.CommandLine()); launcher::Launch(command); rememberLaunch(); SetStatus(L"Запущена база: " + database.name);
   } catch (const std::exception& error) { logger_.Error(L"Ошибка запуска: " + ibstart::utf::FromUtf8(error.what())); Message(window_, L"Не удалось запустить базу. Подробности — в последнем логе.", L"ИБ Старт", MB_OK | MB_ICONERROR); }
