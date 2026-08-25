@@ -47,6 +47,10 @@ bool VersionMatches(std::wstring_view installed, std::wstring_view requested) {
       installed[requested.size()] == L'.';
 }
 
+bool IsThinOnlyPlatform(const domain::PlatformInstallation& platform) {
+  return EqualNoCase(platform.executable.filename().wstring(), L"1cv8c.exe");
+}
+
 }  // namespace
 
 std::wstring QuoteWindowsArgument(std::wstring_view argument) {
@@ -131,6 +135,9 @@ std::optional<domain::PlatformInstallation> SelectPlatform(
     if (options.bitness != domain::ClientBitness::automatic && candidate.bitness != options.bitness) continue;
     if ((architecture == domain::ClientArchitecture::x86 && candidate.bitness != domain::ClientBitness::x86) ||
         (architecture == domain::ClientArchitecture::x64 && candidate.bitness != domain::ClientBitness::x64)) continue;
+    const bool requiresThickClient = options.mode == domain::LaunchMode::designer ||
+        options.client_type == domain::ClientType::thick;
+    if (requiresThickClient && IsThinOnlyPlatform(candidate)) continue;
     if (options.client_type == domain::ClientType::thin && !candidate.has_thin_client) continue;
     filtered.push_back(candidate);
   }
@@ -155,6 +162,11 @@ std::optional<domain::PlatformInstallation> SelectPlatform(
 domain::LaunchCommand BuildCommand(const domain::Database& database,
     const domain::PlatformInstallation& platform, const domain::LaunchOptions& options) {
   if (database.connect.empty()) throw std::invalid_argument("Database has no Connect field.");
+  const bool thinOnlyPlatform = IsThinOnlyPlatform(platform);
+  if (thinOnlyPlatform && (options.mode == domain::LaunchMode::designer ||
+      options.client_type == domain::ClientType::thick)) {
+    throw std::invalid_argument("The standalone thin client cannot run the requested mode.");
+  }
   domain::LaunchCommand command;
   command.executable = platform.executable;
   if (options.client_type == domain::ClientType::thin) {
