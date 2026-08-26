@@ -30,11 +30,16 @@ bool IsSeparateSecretSwitch(std::wstring_view argument) {
   return std::any_of(std::begin(switches), std::end(switches), [&](auto value) { return EqualNoCase(argument, value); });
 }
 
-std::optional<size_t> InlineSecretPrefixLength(std::wstring_view argument) {
+std::optional<size_t> ExplicitInlineSecretPrefixLength(std::wstring_view argument) {
   constexpr std::wstring_view prefixes[] = {
       L"/Password=", L"--password=", L"-password=", L"--token=", L"-token=",
       L"password=", L"pwd=", L"token=", L"secret=", L"/P="};
   for (const auto prefix : prefixes) if (StartsWithNoCase(argument, prefix)) return prefix.size();
+  return std::nullopt;
+}
+
+std::optional<size_t> InlineSecretPrefixLength(std::wstring_view argument) {
+  if (const auto explicitPrefix = ExplicitInlineSecretPrefixLength(argument)) return explicitPrefix;
   // 1C also accepts /P immediately followed by a password. Prefer hiding an
   // ambiguous /P... argument in diagnostics over exposing credentials.
   if (argument.size() > 2 && StartsWithNoCase(argument, L"/P")) return 2;
@@ -98,6 +103,23 @@ std::wstring RedactedCommandLine(const domain::LaunchCommand& command) {
     result += launcher::QuoteWindowsArgument(argument);
   }
   return result;
+}
+
+bool ContainsSecretArguments(const domain::LaunchCommand& command) {
+  bool connectionValue = false;
+  for (const auto& argument : command.arguments) {
+    if (connectionValue) {
+      connectionValue = false;
+      continue;
+    }
+    if (EqualNoCase(argument, L"/F") || EqualNoCase(argument, L"/S") ||
+        EqualNoCase(argument, L"/WS") || EqualNoCase(argument, L"/IBConnection")) {
+      connectionValue = true;
+      continue;
+    }
+    if (IsSeparateSecretSwitch(argument) || ExplicitInlineSecretPrefixLength(argument)) return true;
+  }
+  return false;
 }
 
 Logger::Logger(std::filesystem::path directory) : directory_(std::move(directory)) {
