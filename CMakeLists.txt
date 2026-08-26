@@ -69,6 +69,7 @@ add_executable(IBStart WIN32
   src/app/main.cpp
   src/ui/cache_clear_operation.cpp
   src/ui/database_editor_dialog.cpp
+  src/ui/details_view_controller.cpp
   src/ui/dialog_support.cpp
   src/ui/folder_picker.cpp
   src/ui/input_box.cpp
