@@ -6,6 +6,7 @@
 #include "core/storage/storage.hpp"
 #include "core/v8i/v8i_file_store.hpp"
 #include "ui/cache_clear_operation.hpp"
+#include "ui/details_view_controller.hpp"
 #include "ui/owner_draw_menu.hpp"
 #include "ui/tree_view_controller.hpp"
 #include "ui/update_check_operation.hpp"
@@ -47,7 +48,6 @@ class MainWindow {
   void RefreshTagFilter();
   [[nodiscard]] presentation::TreeTagFilter CurrentTagFilter() const;
   LRESULT DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const;
-  LRESULT DrawDetailsList(NMLVCUSTOMDRAW* draw) const;
   bool MeasureContextMenuItem(MEASUREITEMSTRUCT* measure) const;
   bool DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const;
   [[nodiscard]] const OwnerDrawMenuItem* FindMenuItem(ULONG_PTR item_data) const noexcept;
@@ -84,7 +84,6 @@ class MainWindow {
   void RefreshFileMenu();
   void RefreshMainMenuBar();
   void ToggleTagDisplay();
-  void UpdateConnection();
   void SetStatus(std::wstring text);
   [[nodiscard]] std::wstring CatalogStatistics() const;
   void SetSimpleMode(bool enabled);
@@ -147,6 +146,7 @@ class MainWindow {
   std::optional<std::wstring> initial_launch_id_;
   bool suppress_search_refresh_{false};
   TreeViewController tree_view_;
+  DetailsViewController details_view_;
   background::UpdateCheckOperation update_check_;
   background::CacheClearOperation cache_operation_;
   std::wstring search_filter_;

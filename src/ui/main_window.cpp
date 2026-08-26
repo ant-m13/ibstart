@@ -26,7 +26,6 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
-#include <cwchar>
 #include <cwctype>
 #include <filesystem>
 #include <functional>
@@ -45,7 +44,6 @@ using dialog::ScaleForDpi;
 using presentation::ContainsTag;
 using presentation::KnownTags;
 using presentation::TagId;
-using presentation::TagStyleFor;
 using presentation::TagsFor;
 using presentation::TagsText;
 namespace {
@@ -115,25 +113,6 @@ int ButtonIdealWidth(HWND button, int fallback) {
   if (!button || !SendMessageW(button, BCM_GETIDEALSIZE, 0, reinterpret_cast<LPARAM>(&size)) || size.cx <= 0) return fallback;
   return std::max(fallback, static_cast<int>(size.cx) + 8);
 }
-std::wstring FriendlyFieldName(std::wstring_view key) {
-  struct Label { std::wstring_view key; std::wstring_view text; };
-  constexpr Label labels[] = {{L"Connect", L"Подключение"}, {L"ID", L"Идентификатор"}, {L"Folder", L"Группа"},
-      {L"OrderInList", L"Порядок"}, {L"Version", L"Версия платформы"}, {L"App", L"Приложение"},
-      {L"DefaultApp", L"Приложение по умолчанию"}, {L"WA", L"Аутентификация ОС"}, {L"External", L"Внешняя"},
-      {L"Locale", L"Локаль"}, {L"ClientConnectionSpeed", L"Скорость соединения"}, {L"AppArch", L"Разрядность"}, {L"AdditionalParameters", L"Доп. параметры"}};
-  for (const auto& label : labels) if (CompareStringOrdinal(key.data(), static_cast<int>(key.size()), label.key.data(), static_cast<int>(label.key.size()), TRUE) == CSTR_EQUAL) return std::wstring(label.text);
-  return std::wstring(key);
-}
-std::wstring ConnectionKind(std::wstring_view connect) {
-  if (catalog::Catalog::IsWebConnection(connect)) return L"Веб-база";
-  if (connection::Value(connect, L"File")) return L"Файловая информационная база";
-  if (connection::Value(connect, L"Srvr")) return L"Серверная информационная база";
-  return L"Информационная база";
-}
-std::wstring SingleLine(std::wstring value) {
-  std::replace(value.begin(), value.end(), L'\r', L' '); std::replace(value.begin(), value.end(), L'\n', L' '); std::replace(value.begin(), value.end(), L'\t', L' '); return value;
-}
-
 bool EqualNoCase(std::wstring_view left, std::wstring_view right) {
   return left.size() == right.size() && CompareStringOrdinal(left.data(), static_cast<int>(left.size()), right.data(), static_cast<int>(right.size()), TRUE) == CSTR_EQUAL;
 }
@@ -144,65 +123,12 @@ std::wstring TrimText(std::wstring_view value) {
   while (last > first && std::iswspace(value[last - 1])) --last;
   return std::wstring(value.substr(first, last - first));
 }
-struct FileDatabasePassport {
-  std::filesystem::path directory;
-  std::filesystem::path database_file;
-  std::optional<uintmax_t> size;
-  std::wstring modified;
-  bool network_path{false};
-};
-std::wstring FormatFileModificationTime(const FILETIME& value) {
-  FILETIME local{};
-  SYSTEMTIME time{};
-  if (!FileTimeToLocalFileTime(&value, &local) || !FileTimeToSystemTime(&local, &time)) return {};
-  wchar_t text[32]{};
-  swprintf_s(text, L"%02u.%02u.%04u %02u:%02u", time.wDay, time.wMonth, time.wYear, time.wHour, time.wMinute);
-  return text;
-}
-bool IsNetworkFilePath(const std::filesystem::path& path) {
-  const std::wstring_view native = path.native();
-  const bool extendedUnc = native.size() >= 8 && native.starts_with(L"\\\\?\\") &&
-      _wcsnicmp(native.data() + 4, L"UNC\\", 4) == 0;
-  if (extendedUnc || (native.starts_with(L"\\\\") && !native.starts_with(L"\\\\?\\")) || native.starts_with(L"//")) return true;
-  const auto root = path.root_path();
-  return !root.empty() && GetDriveTypeW(root.c_str()) == DRIVE_REMOTE;
-}
-FileDatabasePassport ReadFileDatabasePassport(std::wstring_view connect) {
-  FileDatabasePassport result;
-  result.directory = connection::ValueOrEmpty(connect, L"File");
-  result.database_file = result.directory / L"1Cv8.1CD";
-  if (result.directory.empty()) return result;
-  result.network_path = IsNetworkFilePath(result.directory);
-  if (result.network_path) return result;
-  WIN32_FILE_ATTRIBUTE_DATA attributes{};
-  if (!GetFileAttributesExW(result.database_file.c_str(), GetFileExInfoStandard, &attributes) ||
-      attributes.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) return result;
-  result.size = (static_cast<uintmax_t>(attributes.nFileSizeHigh) << 32) | attributes.nFileSizeLow;
-  result.modified = FormatFileModificationTime(attributes.ftLastWriteTime);
-  return result;
-}
 domain::ClientType ClientTypeFromApplication(std::wstring_view value) {
   if (EqualNoCase(value, L"ThinClient")) return domain::ClientType::thin;
   if (EqualNoCase(value, L"ThickClient")) return domain::ClientType::thick;
   if (EqualNoCase(value, L"WebClient")) return domain::ClientType::web;
   return domain::ClientType::automatic;
 }
-std::wstring ListViewText(HWND list, int row, int column) {
-  std::wstring text(256, L'\0');
-  for (;;) {
-    LVITEMW item{};
-    item.iSubItem = column;
-    item.pszText = text.data();
-    item.cchTextMax = static_cast<int>(text.size());
-    const int copied = static_cast<int>(SendMessageW(list, LVM_GETITEMTEXTW, static_cast<WPARAM>(row), reinterpret_cast<LPARAM>(&item)));
-    if (copied < static_cast<int>(text.size()) - 1) {
-      text.resize(std::max(0, copied));
-      return text;
-    }
-    text.resize(text.size() * 2);
-  }
-}
-
 bool CopyTextToClipboard(HWND owner, std::wstring_view text) {
   const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
   const HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
@@ -453,7 +379,10 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       }
       if (lparam && reinterpret_cast<NMHDR*>(lparam)->hwndFrom == details_) {
         const auto* notification = reinterpret_cast<NMHDR*>(lparam);
-        if (notification->code == NM_CUSTOMDRAW) return DrawDetailsList(reinterpret_cast<NMLVCUSTOMDRAW*>(lparam));
+        if (notification->code == NM_CUSTOMDRAW) {
+          return details_view_.Draw(
+              reinterpret_cast<NMLVCUSTOMDRAW*>(lparam), catalog_state_.Read().tag_styles);
+        }
         if (notification->code == LVN_KEYDOWN) {
           const auto* key = reinterpret_cast<NMLVKEYDOWN*>(lparam);
           if (key->wVKey == 'C' && (GetKeyState(VK_CONTROL) & 0x8000)) {
@@ -594,6 +523,8 @@ void MainWindow::CreateControls() {
       SendMessageW(button, WM_SETFONT, reinterpret_cast<WPARAM>(button_font_), TRUE);
     }
   }
+  details_view_.Attach({details_title_, details_subtitle_, details_, connection_, enterprise_, designer_,
+      edit_, cache_, shortcut_, remove_}, details_key_font_);
   const HWND tooltips = CreateWindowExW(WS_EX_TOPMOST, TOOLTIPS_CLASSW, nullptr, WS_POPUP | TTS_ALWAYSTIP | TTS_NOPREFIX,
       CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, CW_USEDEFAULT, window_, nullptr, instance_, nullptr);
   if (tooltips) {
@@ -944,30 +875,6 @@ LRESULT MainWindow::DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const {
   return presentation::DrawTreeSearchMatches(tree_, draw, catalog_ ? &*catalog_ : nullptr, settings_,
       catalog_state_.Read().tags, catalog_state_.Read().tag_styles, search_filter_, controls_font_);
 }
-LRESULT MainWindow::DrawDetailsList(NMLVCUSTOMDRAW* draw) const {
-  if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
-  if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) return CDRF_NOTIFYSUBITEMDRAW;
-  if (draw->nmcd.dwDrawStage != (CDDS_ITEMPREPAINT | CDDS_SUBITEM)) return CDRF_DODEFAULT;
-  const auto row = static_cast<int>(draw->nmcd.dwItemSpec);
-  draw->clrTextBk = row % 2 == 0 ? RGB(242, 248, 249) : RGB(250, 252, 253);
-  if (draw->iSubItem == 1 && details_ && EqualNoCase(ListViewText(details_, row, 0), L"Тег")) {
-    if (const auto* style = TagStyleFor(catalog_state_.Read().tag_styles, ListViewText(details_, row, 1))) {
-      draw->clrTextBk = style->background;
-      draw->clrText = style->text;
-      return CDRF_DODEFAULT;
-    }
-  }
-  if (draw->iSubItem == 0) {
-    draw->clrText = RGB(0, 111, 129);
-    if (details_key_font_) {
-      SelectObject(draw->nmcd.hdc, details_key_font_);
-      return CDRF_NEWFONT;
-    }
-  } else {
-    draw->clrText = RGB(36, 50, 60);
-  }
-  return CDRF_DODEFAULT;
-}
 bool MainWindow::MeasureContextMenuItem(MEASUREITEMSTRUCT* measure) const {
   if (!measure || measure->CtlType != ODT_MENU) return false;
   const auto* item = FindMenuItem(measure->itemData);
@@ -1130,8 +1037,8 @@ void MainWindow::CopySelectedDetail(bool include_name) {
     SetStatus(L"Выберите параметр для копирования.");
     return;
   }
-  const auto name = ListViewText(details_, row, 0);
-  const auto value = ListViewText(details_, row, 1);
+  const auto name = details_view_.Text(row, 0);
+  const auto value = details_view_.Text(row, 1);
   const auto text = include_name ? name + L": " + value : value;
   if (!CopyTextToClipboard(window_, text)) {
     SetStatus(L"Не удалось скопировать параметр в буфер обмена.");
@@ -1321,82 +1228,10 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
 }
 
 void MainWindow::DisplaySelected() {
-  if (!details_) {
-    UpdateConnection();
-    return;
-  }
-  ListView_DeleteAllItems(details_);
-  const auto name = tree_view_.SelectedName();
-  const LPARAM selectedData = tree_view_.ItemData(TreeView_GetSelection(tree_));
-  const auto* entry = catalog_ && selectedData == 0 ? catalog_->Find(name) : nullptr;
-  if (!entry) {
-    SetWindowTextW(details_title_, selectedData == TreeViewController::kCatalogRootItemData
-        ? TreeViewController::kCatalogRootName.data() : name.empty() ? L"Выберите базу или группу" : name.c_str());
-    SetWindowTextW(details_subtitle_, selectedData == TreeViewController::kCatalogRootItemData
-        ? L"Корневой уровень списка баз" : name.empty() ? L"Сведения появятся здесь" : L"Служебный раздел списка");
-    EnableWindow(enterprise_, FALSE); EnableWindow(designer_, FALSE); EnableWindow(edit_, FALSE);
-    EnableWindow(cache_, FALSE); EnableWindow(shortcut_, FALSE); EnableWindow(remove_, FALSE);
-    UpdateConnection();
-    return;
-  }
-
-  const std::wstring type = entry->IsDatabase() ? ConnectionKind(entry->ValueOr(L"Connect")) : L"Группа списка баз";
-  SetWindowTextW(details_title_, entry->name.c_str());
-  const std::wstring subtitle = type + L"  •  Полей: " + std::to_wstring(entry->fields.size());
-  SetWindowTextW(details_subtitle_, subtitle.c_str());
-  const auto addRow = [&](std::wstring key, std::wstring value) {
-    if (value.empty()) value = L"—";
-    LVITEMW item{}; item.mask = LVIF_TEXT; item.iItem = ListView_GetItemCount(details_); item.pszText = key.data();
-    const int index = ListView_InsertItem(details_, &item);
-    if (index >= 0) ListView_SetItemText(details_, index, 1, value.data());
-  };
-  const auto addDivider = [&] {
-    std::wstring empty;
-    LVITEMW item{}; item.mask = LVIF_TEXT; item.iItem = ListView_GetItemCount(details_); item.pszText = empty.data();
-    ListView_InsertItem(details_, &item);
-  };
-  addRow(L"Тип", type);
-  for (const auto& field : entry->fields) {
-    if (_wcsicmp(field.key.c_str(), L"Connect") == 0) continue;
-    auto value = SingleLine(field.value);
-    if (_wcsicmp(field.key.c_str(), L"Folder") == 0 && (value.empty() || value == L"/")) value = L"Корневой уровень";
-    addRow(FriendlyFieldName(field.key), std::move(value));
-  }
-  if (entry->IsDatabase()) {
-    const auto& tags = TagsFor(catalog_state_.Read().tags, *entry);
-    for (const auto& tag : tags) addRow(L"Тег", tag);
-    const auto connect = entry->ValueOr(L"Connect");
-    if (!connection::ValueOrEmpty(connect, L"File").empty()) {
-      const auto passport = ReadFileDatabasePassport(connect);
-      addDivider();
-      addRow(L"Каталог", passport.directory.wstring());
-      addRow(L"Файл 1Cv8.1CD", passport.database_file.wstring());
-      if (passport.network_path) {
-        addRow(L"Состояние", L"Сетевая папка: сведения не загружаются");
-      } else if (passport.size) {
-        addRow(L"Размер 1Cv8.1CD", cache::FormatSize(*passport.size));
-        addRow(L"Изменён", passport.modified);
-      } else {
-        addRow(L"Состояние", L"Файл не найден или недоступен");
-      }
-    } else {
-      const auto server = connection::ValueOrEmpty(connect, L"Srvr");
-      const auto reference = connection::ValueOrEmpty(connect, L"Ref");
-      if (!server.empty() || !reference.empty()) {
-        addDivider();
-        addRow(L"Сервер 1С", server);
-        addRow(L"Имя базы", reference);
-      }
-    }
-  }
-  const bool database = entry->IsDatabase();
-  const bool web = database && catalog::Catalog::IsWebConnection(entry->ValueOr(L"Connect"));
-  const bool launch_available = database && !cache_operation_.active();
-  EnableWindow(enterprise_, launch_available); EnableWindow(designer_, launch_available && !web);
-  EnableWindow(edit_, !settings_.simple_mode); EnableWindow(remove_, !settings_.simple_mode);
-  EnableWindow(cache_, database && !settings_.simple_mode && !cache_operation_.active()); EnableWindow(shortcut_, database && !settings_.simple_mode);
-  InvalidateRect(details_, nullptr, TRUE);
-  UpdateConnection();
+  const LPARAM selected_data = tree_view_.ItemData(TreeView_GetSelection(tree_));
+  details_view_.Display(catalog_ ? &*catalog_ : nullptr, &catalog_state_, tree_view_.SelectedName(),
+      selected_data == TreeViewController::kCatalogRootItemData, settings_.simple_mode,
+      cache_operation_.active());
 }
 
 void MainWindow::LaunchSelected(domain::LaunchMode mode) {
@@ -1943,20 +1778,6 @@ void MainWindow::ToggleTagDisplay() {
   }
   if (view_menu_) CheckMenuItem(view_menu_, kShowTagsInList, MF_BYCOMMAND | (settings_.show_tags_in_list ? MF_CHECKED : MF_UNCHECKED));
   RedrawWindow(tree_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
-}
-void MainWindow::UpdateConnection() {
-  if (!connection_) return;
-  if (!catalog_) {
-    SetWindowTextW(connection_, L"");
-    return;
-  }
-  const auto* entry = catalog_->Find(tree_view_.SelectedName());
-  if (!entry || !entry->IsDatabase()) {
-    SetWindowTextW(connection_, L"");
-    return;
-  }
-  const std::wstring connect = entry->ValueOr(L"Connect");
-  SetWindowTextW(connection_, connect.c_str());
 }
 void MainWindow::SetStatus(std::wstring text) { if (status_) SendMessageW(status_, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(text.c_str())); }
 std::wstring MainWindow::CatalogStatistics() const { return L"Баз: " + std::to_wstring(catalog_ ? catalog_->Databases().size() : 0) + L" | Платформ: " + std::to_wstring(platforms_.size()); }
