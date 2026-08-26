@@ -6,6 +6,7 @@
 #include "core/storage/storage.hpp"
 #include "core/v8i/v8i_file_store.hpp"
 #include "ui/owner_draw_menu.hpp"
+#include "ui/update_check_operation.hpp"
 
 #include <Windows.h>
 #include <CommCtrl.h>
@@ -32,7 +33,6 @@ class MainWindow {
   void Activate();
 
  private:
-  struct UpdateCheckState;
   struct CacheOperationState;
 
   static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
@@ -155,7 +155,7 @@ class MainWindow {
   std::vector<std::wstring> filter_favorites_;
   std::optional<std::wstring> initial_launch_id_;
   bool suppress_search_refresh_{false};
-  std::shared_ptr<UpdateCheckState> update_check_;
+  background::UpdateCheckOperation update_check_;
   std::shared_ptr<CacheOperationState> cache_operation_;
   std::wstring search_filter_;
   std::wstring dragging_name_;
@@ -163,7 +163,6 @@ class MainWindow {
   bool drag_insert_after_{false};
   bool drag_to_root_{false};
   bool closing_{false};
-  std::jthread update_thread_;
   std::jthread cache_thread_;
 };
 

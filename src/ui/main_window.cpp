@@ -428,14 +428,6 @@ bool CopyTextToClipboard(HWND owner, std::wstring_view text) {
 
 }  // namespace
 
-struct MainWindow::UpdateCheckState {
-  std::mutex mutex;
-  std::optional<update::Release> release;
-  std::wstring error;
-  bool cancelled{false};
-  bool completed{false};
-};
-
 struct MainWindow::CacheOperationState {
   enum class Stage { finding, clearing };
 
@@ -472,15 +464,14 @@ MainWindow::~MainWindow() {
 }
 
 void MainWindow::StopAndJoinBackgroundThreads() noexcept {
-  if (update_thread_.joinable()) static_cast<void>(update_thread_.request_stop());
+  update_check_.StopAndJoin();
   if (cache_thread_.joinable()) static_cast<void>(cache_thread_.request_stop());
-  if (update_thread_.joinable()) update_thread_.join();
   if (cache_thread_.joinable()) cache_thread_.join();
 }
 
 bool MainWindow::RefreshBackgroundPolling() {
   if (!window_ || !IsWindow(window_)) return false;
-  if (update_thread_.joinable() || cache_thread_.joinable()) {
+  if (update_check_.active() || cache_thread_.joinable()) {
     return SetTimer(window_, kBackgroundPollTimer, kBackgroundPollIntervalMilliseconds, nullptr) != 0;
   }
   KillTimer(window_, kBackgroundPollTimer);
@@ -488,26 +479,25 @@ bool MainWindow::RefreshBackgroundPolling() {
 }
 
 void MainWindow::PollBackgroundOperations() {
+  if (update_check_.completed()) CompleteUpdateCheck();
+  if (!window_) return;
   const auto completed = [](const auto& state) {
     if (!state) return false;
     std::lock_guard lock(state->mutex);
     return state->completed;
   };
-  if (completed(update_check_)) CompleteUpdateCheck();
-  if (!window_) return;
   if (completed(cache_operation_)) CompleteCacheOperation();
 }
 
 void MainWindow::BeginClose() {
   if (closing_) return;
   closing_ = true;
-  if (update_thread_.joinable()) static_cast<void>(update_thread_.request_stop());
+  update_check_.RequestStop();
   if (cache_thread_.joinable()) static_cast<void>(cache_thread_.request_stop());
-  if (update_thread_.joinable() || cache_thread_.joinable()) {
+  if (update_check_.active() || cache_thread_.joinable()) {
     ShowWindow(window_, SW_HIDE);
     if (!RefreshBackgroundPolling()) {
       StopAndJoinBackgroundThreads();
-      update_check_.reset();
       cache_operation_.reset();
     }
   }
@@ -515,7 +505,7 @@ void MainWindow::BeginClose() {
 }
 
 void MainWindow::TryFinishClose() {
-  if (!closing_ || update_thread_.joinable() || cache_thread_.joinable()) return;
+  if (!closing_ || update_check_.active() || cache_thread_.joinable()) return;
   if (!window_ || !IsWindow(window_)) return;
   KillTimer(window_, kBackgroundPollTimer);
   settings_.selected_entry = catalog_ && catalog_->Find(SelectedName()) ? SelectedName() : std::wstring();
@@ -2395,50 +2385,23 @@ void MainWindow::LaunchFavorite(size_t slot) {
   if (SelectTreeItem(name)) LaunchSelected(domain::LaunchMode::enterprise);
 }
 void MainWindow::CheckForUpdates() {
-  if (update_check_) {
+  if (update_check_.active()) {
     SetStatus(L"Проверка обновлений уже выполняется…");
     return;
   }
-  auto state = std::make_shared<UpdateCheckState>();
-  update_check_ = state;
   EnableMenuItem(help_menu_, kCheckForUpdates, MF_BYCOMMAND | MF_GRAYED);
   DrawMenuBar(window_);
   SetStatus(L"Проверяем наличие обновлений…");
-  const HWND owner = window_;
   try {
-    update_thread_ = std::jthread([state, owner](std::stop_token stop) {
-      std::optional<update::Release> release;
-      std::wstring error;
-      bool cancelled = false;
-      try {
-        if (!stop.stop_requested()) release = update::FetchLatestRelease(stop);
-        cancelled = stop.stop_requested();
-      } catch (const std::exception& exception) {
-        if (stop.stop_requested()) cancelled = true;
-        else error = WideErrorText(exception.what());
-      } catch (...) {
-        if (stop.stop_requested()) cancelled = true;
-        else error = L"Неизвестная ошибка проверки обновлений.";
-      }
-      {
-        std::lock_guard lock(state->mutex);
-        state->release = std::move(release);
-        state->error = std::move(error);
-        state->cancelled = cancelled;
-        state->completed = true;
-      }
-      PostMessageW(owner, kUpdateCheckFinishedMessage, 0, 0);
-    });
+    update_check_.Start(window_, kUpdateCheckFinishedMessage);
     static_cast<void>(RefreshBackgroundPolling());
   } catch (const std::exception& error) {
-    update_check_.reset();
     EnableMenuItem(help_menu_, kCheckForUpdates, MF_BYCOMMAND | MF_ENABLED);
     DrawMenuBar(window_);
     logger_.Error(L"Не удалось запустить проверку обновлений: " + WideErrorText(error.what()));
     SetStatus(L"Не удалось запустить проверку обновлений.");
     Message(window_, L"Не удалось запустить фоновую проверку обновлений.", L"Проверка обновлений", MB_OK | MB_ICONERROR);
   } catch (...) {
-    update_check_.reset();
     EnableMenuItem(help_menu_, kCheckForUpdates, MF_BYCOMMAND | MF_ENABLED);
     DrawMenuBar(window_);
     SetStatus(L"Не удалось запустить проверку обновлений.");
@@ -2446,21 +2409,11 @@ void MainWindow::CheckForUpdates() {
   }
 }
 void MainWindow::CompleteUpdateCheck() {
-  auto state = update_check_;
-  if (!state) return;
-
-  std::optional<update::Release> release;
-  std::wstring error;
-  bool cancelled = false;
-  {
-    std::lock_guard lock(state->mutex);
-    if (!state->completed) return;
-    release = std::move(state->release);
-    error = std::move(state->error);
-    cancelled = state->cancelled;
-  }
-  if (update_thread_.joinable()) update_thread_.join();
-  update_check_.reset();
+  auto completed = update_check_.TakeResult();
+  if (!completed) return;
+  auto release = std::move(completed->release);
+  auto error = std::move(completed->error);
+  const bool cancelled = completed->cancelled;
   static_cast<void>(RefreshBackgroundPolling());
   if (closing_) {
     TryFinishClose();
@@ -2499,8 +2452,9 @@ void MainWindow::CompleteUpdateCheck() {
   const std::wstring text = L"Доступна новая версия ИБ Старт " + release->version + L".\n\nУстановлена версия: " +
       std::wstring(version::value) + L".\n\nОткрыть страницу релиза в браузере?";
   if (MessageBoxW(window_, text.c_str(), L"Доступно обновление", MB_YESNO | MB_ICONINFORMATION) != IDYES) return;
-  const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", release->page_url.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
-  if (result <= 32) {
+  const auto open_result = reinterpret_cast<INT_PTR>(
+      ShellExecuteW(window_, L"open", release->page_url.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+  if (open_result <= 32) {
     logger_.Error(L"Не удалось открыть страницу релиза: " + release->page_url);
     Message(window_, L"Не удалось открыть страницу релиза в браузере.", L"Проверка обновлений", MB_OK | MB_ICONWARNING);
   }
