@@ -2,6 +2,7 @@
 
 #include "core/catalog/catalog.hpp"
 #include "core/catalog/catalog_metadata_service.hpp"
+#include "core/catalog/catalog_session.hpp"
 #include "core/logging/logging.hpp"
 #include "core/storage/storage.hpp"
 #include "core/v8i/v8i_file_store.hpp"
