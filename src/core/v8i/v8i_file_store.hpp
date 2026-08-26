@@ -41,6 +41,7 @@ class V8iFileStore {
 
   std::filesystem::path path_;
   std::optional<Fingerprint> loaded_fingerprint_;
+  bool fingerprint_known_{true};
   std::vector<std::string> maintenance_warnings_;
 };
 
