@@ -2954,7 +2954,7 @@ void MainWindow::DeleteSelected() {
   if (!SaveCatalog(std::move(candidate))) return;
   if (!tagId.empty()) {
     try {
-      catalog_state_.RemoveTags(tagId);
+      static_cast<void>(catalog_state_.RemoveTags(tagId));
     } catch (const std::exception& error) {
       logger_.Error(L"Ошибка удаления тегов: " + ibstart::utf::FromUtf8(error.what()));
       Message(window_, L"База удалена из списка, но её теги не удалось удалить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
