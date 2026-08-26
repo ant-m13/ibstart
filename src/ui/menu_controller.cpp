@@ -150,4 +150,16 @@ const OwnerDrawMenuItem* MenuController::Find(ULONG_PTR item_data) const noexcep
   return file_menu_items_.Find(item_data);
 }
 
+bool MenuController::Measure(HWND owner, HFONT font, MEASUREITEMSTRUCT* measure) const {
+  if (!measure || measure->CtlType != ODT_MENU) return false;
+  const auto* item = Find(measure->itemData);
+  return item && OwnerDrawMenu::Measure(owner, font, *item, measure);
+}
+
+bool MenuController::Draw(HFONT font, const DRAWITEMSTRUCT* draw) const {
+  if (!draw || draw->CtlType != ODT_MENU) return false;
+  const auto* item = Find(draw->itemData);
+  return item && OwnerDrawMenu::Draw(font, *item, draw);
+}
+
 }  // namespace ibstart::ui

@@ -24,6 +24,8 @@ class MenuController final {
   [[nodiscard]] HMENU view_menu() const noexcept { return view_menu_; }
   [[nodiscard]] HMENU help_menu() const noexcept { return help_menu_; }
   [[nodiscard]] const OwnerDrawMenuItem* Find(ULONG_PTR item_data) const noexcept;
+  [[nodiscard]] bool Measure(HWND owner, HFONT font, MEASUREITEMSTRUCT* measure) const;
+  [[nodiscard]] bool Draw(HFONT font, const DRAWITEMSTRUCT* draw) const;
 
  private:
   HWND window_{};
