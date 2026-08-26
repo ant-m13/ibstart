@@ -1963,28 +1963,41 @@ void MainWindow::LoadCatalog(bool report_error) {
 }
 
 bool MainWindow::SaveCatalog(catalog::Catalog candidate) {
-  const auto logMaintenanceWarnings = [&] {
-    if (!store_) return;
-    for (const auto& warning : store_->maintenance_warnings()) {
+  auto target = store_ ? store_->path() : settings_.active_ibases;
+  if (!store_ && target.empty()) {
+    wchar_t filename[MAX_PATH] = L"ibases.v8i";
+    OPENFILENAMEW dialog{};
+    dialog.lStructSize = sizeof(dialog);
+    dialog.hwndOwner = window_;
+    dialog.lpstrFilter = L"ibases.v8i\0ibases.v8i\0Все файлы\0*.*\0";
+    dialog.lpstrFile = filename;
+    dialog.nMaxFile = MAX_PATH;
+    dialog.lpstrDefExt = L"v8i";
+    dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
+    if (!GetSaveFileNameW(&dialog)) return false;
+    target = filename;
+  }
+
+  auto updatedSettings = settings_;
+  updatedSettings.active_ibases = target;
+  RememberRecentList(updatedSettings, target);
+  std::optional<v8i::V8iFileStore> createdStore;
+  auto& writer = store_ ? *store_ : createdStore.emplace(target);
+  const auto logMaintenanceWarnings = [&writer, this] {
+    for (const auto& warning : writer.maintenance_warnings()) {
       logger_.Error(L"Обслуживание резервных копий: " + WideErrorText(warning));
     }
   };
   try {
-    if (!store_) {
-      if (settings_.active_ibases.empty()) {
-        wchar_t filename[MAX_PATH] = L"ibases.v8i";
-        OPENFILENAMEW dialog{}; dialog.lStructSize = sizeof(dialog); dialog.hwndOwner = window_; dialog.lpstrFilter = L"ibases.v8i\0ibases.v8i\0Все файлы\0*.*\0"; dialog.lpstrFile = filename; dialog.nMaxFile = MAX_PATH; dialog.lpstrDefExt = L"v8i"; dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
-        if (!GetSaveFileNameW(&dialog)) return false;
-        settings_.active_ibases = filename;
-      }
-      store_.emplace(settings_.active_ibases);
-    }
-    store_->Save(candidate.document());
+    writer.Save(candidate.document());
     logMaintenanceWarnings();
   } catch (const v8i::ExternalModificationError&) {
     logMaintenanceWarnings();
     const int answer = MessageBoxW(window_, L"Файл ibases.v8i был изменён другой программой. Перечитать его?", L"ИБ Старт", MB_YESNO | MB_ICONWARNING);
-    if (answer == IDYES) LoadCatalog();
+    if (answer == IDYES) {
+      if (store_) LoadCatalog();
+      else static_cast<void>(ActivateCatalog(target));
+    }
     return false;
   } catch (const std::exception& error) {
     logMaintenanceWarnings();
@@ -1993,10 +2006,11 @@ bool MainWindow::SaveCatalog(catalog::Catalog candidate) {
     return false;
   }
 
+  if (createdStore) store_ = std::move(createdStore);
   catalog_ = std::move(candidate);
+  settings_ = std::move(updatedSettings);
   bool settingsSaved = true;
   try {
-    RememberRecentList(settings_, settings_.active_ibases);
     storage::SaveSettings(layout_, settings_);
   } catch (const std::exception& error) {
     settingsSaved = false;
