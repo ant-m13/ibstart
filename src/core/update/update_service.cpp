@@ -209,7 +209,8 @@ std::optional<Release> FetchLatestRelease() {
   if (!WinHttpSetOption(request.get(), WINHTTP_OPTION_REDIRECT_POLICY, &redirectPolicy, sizeof(redirectPolicy))) {
     ThrowWinHttpError("WinHttpSetOption");
   }
-  if (!WinHttpAddRequestHeaders(request.get(), kRequestHeaders, -1L, WINHTTP_ADDREQ_FLAG_ADD)) {
+  constexpr DWORD kNullTerminatedHeaderLength = static_cast<DWORD>(-1);
+  if (!WinHttpAddRequestHeaders(request.get(), kRequestHeaders, kNullTerminatedHeaderLength, WINHTTP_ADDREQ_FLAG_ADD)) {
     ThrowWinHttpError("WinHttpAddRequestHeaders");
   }
   if (!WinHttpSendRequest(request.get(), WINHTTP_NO_ADDITIONAL_HEADERS, 0, WINHTTP_NO_REQUEST_DATA, 0, 0, 0)) {
