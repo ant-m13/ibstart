@@ -19,6 +19,7 @@
 #include <shellapi.h>
 
 #include <algorithm>
+#include <atomic>
 #include <chrono>
 #include <filesystem>
 #include <fstream>
@@ -26,6 +27,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -881,6 +883,51 @@ void TestV8iSaveRejectsActiveWriter() {
   std::filesystem::remove_all(directory, error);
 }
 
+void TestV8iConcurrentSavesConflict() {
+  const auto directory = Temp(L"store-concurrent");
+  const auto file = directory / L"ibases.v8i";
+  WriteBytes(file, "[Base]\r\nConnect=File=\"C:\\\\base\"\r\n");
+  ibstart::v8i::V8iFileStore first(file);
+  ibstart::v8i::V8iFileStore second(file);
+  auto firstDocument = first.Read();
+  auto secondDocument = second.Read();
+  firstDocument.Find(L"Base")->entry.Set(L"Locale", L"first");
+  secondDocument.Find(L"Base")->entry.Set(L"Locale", L"second");
+
+  std::atomic_int ready{0};
+  std::atomic_bool start{false};
+  std::atomic_int saved{0};
+  std::atomic_int conflicts{0};
+  std::atomic_int otherErrors{0};
+  const auto save = [&](ibstart::v8i::V8iFileStore& store, const ibstart::v8i::V8iDocument& document) {
+    ++ready;
+    while (!start.load()) std::this_thread::yield();
+    try {
+      store.Save(document);
+      ++saved;
+    } catch (const ibstart::v8i::ExternalModificationError&) {
+      ++conflicts;
+    } catch (...) {
+      ++otherErrors;
+    }
+  };
+  std::thread firstThread(save, std::ref(first), std::cref(firstDocument));
+  std::thread secondThread(save, std::ref(second), std::cref(secondDocument));
+  while (ready.load() != 2) std::this_thread::yield();
+  start = true;
+  firstThread.join();
+  secondThread.join();
+
+  CHECK(saved == 1);
+  CHECK(conflicts == 1);
+  CHECK(otherErrors == 0);
+  const auto persisted = ReadBytes(file);
+  CHECK((persisted.find("Locale=first") != std::string::npos) !=
+      (persisted.find("Locale=second") != std::string::npos));
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
 void TestStorageSkipsMalformedRecords() {
   const auto directory = Temp(L"malformed-storage");
   const ibstart::storage::StorageLayout layout{directory, true};
@@ -984,6 +1031,7 @@ int wmain() {
   run(L"NoBomAndCatalog", TestNoBomAndCatalog);
   run(L"SafeStore", TestSafeStore);
   run(L"V8iSaveRejectsActiveWriter", TestV8iSaveRejectsActiveWriter);
+  run(L"V8iConcurrentSavesConflict", TestV8iConcurrentSavesConflict);
   run(L"CommandBuilderAndSelection", TestCommandBuilderAndSelection);
   run(L"PlatformDiscoveryLargeVersions", TestPlatformDiscoveryLargeVersions);
   run(L"StandaloneThinClientDiscovery", TestStandaloneThinClientDiscovery);
