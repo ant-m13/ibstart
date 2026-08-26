@@ -352,7 +352,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       }
       if (reinterpret_cast<HWND>(lparam) == connection_ && HIWORD(wparam) == EN_SETFOCUS) { SendMessageW(connection_, EM_SETSEL, 0, -1); return 0; }
       if (reinterpret_cast<HWND>(lparam) == tag_filter_ && HIWORD(wparam) == CBN_SELCHANGE) { PopulateTree(); return 0; }
-      command_dispatcher_.Dispatch(LOWORD(wparam));
+      static_cast<void>(command_dispatcher_.Dispatch(LOWORD(wparam)));
       return 0;
     case WM_NOTIFY:
       if (lparam && reinterpret_cast<NMHDR*>(lparam)->hwndFrom == tree_) {
