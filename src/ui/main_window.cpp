@@ -1982,15 +1982,33 @@ bool MainWindow::SaveCatalog() {
     }
     store_->Save(catalog_->document());
     logMaintenanceWarnings();
+  } catch (const v8i::ExternalModificationError&) {
+    logMaintenanceWarnings();
+    const int answer = MessageBoxW(window_, L"Файл ibases.v8i был изменён другой программой. Перечитать его?", L"ИБ Старт", MB_YESNO | MB_ICONWARNING);
+    if (answer == IDYES) LoadCatalog();
+    return false;
+  } catch (const std::exception& error) {
+    logMaintenanceWarnings();
+    logger_.Error(L"Ошибка записи: " + ibstart::utf::FromUtf8(error.what()));
+    Message(window_, L"Не удалось сохранить ibases.v8i. Исходный файл не изменён.", L"ИБ Старт", MB_OK | MB_ICONERROR);
+    return false;
+  }
+
+  bool settingsSaved = true;
+  try {
     RememberRecentList(settings_.active_ibases);
     storage::SaveSettings(layout_, settings_);
-    RefreshFileMenu();
-    DrawMenuBar(window_);
-    SetStatus(L"Сохранено: " + settings_.active_ibases.wstring() + L" | " + CatalogStatistics());
-    return true;
-  } catch (const v8i::ExternalModificationError&) { logMaintenanceWarnings(); const int answer = MessageBoxW(window_, L"Файл ibases.v8i был изменён другой программой. Перечитать его?", L"ИБ Старт", MB_YESNO | MB_ICONWARNING); if (answer == IDYES) LoadCatalog(); }
-  catch (const std::exception& error) { logMaintenanceWarnings(); logger_.Error(L"Ошибка записи: " + ibstart::utf::FromUtf8(error.what())); Message(window_, L"Не удалось сохранить ibases.v8i. Исходный файл не изменён.", L"ИБ Старт", MB_OK | MB_ICONERROR); }
-  return false;
+  } catch (const std::exception& error) {
+    settingsSaved = false;
+    logger_.Error(L"Список баз сохранён, но настройки приложения записать не удалось: " + ibstart::utf::FromUtf8(error.what()));
+    Message(window_, L"Список баз сохранён, но историю открытых списков и настройки приложения записать не удалось.",
+        L"ИБ Старт", MB_OK | MB_ICONWARNING);
+  }
+  RefreshFileMenu();
+  DrawMenuBar(window_);
+  SetStatus((settingsSaved ? L"Сохранено: " : L"Список сохранён; настройки приложения не сохранены: ") +
+      settings_.active_ibases.wstring() + L" | " + CatalogStatistics());
+  return true;
 }
 
 void MainWindow::RefreshTagFilter() {
