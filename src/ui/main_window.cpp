@@ -1168,20 +1168,6 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
     else if (const auto fromDatabase = launcher::ParseAppArchitecture(database.app_arch)) options.architecture = *fromDatabase;
     const auto& selectedVersion = database.version.empty() ? database.default_version : database.version;
     if (selectedVersion != L"" && selectedVersion != L"Авто") options.version = selectedVersion;
-    const bool hasThinClient = std::any_of(platforms_.begin(), platforms_.end(), [](const auto& platform) { return platform.has_thin_client; });
-    if (webUrl && !hasThinClient) {
-      const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", webUrl->c_str(), nullptr, nullptr, SW_SHOWNORMAL));
-      if (result <= 32) {
-        logger_.Error(L"Не удалось открыть веб-базу в браузере: " + database.name);
-        Message(window_, L"Не удалось открыть веб-базу в браузере.", L"ИБ Старт", MB_OK | MB_ICONERROR);
-        return;
-      }
-      launchSucceeded = true;
-      logger_.Info(L"Открыта веб-база в браузере: " + database.name);
-      SetStatus(L"Открыта база в браузере: " + database.name);
-      rememberLaunch(domain::LaunchMode::web_client);
-      return;
-    }
     if (options.client_type == domain::ClientType::web) { Message(window_, L"Веб-клиент можно использовать только для веб-базы с адресом http:// или https://.", L"ИБ Старт", MB_OK | MB_ICONWARNING); return; }
     auto selected = launcher::SelectPlatform(platforms_, options);
     bool usedNewestThinClient = false;
@@ -1192,6 +1178,19 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
       usedNewestThinClient = selected.has_value();
     }
     if (!selected) {
+      if (webUrl) {
+        const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", webUrl->c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+        if (result <= 32) {
+          logger_.Error(L"Не удалось открыть веб-базу в браузере: " + database.name);
+          Message(window_, L"Не удалось открыть веб-базу в браузере.", L"ИБ Старт", MB_OK | MB_ICONERROR);
+          return;
+        }
+        launchSucceeded = true;
+        logger_.Info(L"Открыта веб-база в браузере: " + database.name);
+        SetStatus(L"Открыта база в браузере: " + database.name);
+        rememberLaunch(domain::LaunchMode::web_client);
+        return;
+      }
       Message(window_, L"Подходящая платформа 1С не найдена. Проверьте установку и настройки поиска.", L"ИБ Старт", MB_OK | MB_ICONERROR);
       return;
     }
