@@ -1,4 +1,5 @@
 #include "ui/main_window.hpp"
+#include "ui/command_ids.hpp"
 #include "ui/database_editor_dialog.hpp"
 #include "ui/dialog_support.hpp"
 #include "ui/folder_picker.hpp"
@@ -36,6 +37,7 @@
 #include <string_view>
 
 namespace ibstart::ui {
+using namespace commands;
 using dialog::CreateUiFont;
 using dialog::DialogControlColor;
 using dialog::InputBox;
@@ -56,11 +58,6 @@ constexpr UINT kBackgroundPollIntervalMilliseconds = 100;
 constexpr int kMinimumWindowWidth = 940;
 constexpr int kMinimumSimpleWindowWidth = 520;
 constexpr int kMinimumWindowHeight = 460;
-enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddDatabase, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kCheckForUpdates, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kCopyDetailValue, kCopyDetailPair, kEditTags, kConfigureTagColors, kSortAscending, kSortDescending, kToggleFoldersFirstWhenSorting, kMoveToFolder, kOpenStandardList, kShowTagsInList, kNewTagForSelected, kExit, kFavorite1 = 200 };
-constexpr UINT kRecentList1 = 300;
-constexpr UINT kQuickTag1 = 400;
-constexpr UINT kTagsContextMenu = 250;
-constexpr UINT kRecentListsMenu = 299;
 OwnerDrawMenuIcon MenuIconForCommand(UINT command) {
   switch (command) {
     case kMoveUp: return OwnerDrawMenuIcon::move_up;
