@@ -2,6 +2,8 @@
 
 #include "ui/dialog_support.hpp"
 
+#include <CommCtrl.h>
+
 #include <algorithm>
 #include <cwctype>
 #include <utility>
