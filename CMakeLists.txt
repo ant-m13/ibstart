@@ -73,6 +73,7 @@ add_executable(IBStart WIN32
   src/ui/input_box.cpp
   src/ui/main_window.cpp
   src/ui/owner_draw_menu.cpp
+  src/ui/tag_assignment_dialog.cpp
   src/ui/tag_manager_dialog.cpp
   src/ui/tree_presentation.cpp
   "${IBSTART_GENERATED_DIR}/IBStart.rc"
