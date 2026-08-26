@@ -107,13 +107,8 @@ std::vector<std::wstring> CollectRecentDatabaseNames(const catalog::Catalog& cat
     const std::vector<domain::HistoryItem>& history) {
   std::vector<std::wstring> result;
   result.reserve(history.size());
-  const auto databases = catalog.Databases();
   for (const auto& launch : history) {
-    for (const auto* entry : databases) {
-      if (entry->ValueOr(L"ID", entry->name) != launch.database_id) continue;
-      result.push_back(entry->name);
-      break;
-    }
+    if (const auto* entry = catalog.FindById(launch.database_id)) result.push_back(entry->name);
   }
   return result;
 }

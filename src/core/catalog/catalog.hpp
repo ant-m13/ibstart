@@ -3,6 +3,7 @@
 #include "core/domain/model.hpp"
 #include "core/v8i/v8i_document.hpp"
 
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -29,11 +30,12 @@ class Catalog {
   explicit Catalog(v8i::V8iDocument document = {});
 
   [[nodiscard]] const v8i::V8iDocument& document() const noexcept { return document_; }
-  [[nodiscard]] v8i::V8iDocument& document() noexcept { return document_; }
+  [[nodiscard]] v8i::V8iDocument& document() noexcept { lookup_.reset(); return document_; }
   [[nodiscard]] std::vector<TreeItem> Tree() const;
   [[nodiscard]] std::vector<const domain::Entry*> Databases() const;
   [[nodiscard]] domain::Entry* Find(std::wstring_view name);
   [[nodiscard]] const domain::Entry* Find(std::wstring_view name) const;
+  [[nodiscard]] const domain::Entry* FindById(std::wstring_view id) const;
   [[nodiscard]] std::wstring ParentOf(std::wstring_view name) const;
   [[nodiscard]] domain::Database DatabaseFor(std::wstring_view name) const;
 
@@ -58,10 +60,21 @@ class Catalog {
   [[nodiscard]] static bool IsWebConnection(std::wstring_view connect);
 
  private:
+  struct CaseInsensitiveLess {
+    bool operator()(const std::wstring& left, const std::wstring& right) const noexcept;
+  };
+  struct LookupIndex {
+    std::map<std::wstring, size_t, CaseInsensitiveLess> by_name;
+    std::map<std::wstring, size_t> by_id;
+  };
+
+  void EnsureLookup() const;
+
   [[nodiscard]] std::vector<const domain::Entry*> ChildrenOf(std::wstring_view parent) const;
   [[nodiscard]] static std::wstring QuoteConnectionPath(const std::filesystem::path& path);
 
   v8i::V8iDocument document_;
+  mutable std::optional<LookupIndex> lookup_;
 };
 
 }  // namespace ibstart::catalog
