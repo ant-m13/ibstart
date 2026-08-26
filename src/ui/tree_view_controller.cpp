@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <initializer_list>
 #include <iterator>
+#include <map>
 
 namespace ibstart::ui {
 namespace {
@@ -15,6 +16,12 @@ bool EqualNoCase(std::wstring_view left, std::wstring_view right) {
       CompareStringOrdinal(left.data(), static_cast<int>(left.size()), right.data(),
           static_cast<int>(right.size()), TRUE) == CSTR_EQUAL;
 }
+struct CaseInsensitiveLess {
+  bool operator()(const std::wstring& left, const std::wstring& right) const {
+    return CompareStringOrdinal(left.c_str(), static_cast<int>(left.size()), right.c_str(),
+        static_cast<int>(right.size()), TRUE) == CSTR_LESS_THAN;
+  }
+};
 
 HICON LoadResourceIcon(HINSTANCE instance, int resource, int size) {
   return static_cast<HICON>(
@@ -429,6 +436,10 @@ void TreeViewController::ReconcileChildren(const catalog::Catalog& database_cata
       child = TreeView_GetNextSibling(tree_, child)) {
     existing.push_back(child);
   }
+  std::map<std::wstring, size_t, CaseInsensitiveLess> existing_by_name;
+  for (size_t index = 0; index < existing.size(); ++index) {
+    existing_by_name.emplace(ItemName(existing[index]), index);
+  }
 
   // TreeView has no move operation.  If an existing row changed relative
   // order, rebuild only this parent; additions and removals still reuse all
@@ -436,11 +447,8 @@ void TreeViewController::ReconcileChildren(const catalog::Catalog& database_cata
   std::vector<size_t> existing_positions;
   existing_positions.reserve(visible.size());
   for (const auto* item : visible) {
-    for (size_t index = 0; index < existing.size(); ++index) {
-      if (EqualNoCase(ItemName(existing[index]), item->name)) {
-        existing_positions.push_back(index);
-        break;
-      }
+    if (const auto found = existing_by_name.find(item->name); found != existing_by_name.end()) {
+      existing_positions.push_back(found->second);
     }
   }
   if (!std::is_sorted(existing_positions.begin(), existing_positions.end())) {
@@ -453,13 +461,11 @@ void TreeViewController::ReconcileChildren(const catalog::Catalog& database_cata
   HTREEITEM previous = nullptr;
   for (const auto* item : visible) {
     HTREEITEM handle = nullptr;
-    size_t existing_index = existing.size();
-    for (size_t index = 0; index < existing.size(); ++index) {
-      if (!used[index] && EqualNoCase(ItemName(existing[index]), item->name)) {
-        existing_index = index;
-        handle = existing[index];
-        break;
-      }
+    size_t existing_position = existing.size();
+    if (const auto found = existing_by_name.find(item->name); found != existing_by_name.end() &&
+        !used[found->second]) {
+      existing_position = found->second;
+      handle = existing[existing_position];
     }
     if (!handle) {
       TVINSERTSTRUCTW row{};
@@ -472,7 +478,7 @@ void TreeViewController::ReconcileChildren(const catalog::Catalog& database_cata
       handle = TreeView_InsertItem(tree_, &row);
       if (!handle) continue;
     }
-    if (existing_index < existing.size()) used[existing_index] = true;
+    if (existing_position < existing.size()) used[existing_position] = true;
     UpdateTreeItem(handle, database_catalog, *item);
     if (item->database) {
       DeleteChildren(handle);
