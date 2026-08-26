@@ -109,11 +109,11 @@ std::optional<std::wstring> SelectCatalogFolder(HWND owner, const std::vector<ca
   const HWND caption = CreateWindowW(L"STATIC", L"Выберите папку, в которую нужно переместить элемент:", WS_CHILD | WS_VISIBLE,
       px(10), px(10), px(440), px(18), dialog, nullptr, nullptr, nullptr);
   state.tree = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS,
-      px(10), px(32), px(440), px(315), dialog, reinterpret_cast<HMENU>(kTreeControl), nullptr, nullptr);
+      px(10), px(32), px(440), px(315), dialog, reinterpret_cast<HMENU>(static_cast<INT_PTR>(kTreeControl)), nullptr, nullptr);
   const HWND accept = CreateWindowW(L"BUTTON", L"Переместить", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-      px(224), px(360), px(120), px(28), dialog, reinterpret_cast<HMENU>(IDOK), nullptr, nullptr);
+      px(224), px(360), px(120), px(28), dialog, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDOK)), nullptr, nullptr);
   const HWND cancel = CreateWindowW(L"BUTTON", L"Отмена", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-      px(354), px(360), px(96), px(28), dialog, reinterpret_cast<HMENU>(IDCANCEL), nullptr, nullptr);
+      px(354), px(360), px(96), px(28), dialog, reinterpret_cast<HMENU>(static_cast<INT_PTR>(IDCANCEL)), nullptr, nullptr);
   SetControlFont(caption, state.font);
   SetControlFont(state.tree, state.font);
   SetControlFont(accept, state.button_font ? state.button_font : state.font);
