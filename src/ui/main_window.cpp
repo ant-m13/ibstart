@@ -1964,6 +1964,7 @@ void MainWindow::LoadCatalog(bool report_error) {
 
 bool MainWindow::SaveCatalog(catalog::Catalog candidate) {
   auto target = store_ ? store_->path() : settings_.active_ibases;
+  bool overwriteConfirmed = false;
   if (!store_ && target.empty()) {
     wchar_t filename[MAX_PATH] = L"ibases.v8i";
     OPENFILENAMEW dialog{};
@@ -1976,6 +1977,8 @@ bool MainWindow::SaveCatalog(catalog::Catalog candidate) {
     dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
     if (!GetSaveFileNameW(&dialog)) return false;
     target = filename;
+    std::error_code error;
+    overwriteConfirmed = std::filesystem::is_regular_file(target, error) && !error;
   }
 
   auto updatedSettings = settings_;
@@ -1989,6 +1992,7 @@ bool MainWindow::SaveCatalog(catalog::Catalog candidate) {
     }
   };
   try {
+    if (overwriteConfirmed) writer.AcceptCurrentContentsForOverwrite();
     writer.Save(candidate.document());
     logMaintenanceWarnings();
   } catch (const v8i::ExternalModificationError&) {
