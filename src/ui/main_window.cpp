@@ -247,15 +247,15 @@ std::wstring FriendlyFieldName(std::wstring_view key) {
 }
 std::wstring ConnectionKind(std::wstring_view connect) {
   if (catalog::Catalog::IsWebConnection(connect)) return L"Веб-база";
-  if (utf::FindNoCaseOrdinal(connect, L"File=") != std::wstring_view::npos) return L"Файловая информационная база";
-  if (utf::FindNoCaseOrdinal(connect, L"Srvr=") != std::wstring_view::npos) return L"Серверная информационная база";
+  if (connection::Value(connect, L"File")) return L"Файловая информационная база";
+  if (connection::Value(connect, L"Srvr")) return L"Серверная информационная база";
   return L"Информационная база";
 }
 int DatabaseTreeImage(const domain::Entry* entry) {
   if (!entry) return kServerDatabaseImage;
   const auto connect = entry->ValueOr(L"Connect");
   if (catalog::Catalog::IsWebConnection(connect)) return kWebDatabaseImage;
-  if (utf::FindNoCaseOrdinal(connect, L"File=") != std::wstring_view::npos) return kFileDatabaseImage;
+  if (connection::Value(connect, L"File")) return kFileDatabaseImage;
   return kServerDatabaseImage;
 }
 std::wstring SingleLine(std::wstring value) {
