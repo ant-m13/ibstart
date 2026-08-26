@@ -14,6 +14,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <thread>
 #include <vector>
 
 namespace ibstart::ui {
@@ -100,6 +101,11 @@ class MainWindow {
   void CheckForUpdates();
   void CompleteUpdateCheck();
   void CompleteCacheOperation();
+  void BeginClose();
+  void PollBackgroundOperations();
+  [[nodiscard]] bool RefreshBackgroundPolling();
+  void TryFinishClose();
+  void StopAndJoinBackgroundThreads() noexcept;
   void ShowUpdateCheckError();
   void ShowAbout() const;
   [[nodiscard]] std::wstring NextName(std::wstring_view stem) const;
@@ -156,6 +162,9 @@ class MainWindow {
   std::wstring drag_target_name_;
   bool drag_insert_after_{false};
   bool drag_to_root_{false};
+  bool closing_{false};
+  std::jthread update_thread_;
+  std::jthread cache_thread_;
 };
 
 }  // namespace ibstart::ui

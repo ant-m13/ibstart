@@ -69,6 +69,8 @@ constexpr UINT kActivateMessage = WM_APP + 23;
 constexpr UINT kUpdateCheckFinishedMessage = WM_APP + 24;
 constexpr UINT kFocusShortcutSelectionMessage = WM_APP + 25;
 constexpr UINT kCacheOperationFinishedMessage = WM_APP + 26;
+constexpr UINT_PTR kBackgroundPollTimer = 1;
+constexpr UINT kBackgroundPollIntervalMilliseconds = 100;
 constexpr int kMinimumWindowWidth = 940;
 constexpr int kMinimumSimpleWindowWidth = 520;
 constexpr int kMinimumWindowHeight = 460;
@@ -1529,6 +1531,7 @@ struct MainWindow::UpdateCheckState {
   std::mutex mutex;
   std::optional<update::Release> release;
   std::wstring error;
+  bool cancelled{false};
   bool completed{false};
 };
 
@@ -1540,6 +1543,7 @@ struct MainWindow::CacheOperationState {
   std::vector<cache::CacheItem> candidates;
   cache::ClearResult result;
   std::wstring error;
+  bool cancelled{false};
   bool completed{false};
 };
 
@@ -1548,6 +1552,7 @@ MainWindow::MainWindow(HINSTANCE instance, std::filesystem::path executable, sto
     : instance_(instance), executable_(std::move(executable)), layout_(std::move(layout)), settings_(std::move(settings)),
       catalog_state_(layout_), logger_(layout_.root / L"logs"), initial_launch_id_(std::move(launch_id)) {}
 MainWindow::~MainWindow() {
+  StopAndJoinBackgroundThreads();
   CancelTreeDrag();
   if (window_ && IsWindow(window_)) {
     settings_.selected_entry = catalog_ && catalog_->Find(SelectedName()) ? SelectedName() : std::wstring();
@@ -1563,6 +1568,57 @@ MainWindow::~MainWindow() {
   if (details_title_font_) DeleteObject(details_title_font_);
   if (details_subtitle_font_) DeleteObject(details_subtitle_font_);
   if (details_key_font_) DeleteObject(details_key_font_);
+}
+
+void MainWindow::StopAndJoinBackgroundThreads() noexcept {
+  if (update_thread_.joinable()) static_cast<void>(update_thread_.request_stop());
+  if (cache_thread_.joinable()) static_cast<void>(cache_thread_.request_stop());
+  if (update_thread_.joinable()) update_thread_.join();
+  if (cache_thread_.joinable()) cache_thread_.join();
+}
+
+bool MainWindow::RefreshBackgroundPolling() {
+  if (!window_ || !IsWindow(window_)) return false;
+  if (update_thread_.joinable() || cache_thread_.joinable()) {
+    return SetTimer(window_, kBackgroundPollTimer, kBackgroundPollIntervalMilliseconds, nullptr) != 0;
+  }
+  KillTimer(window_, kBackgroundPollTimer);
+  return true;
+}
+
+void MainWindow::PollBackgroundOperations() {
+  const auto completed = [](const auto& state) {
+    if (!state) return false;
+    std::lock_guard lock(state->mutex);
+    return state->completed;
+  };
+  if (completed(update_check_)) CompleteUpdateCheck();
+  if (!window_) return;
+  if (completed(cache_operation_)) CompleteCacheOperation();
+}
+
+void MainWindow::BeginClose() {
+  if (closing_) return;
+  closing_ = true;
+  if (update_thread_.joinable()) static_cast<void>(update_thread_.request_stop());
+  if (cache_thread_.joinable()) static_cast<void>(cache_thread_.request_stop());
+  if (update_thread_.joinable() || cache_thread_.joinable()) {
+    ShowWindow(window_, SW_HIDE);
+    if (!RefreshBackgroundPolling()) {
+      StopAndJoinBackgroundThreads();
+      update_check_.reset();
+      cache_operation_.reset();
+    }
+  }
+  TryFinishClose();
+}
+
+void MainWindow::TryFinishClose() {
+  if (!closing_ || update_thread_.joinable() || cache_thread_.joinable()) return;
+  if (!window_ || !IsWindow(window_)) return;
+  KillTimer(window_, kBackgroundPollTimer);
+  settings_.selected_entry = catalog_ && catalog_->Find(SelectedName()) ? SelectedName() : std::wstring();
+  DestroyWindow(window_);
 }
 
 int MainWindow::Show(int show_command) {
@@ -1639,6 +1695,12 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       return 0;
     }
     case WM_SETFOCUS: SetFocus(search_); return 0;
+    case WM_TIMER:
+      if (wparam == kBackgroundPollTimer) {
+        PollBackgroundOperations();
+        return 0;
+      }
+      break;
     case WM_KEYDOWN:
       if (wparam == VK_ESCAPE && !dragging_name_.empty()) {
         CancelTreeDrag();
@@ -1650,6 +1712,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       if (wparam == VK_F4) { LaunchSelected(domain::LaunchMode::designer); return 0; }
       break;
     case WM_COMMAND:
+      if (closing_) return 0;
       if (reinterpret_cast<HWND>(lparam) == search_ && HIWORD(wparam) == EN_CHANGE) {
         if (!suppress_search_refresh_) PopulateTree();
         return 0;
@@ -1757,6 +1820,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       if (!dragging_name_.empty()) CancelTreeDrag();
       break;
     case WM_COPYDATA: {
+      if (closing_) return FALSE;
       const auto* data = reinterpret_cast<const COPYDATASTRUCT*>(lparam);
       if (!app::IsValidLaunchCopyData(data)) return FALSE;
       const auto* value = static_cast<const wchar_t*>(data->lpData);
@@ -1770,7 +1834,9 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       Activate();
       return TRUE;
     }
-    case kActivateMessage: Activate(); return 0;
+    case kActivateMessage:
+      if (!closing_) Activate();
+      return 0;
     case kUpdateCheckFinishedMessage: CompleteUpdateCheck(); return 0;
     case kCacheOperationFinishedMessage: CompleteCacheOperation(); return 0;
     case kFocusShortcutSelectionMessage:
@@ -1781,10 +1847,10 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
         Message(window_, L"Дождитесь завершения очистки кэша перед закрытием приложения.", L"Очистка кэша", MB_OK | MB_ICONINFORMATION);
         return 0;
       }
-      settings_.selected_entry = catalog_ && catalog_->Find(SelectedName()) ? SelectedName() : std::wstring();
-      DestroyWindow(window);
+      BeginClose();
       return 0;
     case WM_DESTROY: {
+      KillTimer(window, kBackgroundPollTimer);
       WINDOWPLACEMENT placement{sizeof(placement)};
       if (GetWindowPlacement(window, &placement)) { const RECT& rect = placement.rcNormalPosition; settings_.window_x = rect.left; settings_.window_y = rect.top; settings_.window_width = rect.right - rect.left; settings_.window_height = rect.bottom - rect.top; }
       if (tree_ && IsWindow(tree_)) settings_.selected_entry = catalog_ && catalog_->Find(SelectedName()) ? SelectedName() : std::wstring();
@@ -3111,24 +3177,30 @@ void MainWindow::ClearSelectedCache() {
     DisplaySelected();
     SetStatus(L"Анализируем размер кэша…");
     const HWND owner = window_;
-    std::thread([state, owner, database] {
+    cache_thread_ = std::jthread([state, owner, database](std::stop_token stop) {
       std::vector<cache::CacheItem> candidates;
       std::wstring error;
+      bool cancelled = false;
       try {
-        candidates = cache::CandidatesFor(database);
+        if (!stop.stop_requested()) candidates = cache::CandidatesFor(database, stop);
+        cancelled = stop.stop_requested();
       } catch (const std::exception& exception) {
-        error = WideErrorText(exception.what());
+        if (stop.stop_requested()) cancelled = true;
+        else error = WideErrorText(exception.what());
       } catch (...) {
-        error = L"Неизвестная ошибка анализа кэша.";
+        if (stop.stop_requested()) cancelled = true;
+        else error = L"Неизвестная ошибка анализа кэша.";
       }
       {
         std::lock_guard lock(state->mutex);
         state->candidates = std::move(candidates);
         state->error = std::move(error);
+        state->cancelled = cancelled;
         state->completed = true;
       }
       PostMessageW(owner, kCacheOperationFinishedMessage, 0, 0);
-    }).detach();
+    });
+    static_cast<void>(RefreshBackgroundPolling());
   } catch (const std::exception& error) {
     cache_operation_.reset();
     DisplaySelected();
@@ -3431,24 +3503,30 @@ void MainWindow::CheckForUpdates() {
   SetStatus(L"Проверяем наличие обновлений…");
   const HWND owner = window_;
   try {
-    std::thread([state, owner] {
+    update_thread_ = std::jthread([state, owner](std::stop_token stop) {
       std::optional<update::Release> release;
       std::wstring error;
+      bool cancelled = false;
       try {
-        release = update::FetchLatestRelease();
+        if (!stop.stop_requested()) release = update::FetchLatestRelease(stop);
+        cancelled = stop.stop_requested();
       } catch (const std::exception& exception) {
-        error = WideErrorText(exception.what());
+        if (stop.stop_requested()) cancelled = true;
+        else error = WideErrorText(exception.what());
       } catch (...) {
-        error = L"Неизвестная ошибка проверки обновлений.";
+        if (stop.stop_requested()) cancelled = true;
+        else error = L"Неизвестная ошибка проверки обновлений.";
       }
       {
         std::lock_guard lock(state->mutex);
         state->release = std::move(release);
         state->error = std::move(error);
+        state->cancelled = cancelled;
         state->completed = true;
       }
       PostMessageW(owner, kUpdateCheckFinishedMessage, 0, 0);
-    }).detach();
+    });
+    static_cast<void>(RefreshBackgroundPolling());
   } catch (const std::exception& error) {
     update_check_.reset();
     EnableMenuItem(help_menu_, kCheckForUpdates, MF_BYCOMMAND | MF_ENABLED);
@@ -3465,22 +3543,32 @@ void MainWindow::CheckForUpdates() {
   }
 }
 void MainWindow::CompleteUpdateCheck() {
-  auto state = std::move(update_check_);
+  auto state = update_check_;
   if (!state) return;
 
   std::optional<update::Release> release;
   std::wstring error;
+  bool cancelled = false;
   {
     std::lock_guard lock(state->mutex);
-    if (!state->completed) {
-      update_check_ = std::move(state);
-      return;
-    }
+    if (!state->completed) return;
     release = std::move(state->release);
     error = std::move(state->error);
+    cancelled = state->cancelled;
+  }
+  if (update_thread_.joinable()) update_thread_.join();
+  update_check_.reset();
+  static_cast<void>(RefreshBackgroundPolling());
+  if (closing_) {
+    TryFinishClose();
+    return;
   }
   EnableMenuItem(help_menu_, kCheckForUpdates, MF_BYCOMMAND | MF_ENABLED);
   DrawMenuBar(window_);
+  if (cancelled) {
+    SetStatus(L"Проверка обновлений отменена.");
+    return;
+  }
   if (!error.empty()) {
     logger_.Error(L"Ошибка проверки обновлений: " + error);
     SetStatus(L"Не удалось проверить обновления.");
@@ -3522,14 +3610,29 @@ void MainWindow::CompleteCacheOperation() {
   std::vector<cache::CacheItem> candidates;
   cache::ClearResult result;
   std::wstring error;
+  bool cancelled = false;
   {
     std::lock_guard lock(state->mutex);
     if (!state->completed) return;
     stage = state->stage;
     error = std::move(state->error);
+    cancelled = state->cancelled;
     if (stage == CacheOperationState::Stage::finding) candidates = std::move(state->candidates);
     else result = std::move(state->result);
     state->completed = false;
+  }
+  if (cache_thread_.joinable()) cache_thread_.join();
+  static_cast<void>(RefreshBackgroundPolling());
+  if (closing_) {
+    cache_operation_.reset();
+    TryFinishClose();
+    return;
+  }
+  if (cancelled) {
+    cache_operation_.reset();
+    DisplaySelected();
+    SetStatus(L"Анализ кэша отменён.");
+    return;
   }
 
   if (stage == CacheOperationState::Stage::finding) {
@@ -3567,11 +3670,12 @@ void MainWindow::CompleteCacheOperation() {
     {
       std::lock_guard lock(state->mutex);
       state->stage = CacheOperationState::Stage::clearing;
+      state->cancelled = false;
     }
     SetStatus(L"Очищаем кэш…");
     const HWND owner = window_;
     try {
-      std::thread([state, owner, candidates = std::move(candidates)] {
+      cache_thread_ = std::jthread([state, owner, candidates = std::move(candidates)] {
         cache::ClearResult result;
         std::wstring error;
         try {
@@ -3588,7 +3692,8 @@ void MainWindow::CompleteCacheOperation() {
           state->completed = true;
         }
         PostMessageW(owner, kCacheOperationFinishedMessage, 0, 0);
-      }).detach();
+      });
+      static_cast<void>(RefreshBackgroundPolling());
     } catch (const std::exception& exception) {
       cache_operation_.reset();
       DisplaySelected();
