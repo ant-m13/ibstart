@@ -317,6 +317,28 @@ void TestStandaloneThinClientDiscovery() {
   std::filesystem::remove_all(root, error);
 }
 
+void TestCustomX86PlatformDiscovery() {
+  wchar_t wow64Directory[MAX_PATH]{};
+  const UINT length = GetSystemWow64DirectoryW(wow64Directory, static_cast<UINT>(std::size(wow64Directory)));
+  if (length == 0 || length >= std::size(wow64Directory)) return;
+  const auto source = std::filesystem::path(wow64Directory) / L"cmd.exe";
+  std::error_code error;
+  if (!std::filesystem::is_regular_file(source, error) || error) return;
+
+  const auto root = Temp(L"custom-x86-platform");
+  const auto bin = root / L"8.3.27.2000" / L"bin";
+  std::filesystem::create_directories(bin);
+  const auto executable = bin / L"1cv8.exe";
+  std::filesystem::copy_file(source, executable, std::filesystem::copy_options::overwrite_existing);
+
+  const auto discovered = ibstart::platform::Discover({root});
+  const auto found = std::find_if(discovered.begin(), discovered.end(), [&](const auto& item) { return item.executable == executable; });
+  CHECK(found != discovered.end());
+  CHECK(found != discovered.end() && found->bitness == ibstart::domain::ClientBitness::x86);
+
+  std::filesystem::remove_all(root, error);
+}
+
 void TestWindowsArgumentQuoting() {
   const std::vector<std::wstring> expected = {
       L"", L"plain", L"with spaces", L"with\ttab", L"embedded\"quote", L"slash-before-quote\\\"",
@@ -965,6 +987,7 @@ int wmain() {
   run(L"CommandBuilderAndSelection", TestCommandBuilderAndSelection);
   run(L"PlatformDiscoveryLargeVersions", TestPlatformDiscoveryLargeVersions);
   run(L"StandaloneThinClientDiscovery", TestStandaloneThinClientDiscovery);
+  run(L"CustomX86PlatformDiscovery", TestCustomX86PlatformDiscovery);
   run(L"WindowsArgumentQuoting", TestWindowsArgumentQuoting);
   run(L"CatalogOrderingAndCycles", TestCatalogOrderingAndCycles);
   run(L"CatalogSetChildOrder", TestCatalogSetChildOrder);

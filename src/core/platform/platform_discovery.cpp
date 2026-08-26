@@ -21,6 +21,14 @@ std::wstring Environment(std::wstring_view name) {
   return value;
 }
 
+std::optional<domain::ClientBitness> ExecutableBitness(const std::filesystem::path& executable) {
+  DWORD binaryType{};
+  if (!GetBinaryTypeW(executable.c_str(), &binaryType)) return std::nullopt;
+  if (binaryType == SCS_32BIT_BINARY) return domain::ClientBitness::x86;
+  if (binaryType == SCS_64BIT_BINARY) return domain::ClientBitness::x64;
+  return std::nullopt;
+}
+
 void AddClient(const std::filesystem::path& executable, std::vector<domain::PlatformInstallation>& output,
     std::set<std::wstring>& known, std::optional<domain::ClientBitness> bitness = std::nullopt) {
   std::error_code error;
@@ -35,7 +43,8 @@ void AddClient(const std::filesystem::path& executable, std::vector<domain::Plat
   auto normalizedPath = executable.wstring();
   std::transform(normalizedPath.begin(), normalizedPath.end(), normalizedPath.begin(), [](wchar_t character) { return static_cast<wchar_t>(std::towlower(character)); });
   const bool x86Path = normalizedPath.find(L"(x86)") != std::wstring::npos;
-  const auto detectedBitness = bitness.value_or(x86Path ? domain::ClientBitness::x86 : domain::ClientBitness::x64);
+  const auto detectedBitness = ExecutableBitness(executable).value_or(
+      bitness.value_or(x86Path ? domain::ClientBitness::x86 : domain::ClientBitness::x64));
   error.clear();
   output.push_back({executable, version, detectedBitness,
       executable.filename() == L"1cv8c.exe" || std::filesystem::exists(bin / L"1cv8c.exe", error)});
