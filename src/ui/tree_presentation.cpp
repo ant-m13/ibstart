@@ -5,6 +5,8 @@
 #include <algorithm>
 #include <cstddef>
 #include <cwctype>
+#include <unordered_map>
+#include <utility>
 
 namespace ibstart::ui::presentation {
 namespace {
@@ -114,6 +116,65 @@ std::vector<std::wstring> CollectRecentDatabaseNames(const catalog::Catalog& cat
     }
   }
   return result;
+}
+
+std::vector<catalog::TreeItem> FilterTreeItems(const catalog::Catalog& catalog,
+    const std::vector<catalog::TreeItem>& items, std::wstring_view search_filter,
+    const TreeTagFilter& filter, const storage::DatabaseTags& tags,
+    const std::vector<std::wstring>& favorites) {
+  std::unordered_map<const catalog::TreeItem*, bool> search_cache;
+  std::unordered_map<const catalog::TreeItem*, bool> tag_cache;
+  const auto matches_search = [&](const auto& self, const catalog::TreeItem& item) -> bool {
+    if (const auto found = search_cache.find(&item); found != search_cache.end()) return found->second;
+    bool result = search_filter.empty();
+    if (!result) {
+      if (const auto* entry = catalog.Find(item.name)) {
+        result = catalog::MatchesSearchText(*entry, search_filter);
+        if (!result && entry->IsDatabase()) {
+          const auto& entry_tags = TagsFor(tags, *entry);
+          result = std::any_of(entry_tags.begin(), entry_tags.end(), [&](const auto& tag) {
+            return utf::FindNoCaseOrdinal(tag, search_filter) != std::wstring_view::npos;
+          });
+        }
+      }
+    }
+    if (!result) {
+      result = std::any_of(item.children.begin(), item.children.end(), [&](const auto& child) {
+        return self(self, child);
+      });
+    }
+    search_cache.emplace(&item, result);
+    return result;
+  };
+  const auto matches_tag = [&](const auto& self, const catalog::TreeItem& item) -> bool {
+    if (const auto found = tag_cache.find(&item); found != tag_cache.end()) return found->second;
+    bool result = filter.kind == TreeTagFilterKind::all;
+    if (!result) {
+      if (const auto* entry = catalog.Find(item.name); entry && entry->IsDatabase()) {
+        if (filter.kind == TreeTagFilterKind::favorites) result = ContainsTag(favorites, entry->name);
+        else result = ContainsTag(TagsFor(tags, *entry), filter.tag);
+      }
+    }
+    if (!result) {
+      result = std::any_of(item.children.begin(), item.children.end(), [&](const auto& child) {
+        return self(self, child);
+      });
+    }
+    tag_cache.emplace(&item, result);
+    return result;
+  };
+  const auto build = [&](const auto& self, const std::vector<catalog::TreeItem>& source) -> std::vector<catalog::TreeItem> {
+    std::vector<catalog::TreeItem> result;
+    result.reserve(source.size());
+    for (const auto& item : source) {
+      if (!matches_search(matches_search, item) || !matches_tag(matches_tag, item)) continue;
+      auto copy = item;
+      copy.children = self(self, item.children);
+      result.push_back(std::move(copy));
+    }
+    return result;
+  };
+  return build(build, items);
 }
 
 bool MatchesSearchFilter(const catalog::Catalog& catalog, const catalog::TreeItem& item, std::wstring_view search_filter,

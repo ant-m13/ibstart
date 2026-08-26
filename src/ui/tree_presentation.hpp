@@ -29,6 +29,10 @@ void EraseTagStyle(storage::TagStyles& styles, std::wstring_view name);
 [[nodiscard]] std::vector<std::wstring> CollectFilterTags(const catalog::Catalog& catalog, const storage::DatabaseTags& tags);
 [[nodiscard]] std::vector<std::wstring> CollectRecentDatabaseNames(const catalog::Catalog& catalog,
     const std::vector<domain::HistoryItem>& history);
+[[nodiscard]] std::vector<catalog::TreeItem> FilterTreeItems(const catalog::Catalog& catalog,
+    const std::vector<catalog::TreeItem>& items, std::wstring_view search_filter,
+    const TreeTagFilter& tag_filter, const storage::DatabaseTags& tags,
+    const std::vector<std::wstring>& favorites);
 [[nodiscard]] bool MatchesSearchFilter(const catalog::Catalog& catalog, const catalog::TreeItem& item,
     std::wstring_view search_filter, const storage::DatabaseTags& tags);
 [[nodiscard]] bool MatchesTagFilter(const catalog::Catalog& catalog, const catalog::TreeItem& item,

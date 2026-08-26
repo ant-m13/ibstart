@@ -7,6 +7,7 @@
 #include <initializer_list>
 #include <iterator>
 #include <map>
+#include <utility>
 
 namespace ibstart::ui {
 namespace {
@@ -147,15 +148,15 @@ void TreeViewController::Populate(const catalog::Catalog& database_catalog,
   };
 
   try {
-    const auto catalog_items = database_catalog.Tree();
+    const auto catalog_items = presentation::FilterTreeItems(database_catalog, database_catalog.Tree(),
+        search_filter, tag_filter, catalog_state.tags, filter_favorites);
     HTREEITEM catalog_root = FindTopLevelItem(kCatalogRootItemData);
     if (!catalog_root) {
       catalog_root = InsertCatalogRoot();
       if (catalog_root) TreeView_Expand(tree_, catalog_root, TVE_EXPAND);
     }
     if (catalog_root) {
-      ReconcileChildren(database_catalog, catalog_state, filter_favorites, catalog_items, catalog_root,
-          search_filter, tag_filter);
+      ReconcileChildren(database_catalog, catalog_items, catalog_root, !search_filter.empty());
     }
 
     if (simple_mode) {
@@ -352,14 +353,6 @@ void TreeViewController::RestoreViewState(const ViewState& state) const {
   }
 }
 
-bool TreeViewController::MatchesFilters(const catalog::Catalog& database_catalog,
-    const storage::CatalogState& catalog_state, const std::vector<std::wstring>& filter_favorites,
-    const catalog::TreeItem& item, std::wstring_view search_filter,
-    const presentation::TreeTagFilter& tag_filter) const {
-  return presentation::MatchesSearchFilter(database_catalog, item, search_filter, catalog_state.tags) &&
-      presentation::MatchesTagFilter(database_catalog, item, tag_filter, catalog_state.tags, filter_favorites);
-}
-
 void TreeViewController::UpdateTreeItem(HTREEITEM handle, const catalog::Catalog& database_catalog,
     const catalog::TreeItem& item) const {
   if (!tree_ || !handle) return;
@@ -397,11 +390,8 @@ HTREEITEM TreeViewController::InsertCatalogRoot() const {
 }
 
 void TreeViewController::AddItems(const catalog::Catalog& database_catalog,
-    const storage::CatalogState& catalog_state, const std::vector<std::wstring>& filter_favorites,
-    const std::vector<catalog::TreeItem>& items, HTREEITEM parent, std::wstring_view search_filter,
-    const presentation::TreeTagFilter& tag_filter) const {
+    const std::vector<catalog::TreeItem>& items, HTREEITEM parent, bool expand_for_search) const {
   for (const auto& item : items) {
-    if (!MatchesFilters(database_catalog, catalog_state, filter_favorites, item, search_filter, tag_filter)) continue;
     TVINSERTSTRUCTW row{};
     row.hParent = parent;
     row.hInsertAfter = TVI_LAST;
@@ -411,25 +401,19 @@ void TreeViewController::AddItems(const catalog::Catalog& database_catalog,
     row.item.iImage = row.item.iSelectedImage = item.database ? DatabaseImage(entry) : kFolderImage;
     const HTREEITEM handle = TreeView_InsertItem(tree_, &row);
     if (handle && !item.database) {
-      AddItems(database_catalog, catalog_state, filter_favorites, item.children, handle, search_filter, tag_filter);
-      if (!search_filter.empty()) TreeView_Expand(tree_, handle, TVE_EXPAND);
+      AddItems(database_catalog, item.children, handle, expand_for_search);
+      if (expand_for_search) TreeView_Expand(tree_, handle, TVE_EXPAND);
     }
   }
 }
 
 void TreeViewController::ReconcileChildren(const catalog::Catalog& database_catalog,
-    const storage::CatalogState& catalog_state, const std::vector<std::wstring>& filter_favorites,
-    const std::vector<catalog::TreeItem>& items, HTREEITEM parent,
-    std::wstring_view search_filter, const presentation::TreeTagFilter& tag_filter) const {
+    const std::vector<catalog::TreeItem>& items, HTREEITEM parent, bool expand_for_search) const {
   if (!tree_ || !parent) return;
 
   std::vector<const catalog::TreeItem*> visible;
   visible.reserve(items.size());
-  for (const auto& item : items) {
-    if (MatchesFilters(database_catalog, catalog_state, filter_favorites, item, search_filter, tag_filter)) {
-      visible.push_back(&item);
-    }
-  }
+  for (const auto& item : items) visible.push_back(&item);
 
   std::vector<HTREEITEM> existing;
   for (HTREEITEM child = TreeView_GetChild(tree_, parent); child;
@@ -453,7 +437,7 @@ void TreeViewController::ReconcileChildren(const catalog::Catalog& database_cata
   }
   if (!std::is_sorted(existing_positions.begin(), existing_positions.end())) {
     DeleteChildren(parent);
-    AddItems(database_catalog, catalog_state, filter_favorites, items, parent, search_filter, tag_filter);
+    AddItems(database_catalog, items, parent, expand_for_search);
     return;
   }
 
@@ -483,9 +467,8 @@ void TreeViewController::ReconcileChildren(const catalog::Catalog& database_cata
     if (item->database) {
       DeleteChildren(handle);
     } else {
-      ReconcileChildren(database_catalog, catalog_state, filter_favorites, item->children, handle,
-          search_filter, tag_filter);
-      if (!search_filter.empty()) TreeView_Expand(tree_, handle, TVE_EXPAND);
+      ReconcileChildren(database_catalog, item->children, handle, expand_for_search);
+      if (expand_for_search) TreeView_Expand(tree_, handle, TVE_EXPAND);
     }
     previous = handle;
   }
@@ -501,16 +484,15 @@ void TreeViewController::ReconcileSpecialRoot(const catalog::Catalog& database_c
     std::wstring_view root_name, const std::vector<std::wstring>& names, int image, LPARAM item_data,
     HTREEITEM insert_after) const {
   if (!tree_) return;
-  std::vector<catalog::TreeItem> items;
-  items.reserve(names.size());
+  std::vector<catalog::TreeItem> raw_items;
+  raw_items.reserve(names.size());
   for (const auto& name : names) {
     const auto* entry = database_catalog.Find(name);
     if (!entry || !entry->IsDatabase()) continue;
-    catalog::TreeItem item{entry->name, true, {}, {}};
-    if (MatchesFilters(database_catalog, catalog_state, filter_favorites, item, search_filter, tag_filter)) {
-      items.push_back(std::move(item));
-    }
+    raw_items.push_back({entry->name, true, {}, {}});
   }
+  const auto items = presentation::FilterTreeItems(database_catalog, raw_items, search_filter, tag_filter,
+      catalog_state.tags, filter_favorites);
 
   HTREEITEM root_handle = FindTopLevelItem(item_data);
   if (items.empty()) {
@@ -528,8 +510,7 @@ void TreeViewController::ReconcileSpecialRoot(const catalog::Catalog& database_c
     root.item.iImage = root.item.iSelectedImage = image;
     root_handle = TreeView_InsertItem(tree_, &root);
     if (!root_handle) return;
-    ReconcileChildren(database_catalog, catalog_state, filter_favorites, items, root_handle,
-        search_filter, tag_filter);
+    ReconcileChildren(database_catalog, items, root_handle, !search_filter.empty());
     TreeView_Expand(tree_, root_handle, TVE_EXPAND);
     return;
   }
@@ -542,8 +523,7 @@ void TreeViewController::ReconcileSpecialRoot(const catalog::Catalog& database_c
   root.lParam = item_data;
   root.iImage = root.iSelectedImage = image;
   TreeView_SetItem(tree_, &root);
-  ReconcileChildren(database_catalog, catalog_state, filter_favorites, items, root_handle,
-      search_filter, tag_filter);
+  ReconcileChildren(database_catalog, items, root_handle, !search_filter.empty());
 }
 
 HTREEITEM TreeViewController::FindTopLevelItem(LPARAM item_data) const {
