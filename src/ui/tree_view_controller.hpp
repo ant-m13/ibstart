@@ -69,14 +69,10 @@ class TreeViewController final {
     kRecentImage,
   };
 
-  void AddItems(const catalog::Catalog& database_catalog, const storage::CatalogState& catalog_state,
-      const std::vector<std::wstring>& filter_favorites, const std::vector<catalog::TreeItem>& items,
-      HTREEITEM parent, std::wstring_view search_filter,
-      const presentation::TreeTagFilter& tag_filter) const;
-  void ReconcileChildren(const catalog::Catalog& database_catalog, const storage::CatalogState& catalog_state,
-      const std::vector<std::wstring>& filter_favorites, const std::vector<catalog::TreeItem>& items,
-      HTREEITEM parent, std::wstring_view search_filter,
-      const presentation::TreeTagFilter& tag_filter) const;
+  void AddItems(const catalog::Catalog& database_catalog, const std::vector<catalog::TreeItem>& items,
+      HTREEITEM parent, bool expand_for_search) const;
+  void ReconcileChildren(const catalog::Catalog& database_catalog,
+      const std::vector<catalog::TreeItem>& items, HTREEITEM parent, bool expand_for_search) const;
   void ReconcileSpecialRoot(const catalog::Catalog& database_catalog,
       const storage::CatalogState& catalog_state, const std::vector<std::wstring>& filter_favorites,
       std::wstring_view search_filter, const presentation::TreeTagFilter& tag_filter,
@@ -85,10 +81,6 @@ class TreeViewController final {
   [[nodiscard]] HTREEITEM InsertCatalogRoot() const;
   [[nodiscard]] ViewState CaptureViewState() const;
   void RestoreViewState(const ViewState& state) const;
-  [[nodiscard]] bool MatchesFilters(const catalog::Catalog& database_catalog,
-      const storage::CatalogState& catalog_state, const std::vector<std::wstring>& filter_favorites,
-      const catalog::TreeItem& item, std::wstring_view search_filter,
-      const presentation::TreeTagFilter& tag_filter) const;
   void UpdateTreeItem(HTREEITEM handle, const catalog::Catalog& database_catalog,
       const catalog::TreeItem& item) const;
   void DeleteChildren(HTREEITEM parent) const;
