@@ -1952,7 +1952,7 @@ void MainWindow::LoadCatalog(bool report_error) {
       SetStatus(settings_.active_ibases.wstring() + L" | " + CatalogStatistics());
       logger_.Info(L"Загружен список баз: " + settings_.active_ibases.wstring() + L" | " + CatalogStatistics());
     }
-    catalog_state_.Reload();
+    static_cast<void>(catalog_state_.Reload());
     RefreshTagFilter();
     PopulateTree();
     if (!hasInitialLaunch) {
