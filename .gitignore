@@ -7,3 +7,9 @@
 *.VC.opendb
 *.log
 data/
+
+# Local reference snapshots from 1C:ITS. They are not project content and must
+# not be committed together with extracted HTML or other copied page resources.
+*.mht
+*.mhtml
+docs/_external-1c/
