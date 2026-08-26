@@ -614,6 +614,20 @@ void TestSecretMasking() {
   const auto masked = ibstart::logging::MaskSecrets(
       L"/N admin /P \"s3cret\" --token=abc password=xyz /Password hunter2 Pwd=db-secret");
   CHECK(masked.find(L"s3cret") == std::wstring::npos); CHECK(masked.find(L"abc") == std::wstring::npos); CHECK(masked.find(L"xyz") == std::wstring::npos); CHECK(masked.find(L"hunter2") == std::wstring::npos); CHECK(masked.find(L"db-secret") == std::wstring::npos); CHECK(masked.find(L"admin") != std::wstring::npos);
+
+  const ibstart::domain::LaunchCommand quotedPassword{
+      L"C:\\Program Files\\1cv8\\1cv8.exe", {L"ENTERPRISE", L"/P", L"alpha\"VISIBLE_SUFFIX"}};
+  const ibstart::domain::LaunchCommand inlinePassword{
+      L"C:\\Program Files\\1cv8\\1cv8.exe", {L"ENTERPRISE", L"/P=alpha VISIBLE_SUFFIX"}};
+  const ibstart::domain::LaunchCommand connectionPassword{
+      L"C:\\Program Files\\1cv8\\1cv8.exe",
+      {L"ENTERPRISE", L"/IBConnection", L"DBSrvr=\"srv\";DB=\"base\";Pwd=\"alpha VISIBLE_SUFFIX\""}};
+  for (const auto& command : {quotedPassword, inlinePassword, connectionPassword}) {
+    const auto redacted = ibstart::logging::RedactedCommandLine(command);
+    CHECK(redacted.find(L"alpha") == std::wstring::npos);
+    CHECK(redacted.find(L"VISIBLE_SUFFIX") == std::wstring::npos);
+    CHECK(redacted.find(L"***") != std::wstring::npos);
+  }
 }
 
 void TestLogPruning() {

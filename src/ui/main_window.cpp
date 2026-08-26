@@ -2747,7 +2747,7 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
     const auto parameters = database.additional_parameters; if (utf::FindNoCaseOrdinal(parameters, L"/p") != std::wstring_view::npos && MessageBoxW(window_, L"В дополнительных параметрах обнаружен /P. Пароль может храниться в открытом виде в ibases.v8i. Продолжить?", L"Предупреждение", MB_YESNO | MB_ICONWARNING) != IDYES) return;
     const auto command = launcher::BuildCommand(database, *selected, options);
     if (usedNewestThinClient) logger_.Info(L"Требуемая версия " + selectedVersion + L" не найдена; для веб-базы выбран тонкий клиент " + selected->version + L".");
-    logger_.Info(L"Запуск: " + command.CommandLine());
+    logger_.Info(L"Запуск: " + logging::RedactedCommandLine(command));
     launcher::Launch(command);
     rememberLaunch(mode);
     SetStatus(L"Запущена база: " + database.name);
