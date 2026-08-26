@@ -12,6 +12,7 @@
 #include "core/domain/version.hpp"
 #include "core/domain/utf.hpp"
 #include "core/launcher/command_builder.hpp"
+#include "core/launcher/process_launcher.hpp"
 #include "core/platform/platform_discovery.hpp"
 #include "core/shell/shortcut.hpp"
 #include "core/update/update_service.hpp"

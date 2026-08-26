@@ -1,10 +1,7 @@
 #include "core/launcher/command_builder.hpp"
 
 #include "core/connection/connection_string.hpp"
-#include "core/domain/utf.hpp"
 #include "core/platform/platform_version.hpp"
-
-#include <Windows.h>
 
 #include <algorithm>
 #include <cwchar>
@@ -202,19 +199,6 @@ domain::LaunchCommand BuildCommand(const domain::Database& database,
   command.arguments.insert(command.arguments.end(), common.begin(), common.end());
   command.arguments.insert(command.arguments.end(), individual.begin(), individual.end());
   return command;
-}
-
-void Launch(const domain::LaunchCommand& command) {
-  std::wstring mutableCommandLine = command.CommandLine();
-  STARTUPINFOW startup{};
-  startup.cb = sizeof(startup);
-  PROCESS_INFORMATION process{};
-  if (!CreateProcessW(command.executable.c_str(), mutableCommandLine.data(), nullptr, nullptr, FALSE,
-          0, nullptr, command.executable.parent_path().c_str(), &startup, &process)) {
-    throw std::runtime_error("Unable to start 1C client: " + utf::ToUtf8(utf::LastErrorMessage()));
-  }
-  CloseHandle(process.hThread);
-  CloseHandle(process.hProcess);
 }
 
 }  // namespace ibstart::launcher

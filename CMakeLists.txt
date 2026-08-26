@@ -52,6 +52,7 @@ add_library(ibstart_core STATIC
   src/core/v8i/v8i_document.cpp
   src/core/v8i/v8i_file_store.cpp
   src/core/launcher/command_builder.cpp
+  src/core/launcher/process_launcher.cpp
   src/core/platform/platform_discovery.cpp
   src/core/cache/cache_service.cpp
   src/core/scanner/file_base_scanner.cpp
