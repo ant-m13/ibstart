@@ -101,6 +101,21 @@ std::vector<std::wstring> CollectFilterTags(const catalog::Catalog& catalog, con
   return result;
 }
 
+std::vector<std::wstring> CollectRecentDatabaseNames(const catalog::Catalog& catalog,
+    const std::vector<domain::HistoryItem>& history) {
+  std::vector<std::wstring> result;
+  result.reserve(history.size());
+  const auto databases = catalog.Databases();
+  for (const auto& launch : history) {
+    for (const auto* entry : databases) {
+      if (entry->ValueOr(L"ID", entry->name) != launch.database_id) continue;
+      result.push_back(entry->name);
+      break;
+    }
+  }
+  return result;
+}
+
 bool MatchesSearchFilter(const catalog::Catalog& catalog, const catalog::TreeItem& item, std::wstring_view search_filter,
     const storage::DatabaseTags& tags) {
   if (search_filter.empty()) return true;

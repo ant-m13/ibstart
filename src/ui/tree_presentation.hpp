@@ -27,6 +27,8 @@ struct TreeTagFilter {
 void EraseTagStyle(storage::TagStyles& styles, std::wstring_view name);
 [[nodiscard]] bool ContainsTag(const std::vector<std::wstring>& tags, std::wstring_view value);
 [[nodiscard]] std::vector<std::wstring> CollectFilterTags(const catalog::Catalog& catalog, const storage::DatabaseTags& tags);
+[[nodiscard]] std::vector<std::wstring> CollectRecentDatabaseNames(const catalog::Catalog& catalog,
+    const std::vector<domain::HistoryItem>& history);
 [[nodiscard]] bool MatchesSearchFilter(const catalog::Catalog& catalog, const catalog::TreeItem& item,
     std::wstring_view search_filter, const storage::DatabaseTags& tags);
 [[nodiscard]] bool MatchesTagFilter(const catalog::Catalog& catalog, const catalog::TreeItem& item,
