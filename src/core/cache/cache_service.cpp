@@ -24,7 +24,7 @@ std::wstring Env(const wchar_t* name) {
   return text;
 }
 
-uintmax_t SizeOf(const std::filesystem::path& root, std::stop_token stop) {
+uintmax_t SizeOf(const std::filesystem::path& root, std::stop_token stop = {}) {
   uintmax_t result = 0; std::error_code error;
   for (std::filesystem::recursive_directory_iterator it(root, std::filesystem::directory_options::skip_permission_denied, error), end; it != end; it.increment(error)) {
     if (stop.stop_requested()) return 0;
