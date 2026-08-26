@@ -7,6 +7,7 @@
 #include "core/v8i/v8i_file_store.hpp"
 #include "ui/cache_clear_operation.hpp"
 #include "ui/details_view_controller.hpp"
+#include "ui/menu_controller.hpp"
 #include "ui/owner_draw_menu.hpp"
 #include "ui/tag_manager.hpp"
 #include "ui/tree_view_controller.hpp"
@@ -127,14 +128,9 @@ class MainWindow {
   HFONT details_subtitle_font_{};
   HFONT details_key_font_{};
   HIMAGELIST drag_image_{};
-  HMENU menu_{};
-  HMENU file_menu_{};
-  HMENU view_menu_{};
-  HMENU help_menu_{};
   std::vector<HIMAGELIST> button_images_;
   OwnerDrawMenuItems context_menu_items_;
-  OwnerDrawMenuItems main_menu_items_;
-  OwnerDrawMenuItems file_menu_items_;
+  MenuController menus_;
   std::filesystem::path executable_;
   storage::StorageLayout layout_;
   storage::Settings settings_;
