@@ -67,6 +67,7 @@ target_link_libraries(ibstart_core PUBLIC Advapi32 Shell32 Ole32 Winhttp)
 
 add_executable(IBStart WIN32
   src/app/main.cpp
+  src/ui/advanced_database_options_dialog.cpp
   src/ui/cache_clear_operation.cpp
   src/ui/database_editor_dialog.cpp
   src/ui/details_view_controller.cpp
