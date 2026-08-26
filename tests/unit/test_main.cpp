@@ -692,9 +692,15 @@ void TestSecretMasking() {
   const ibstart::domain::LaunchCommand safeParameters{L"1cv8.exe", {L"ENTERPRISE", L"/Path", L"/Port", L"/Profile"}};
   const ibstart::domain::LaunchCommand namedPassword{L"1cv8.exe", {L"ENTERPRISE", L"--password=alpha"}};
   const ibstart::domain::LaunchCommand separateToken{L"1cv8.exe", {L"ENTERPRISE", L"--token", L"alpha"}};
+  const ibstart::domain::LaunchCommand connectionSecret{
+      L"1cv8.exe", {L"ENTERPRISE", L"/IBConnection", L"DBSrvr=\"srv\";Pwd = \"alpha\""}};
+  const ibstart::domain::LaunchCommand connectionWithoutSecret{
+      L"1cv8.exe", {L"ENTERPRISE", L"/IBConnection", L"DBSrvr=\"srv\";DB=\"base\""}};
   CHECK(!ibstart::logging::ContainsSecretArguments(safeParameters));
   CHECK(ibstart::logging::ContainsSecretArguments(namedPassword));
   CHECK(ibstart::logging::ContainsSecretArguments(separateToken));
+  CHECK(ibstart::logging::ContainsSecretArguments(connectionSecret));
+  CHECK(!ibstart::logging::ContainsSecretArguments(connectionWithoutSecret));
 }
 
 void TestLogPruning() {

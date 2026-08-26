@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <chrono>
 #include <cwchar>
+#include <cwctype>
 #include <fstream>
 #include <iomanip>
 #include <iterator>
@@ -44,6 +45,24 @@ std::optional<size_t> InlineSecretPrefixLength(std::wstring_view argument) {
   // ambiguous /P... argument in diagnostics over exposing credentials.
   if (argument.size() > 2 && StartsWithNoCase(argument, L"/P")) return 2;
   return std::nullopt;
+}
+
+bool IsIdentifierCharacter(wchar_t value) {
+  return std::iswalnum(value) != 0 || value == L'_';
+}
+
+bool ContainsSecretAssignment(std::wstring_view argument) {
+  constexpr std::wstring_view keys[] = {L"password", L"pwd", L"token", L"secret"};
+  for (const auto key : keys) {
+    for (size_t position = utf::FindNoCaseOrdinal(argument, key); position != std::wstring_view::npos;
+         position = utf::FindNoCaseOrdinal(argument, key, position + 1)) {
+      if (position > 0 && IsIdentifierCharacter(argument[position - 1])) continue;
+      size_t equals = position + key.size();
+      while (equals < argument.size() && std::iswspace(argument[equals]) != 0) ++equals;
+      if (equals < argument.size() && argument[equals] == L'=') return true;
+    }
+  }
+  return false;
 }
 
 std::wstring Stamp(const wchar_t* format) {
@@ -106,15 +125,17 @@ std::wstring RedactedCommandLine(const domain::LaunchCommand& command) {
 }
 
 bool ContainsSecretArguments(const domain::LaunchCommand& command) {
-  bool connectionValue = false;
-  for (const auto& argument : command.arguments) {
-    if (connectionValue) {
-      connectionValue = false;
+  for (size_t index = 0; index < command.arguments.size(); ++index) {
+    const auto& argument = command.arguments[index];
+    if (EqualNoCase(argument, L"/F") || EqualNoCase(argument, L"/S") || EqualNoCase(argument, L"/WS")) {
+      if (index + 1 < command.arguments.size()) ++index;
       continue;
     }
-    if (EqualNoCase(argument, L"/F") || EqualNoCase(argument, L"/S") ||
-        EqualNoCase(argument, L"/WS") || EqualNoCase(argument, L"/IBConnection")) {
-      connectionValue = true;
+    if (EqualNoCase(argument, L"/IBConnection")) {
+      if (index + 1 < command.arguments.size()) {
+        if (ContainsSecretAssignment(command.arguments[index + 1])) return true;
+        ++index;
+      }
       continue;
     }
     if (IsSeparateSecretSwitch(argument) || ExplicitInlineSecretPrefixLength(argument)) return true;
