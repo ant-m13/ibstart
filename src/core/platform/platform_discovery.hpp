@@ -8,6 +8,7 @@
 namespace ibstart::platform {
 
 [[nodiscard]] std::vector<std::filesystem::path> StandardSearchRoots();
-[[nodiscard]] std::vector<domain::PlatformInstallation> Discover(const std::vector<std::filesystem::path>& user_roots = {});
+[[nodiscard]] std::vector<domain::PlatformInstallation> Discover(
+    const std::vector<std::filesystem::path>& user_roots = {}, bool include_system_sources = true);
 
 }  // namespace ibstart::platform

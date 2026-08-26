@@ -143,16 +143,19 @@ std::vector<std::filesystem::path> StandardSearchRoots() {
   return roots;
 }
 
-std::vector<domain::PlatformInstallation> Discover(const std::vector<std::filesystem::path>& user_roots) {
+std::vector<domain::PlatformInstallation> Discover(
+    const std::vector<std::filesystem::path>& user_roots, bool include_system_sources) {
   std::vector<domain::PlatformInstallation> result;
   std::set<std::wstring> known;
-  auto roots = StandardSearchRoots();
+  auto roots = include_system_sources ? StandardSearchRoots() : std::vector<std::filesystem::path>{};
   roots.insert(roots.end(), user_roots.begin(), user_roots.end());
   for (const auto& root : roots) ScanRoot(root, result, known);
-  ScanRegistry(HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY, result, known);
-  ScanRegistry(HKEY_LOCAL_MACHINE, KEY_WOW64_32KEY, result, known);
-  ScanRegistry(HKEY_CURRENT_USER, KEY_WOW64_64KEY, result, known);
-  ScanRegistry(HKEY_CURRENT_USER, KEY_WOW64_32KEY, result, known);
+  if (include_system_sources) {
+    ScanRegistry(HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY, result, known);
+    ScanRegistry(HKEY_LOCAL_MACHINE, KEY_WOW64_32KEY, result, known);
+    ScanRegistry(HKEY_CURRENT_USER, KEY_WOW64_64KEY, result, known);
+    ScanRegistry(HKEY_CURRENT_USER, KEY_WOW64_32KEY, result, known);
+  }
   std::sort(result.begin(), result.end(), [](const auto& left, const auto& right) { return IsNewerVersion(left.version, right.version); });
   return result;
 }

@@ -275,7 +275,7 @@ void TestPlatformDiscoveryLargeVersions() {
   WriteBytes(smaller / L"1cv8.exe", "");
   WriteBytes(larger / L"1cv8.exe", "");
 
-  const auto discovered = ibstart::platform::Discover({root});
+  const auto discovered = ibstart::platform::Discover({root}, false);
   const auto smallerPosition = std::find_if(discovered.begin(), discovered.end(), [&](const auto& item) { return item.executable == smaller / L"1cv8.exe"; });
   const auto largerPosition = std::find_if(discovered.begin(), discovered.end(), [&](const auto& item) { return item.executable == larger / L"1cv8.exe"; });
   CHECK(smallerPosition != discovered.end());
@@ -294,7 +294,7 @@ void TestStandaloneThinClientDiscovery() {
   const auto thin = bin / L"1cv8c.exe";
   WriteBytes(thin, "");
 
-  const auto discovered = ibstart::platform::Discover({root});
+  const auto discovered = ibstart::platform::Discover({root}, false);
   const auto found = std::find_if(discovered.begin(), discovered.end(), [&](const auto& item) { return item.executable == thin; });
   CHECK(found != discovered.end());
   CHECK(found != discovered.end() && found->version == kVersion);
@@ -331,7 +331,7 @@ void TestCustomX86PlatformDiscovery() {
   const auto executable = bin / L"1cv8.exe";
   std::filesystem::copy_file(source, executable, std::filesystem::copy_options::overwrite_existing);
 
-  const auto discovered = ibstart::platform::Discover({root});
+  const auto discovered = ibstart::platform::Discover({root}, false);
   const auto found = std::find_if(discovered.begin(), discovered.end(), [&](const auto& item) { return item.executable == executable; });
   CHECK(found != discovered.end());
   CHECK(found != discovered.end() && found->bitness == ibstart::domain::ClientBitness::x86);
