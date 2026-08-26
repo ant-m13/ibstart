@@ -828,6 +828,9 @@ void TestStorageSkipsMalformedRecords() {
   CHECK(settings.recent_ibases == std::vector<std::filesystem::path>{L"C:\\recent.v8i"});
   CHECK(settings.platform_search_paths == std::vector<std::filesystem::path>{L"C:\\platform"});
 
+  WriteBytes(layout.root / L"settings.json", R"({"simple_mode": 1} trailing data)");
+  CHECK(!ibstart::storage::LoadSettings(layout).simple_mode);
+
   WriteBytes(layout.root / L"catalog-state.json", R"({
     "favorites": [{"favorite": "preserved"}],
     "history": [
