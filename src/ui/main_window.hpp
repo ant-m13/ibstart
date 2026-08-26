@@ -5,17 +5,16 @@
 #include "core/logging/logging.hpp"
 #include "core/storage/storage.hpp"
 #include "core/v8i/v8i_file_store.hpp"
+#include "ui/cache_clear_operation.hpp"
 #include "ui/owner_draw_menu.hpp"
 #include "ui/update_check_operation.hpp"
 
 #include <Windows.h>
 #include <CommCtrl.h>
 
-#include <memory>
 #include <optional>
 #include <string>
 #include <string_view>
-#include <thread>
 #include <vector>
 
 namespace ibstart::ui {
@@ -33,8 +32,6 @@ class MainWindow {
   void Activate();
 
  private:
-  struct CacheOperationState;
-
   static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
   LRESULT Handle(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
   void CreateControls();
@@ -156,14 +153,13 @@ class MainWindow {
   std::optional<std::wstring> initial_launch_id_;
   bool suppress_search_refresh_{false};
   background::UpdateCheckOperation update_check_;
-  std::shared_ptr<CacheOperationState> cache_operation_;
+  background::CacheClearOperation cache_operation_;
   std::wstring search_filter_;
   std::wstring dragging_name_;
   std::wstring drag_target_name_;
   bool drag_insert_after_{false};
   bool drag_to_root_{false};
   bool closing_{false};
-  std::jthread cache_thread_;
 };
 
 }  // namespace ibstart::ui
