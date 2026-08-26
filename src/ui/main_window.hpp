@@ -7,6 +7,7 @@
 #include "core/storage/storage.hpp"
 #include "core/v8i/v8i_file_store.hpp"
 #include "ui/cache_clear_operation.hpp"
+#include "ui/command_dispatcher.hpp"
 #include "ui/context_menu_controller.hpp"
 #include "ui/details_view_controller.hpp"
 #include "ui/menu_controller.hpp"
@@ -39,6 +40,7 @@ class MainWindow {
  private:
   static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
   LRESULT Handle(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
+  void RegisterCommandHandlers();
   void CreateControls();
   void Layout(int width, int height);
   void LoadCatalog(bool report_error = true);
@@ -130,6 +132,7 @@ class MainWindow {
   HIMAGELIST drag_image_{};
   std::vector<HIMAGELIST> button_images_;
   ContextMenuController context_menus_;
+  CommandDispatcher command_dispatcher_;
   MenuController menus_;
   std::filesystem::path executable_;
   storage::StorageLayout layout_;

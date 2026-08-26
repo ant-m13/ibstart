@@ -143,7 +143,47 @@ MainWindow::MainWindow(HINSTANCE instance, std::filesystem::path executable, sto
     storage::Settings settings, std::optional<std::wstring> launch_id)
     : instance_(instance), executable_(std::move(executable)), layout_(std::move(layout)), settings_(std::move(settings)),
       catalog_state_(layout_), logger_(layout_.root / L"logs"), tag_manager_(catalog_state_, logger_),
-      initial_launch_id_(std::move(launch_id)) {}
+      initial_launch_id_(std::move(launch_id)) {
+  RegisterCommandHandlers();
+}
+
+void MainWindow::RegisterCommandHandlers() {
+  command_dispatcher_.Register(kEnterprise, [this] { LaunchSelected(domain::LaunchMode::enterprise); });
+  command_dispatcher_.Register(kDesigner, [this] { LaunchSelected(domain::LaunchMode::designer); });
+  command_dispatcher_.Register(kAddDatabase, [this] { AddDatabase(); });
+  command_dispatcher_.Register(kAddGroup, [this] { AddGroup(); });
+  command_dispatcher_.Register(kOpenList, [this] { OpenList(); });
+  command_dispatcher_.Register(kOpenStandardList, [this] { OpenStandardList(); });
+  command_dispatcher_.Register(kRefresh, [this] {
+    const std::wstring selected = tree_view_.SelectedName();
+    LoadCatalog();
+    if (!selected.empty()) static_cast<void>(tree_view_.SelectItem(selected));
+  });
+  command_dispatcher_.Register(kEdit, [this] { EditSelected(); });
+  command_dispatcher_.Register(kCache, [this] { ClearSelectedCache(); });
+  command_dispatcher_.Register(kClearRecent, [this] { ClearRecentBases(); });
+  command_dispatcher_.Register(kShortcut, [this] { CreateShortcut(); });
+  command_dispatcher_.Register(kOpenFolder, [this] { OpenSelectedFolder(); });
+  command_dispatcher_.Register(kDelete, [this] { DeleteSelected(); });
+  command_dispatcher_.Register(kCopyDetailValue, [this] { CopySelectedDetail(false); });
+  command_dispatcher_.Register(kCopyDetailPair, [this] { CopySelectedDetail(true); });
+  command_dispatcher_.Register(kEditTags, [this] { EditSelectedTags(); });
+  command_dispatcher_.Register(kConfigureTagColors, [this] { ConfigureTagColors(); });
+  command_dispatcher_.Register(kSimpleMode, [this] { SetSimpleMode(!settings_.simple_mode); });
+  command_dispatcher_.Register(kToggleFavorite, [this] { ToggleFavorite(); });
+  command_dispatcher_.Register(kShowTagsInList, [this] { ToggleTagDisplay(); });
+  command_dispatcher_.Register(kFocusSearch, [this] { SetFocus(search_); });
+  command_dispatcher_.Register(kCheckForUpdates, [this] { CheckForUpdates(); });
+  command_dispatcher_.Register(kAbout, [this] { ShowAbout(); });
+  command_dispatcher_.Register(kExit, [this] { SendMessageW(window_, WM_CLOSE, 0, 0); });
+  command_dispatcher_.Register(kMoveUp, [this] { MoveSelected(-1); });
+  command_dispatcher_.Register(kMoveDown, [this] { MoveSelected(1); });
+  command_dispatcher_.Register(kMoveToFolder, [this] { MoveSelectedToFolder(); });
+  command_dispatcher_.Register(kNewTagForSelected, [this] { AddNewTagToSelected(); });
+  command_dispatcher_.Register(kToggleFoldersFirstWhenSorting, [this] { ToggleFoldersFirstWhenSorting(); });
+  command_dispatcher_.RegisterRange(kFavorite1, 9, [this](std::size_t slot) { LaunchFavorite(slot); });
+  command_dispatcher_.RegisterRange(kRecentList1, 10, [this](std::size_t index) { OpenRecentList(index); });
+}
 MainWindow::~MainWindow() {
   StopAndJoinBackgroundThreads();
   CancelTreeDrag();
@@ -301,25 +341,8 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       }
       if (reinterpret_cast<HWND>(lparam) == connection_ && HIWORD(wparam) == EN_SETFOCUS) { SendMessageW(connection_, EM_SETSEL, 0, -1); return 0; }
       if (reinterpret_cast<HWND>(lparam) == tag_filter_ && HIWORD(wparam) == CBN_SELCHANGE) { PopulateTree(); return 0; }
-      switch (LOWORD(wparam)) {
-        case kEnterprise: LaunchSelected(domain::LaunchMode::enterprise); break; case kDesigner: LaunchSelected(domain::LaunchMode::designer); break;
-        case kAddDatabase: AddDatabase(); break; case kAddGroup: AddGroup(); break; case kOpenList: OpenList(); break; case kOpenStandardList: OpenStandardList(); break;
-        case kRefresh: {
-          const std::wstring selected = tree_view_.SelectedName();
-          LoadCatalog();
-          if (!selected.empty()) static_cast<void>(tree_view_.SelectItem(selected));
-          break;
-        }
-        case kEdit: EditSelected(); break; case kCache: ClearSelectedCache(); break; case kClearRecent: ClearRecentBases(); break; case kShortcut: CreateShortcut(); break; case kOpenFolder: OpenSelectedFolder(); break; case kDelete: DeleteSelected(); break;
-        case kCopyDetailValue: CopySelectedDetail(false); break; case kCopyDetailPair: CopySelectedDetail(true); break; case kEditTags: EditSelectedTags(); break; case kConfigureTagColors: ConfigureTagColors(); break;
-        case kSimpleMode: SetSimpleMode(!settings_.simple_mode); break; case kToggleFavorite: ToggleFavorite(); break; case kShowTagsInList: ToggleTagDisplay(); break; case kFocusSearch: SetFocus(search_); break; case kCheckForUpdates: CheckForUpdates(); break; case kAbout: ShowAbout(); break; case kExit: SendMessageW(window_, WM_CLOSE, 0, 0); break;
-        case kMoveUp: MoveSelected(-1); break; case kMoveDown: MoveSelected(1); break; case kMoveToFolder: MoveSelectedToFolder(); break; case kNewTagForSelected: AddNewTagToSelected(); break;
-        case kToggleFoldersFirstWhenSorting: ToggleFoldersFirstWhenSorting(); break;
-        default:
-          if (LOWORD(wparam) >= kFavorite1 && LOWORD(wparam) < kFavorite1 + 9) LaunchFavorite(LOWORD(wparam) - kFavorite1);
-          else if (LOWORD(wparam) >= kRecentList1 && LOWORD(wparam) < kRecentList1 + 10) OpenRecentList(LOWORD(wparam) - kRecentList1);
-          break;
-      } return 0;
+      command_dispatcher_.Dispatch(LOWORD(wparam));
+      return 0;
     case WM_NOTIFY:
       if (lparam && reinterpret_cast<NMHDR*>(lparam)->hwndFrom == tree_) {
         const auto* notification = reinterpret_cast<NMHDR*>(lparam);
