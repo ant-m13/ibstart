@@ -21,11 +21,6 @@ namespace {
 bool EqualNoCase(std::wstring_view left, std::wstring_view right) {
   return left.size() == right.size() && _wcsnicmp(left.data(), right.data(), left.size()) == 0;
 }
-struct CaseInsensitiveLess {
-  bool operator()(const std::wstring& left, const std::wstring& right) const {
-    return _wcsicmp(left.c_str(), right.c_str()) < 0;
-  }
-};
 }
 
 const Field* Entry::Find(std::wstring_view key) const {
@@ -56,6 +51,11 @@ namespace {
 bool EqualNoCase(std::wstring_view left, std::wstring_view right) {
   return left.size() == right.size() && _wcsnicmp(left.data(), right.data(), left.size()) == 0;
 }
+struct ParentKeyLess {
+  bool operator()(const std::wstring& left, const std::wstring& right) const {
+    return _wcsicmp(left.c_str(), right.c_str()) < 0;
+  }
+};
 bool StartsWithNoCase(std::wstring_view value, std::wstring_view prefix) {
   return value.size() >= prefix.size() && _wcsnicmp(value.data(), prefix.data(), prefix.size()) == 0;
 }
@@ -138,6 +138,11 @@ bool ValidParent(const v8i::V8iDocument& document, std::wstring_view parent) {
 }
 }  // namespace
 
+bool Catalog::CaseInsensitiveLess::operator()(const std::wstring& left,
+    const std::wstring& right) const noexcept {
+  return _wcsicmp(left.c_str(), right.c_str()) < 0;
+}
+
 bool MatchesSearchText(const domain::Entry& entry, std::wstring_view query) {
   if (query.empty()) return true;
   const auto matches = [query](std::wstring_view text) { return utf::FindNoCaseOrdinal(text, query) != std::wstring_view::npos; };
@@ -149,6 +154,20 @@ bool MatchesSearchText(const domain::Entry& entry, std::wstring_view query) {
 
 Catalog::Catalog(v8i::V8iDocument document) : document_(std::move(document)) {}
 
+void Catalog::EnsureLookup() const {
+  if (lookup_) return;
+
+  LookupIndex index;
+  index.by_name.clear();
+  index.by_id.clear();
+  for (size_t position = 0; position < document_.sections.size(); ++position) {
+    const auto& entry = document_.sections[position].entry;
+    index.by_name.emplace(entry.name, position);
+    if (entry.IsDatabase()) index.by_id.emplace(entry.ValueOr(L"ID", entry.name), position);
+  }
+  lookup_ = std::move(index);
+}
+
 std::vector<const domain::Entry*> Catalog::Databases() const {
   std::vector<const domain::Entry*> result;
   for (const auto& section : document_.sections) if (section.entry.IsDatabase()) result.push_back(&section.entry);
@@ -156,13 +175,23 @@ std::vector<const domain::Entry*> Catalog::Databases() const {
 }
 
 domain::Entry* Catalog::Find(std::wstring_view name) {
-  auto* section = document_.Find(name);
-  return section == nullptr ? nullptr : &section->entry;
+  const auto* entry = static_cast<const Catalog*>(this)->Find(name);
+  // The caller receives a mutable entry and may change its name or ID.  Do
+  // not retain an index that could then contain stale keys.
+  lookup_.reset();
+  return const_cast<domain::Entry*>(entry);
 }
 
 const domain::Entry* Catalog::Find(std::wstring_view name) const {
-  const auto* section = document_.Find(name);
-  return section == nullptr ? nullptr : &section->entry;
+  EnsureLookup();
+  const auto found = lookup_->by_name.find(std::wstring(name));
+  return found == lookup_->by_name.end() ? nullptr : &document_.sections[found->second].entry;
+}
+
+const domain::Entry* Catalog::FindById(std::wstring_view id) const {
+  EnsureLookup();
+  const auto found = lookup_->by_id.find(std::wstring(id));
+  return found == lookup_->by_id.end() ? nullptr : &document_.sections[found->second].entry;
 }
 
 std::wstring Catalog::ParentOf(std::wstring_view name) const {
@@ -211,7 +240,7 @@ std::vector<TreeItem> Catalog::Tree() const {
   // Index children once instead of scanning every document section for every
   // visited group.  Large ibases.v8i files commonly contain many groups, so
   // the old recursive ChildrenOf() calls multiplied the same linear scan.
-  std::map<std::wstring, std::vector<const domain::Entry*>, CaseInsensitiveLess> children_by_parent;
+  std::map<std::wstring, std::vector<const domain::Entry*>, ParentKeyLess> children_by_parent;
   for (const auto& section : document_.sections) {
     children_by_parent[ParentName(section.entry.ValueOr(L"Folder"))].push_back(&section.entry);
   }

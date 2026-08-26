@@ -842,7 +842,7 @@ void MainWindow::PopulateTree() {
   }
   if (initial_launch_id_ && catalog_) {
     auto wanted = *initial_launch_id_; initial_launch_id_.reset();
-    for (const auto* entry : catalog_->Databases()) if (entry->ValueOr(L"ID", entry->name) == wanted) { wanted = entry->name; break; }
+    if (const auto* entry = catalog_->FindById(wanted)) wanted = entry->name;
     if (tree_view_.SelectItem(wanted)) {
       logger_.Info(L"Выбрана база по ярлыку: " + wanted);
       // During application startup the main window receives focus after WM_CREATE.
