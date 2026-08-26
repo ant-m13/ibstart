@@ -34,12 +34,9 @@
 #include <iterator>
 #include <limits>
 #include <map>
-#include <memory>
-#include <mutex>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
-#include <thread>
 
 namespace ibstart::ui {
 using dialog::CreateUiFont;
@@ -428,18 +425,6 @@ bool CopyTextToClipboard(HWND owner, std::wstring_view text) {
 
 }  // namespace
 
-struct MainWindow::CacheOperationState {
-  enum class Stage { finding, clearing };
-
-  std::mutex mutex;
-  Stage stage{Stage::finding};
-  std::vector<cache::CacheItem> candidates;
-  cache::ClearResult result;
-  std::wstring error;
-  bool cancelled{false};
-  bool completed{false};
-};
-
 MainWindow::MainWindow(HINSTANCE instance, std::filesystem::path executable, storage::StorageLayout layout,
     storage::Settings settings, std::optional<std::wstring> launch_id)
     : instance_(instance), executable_(std::move(executable)), layout_(std::move(layout)), settings_(std::move(settings)),
@@ -465,13 +450,12 @@ MainWindow::~MainWindow() {
 
 void MainWindow::StopAndJoinBackgroundThreads() noexcept {
   update_check_.StopAndJoin();
-  if (cache_thread_.joinable()) static_cast<void>(cache_thread_.request_stop());
-  if (cache_thread_.joinable()) cache_thread_.join();
+  cache_operation_.StopAndJoin();
 }
 
 bool MainWindow::RefreshBackgroundPolling() {
   if (!window_ || !IsWindow(window_)) return false;
-  if (update_check_.active() || cache_thread_.joinable()) {
+  if (update_check_.active() || cache_operation_.active()) {
     return SetTimer(window_, kBackgroundPollTimer, kBackgroundPollIntervalMilliseconds, nullptr) != 0;
   }
   KillTimer(window_, kBackgroundPollTimer);
@@ -481,31 +465,25 @@ bool MainWindow::RefreshBackgroundPolling() {
 void MainWindow::PollBackgroundOperations() {
   if (update_check_.completed()) CompleteUpdateCheck();
   if (!window_) return;
-  const auto completed = [](const auto& state) {
-    if (!state) return false;
-    std::lock_guard lock(state->mutex);
-    return state->completed;
-  };
-  if (completed(cache_operation_)) CompleteCacheOperation();
+  if (cache_operation_.completed()) CompleteCacheOperation();
 }
 
 void MainWindow::BeginClose() {
   if (closing_) return;
   closing_ = true;
   update_check_.RequestStop();
-  if (cache_thread_.joinable()) static_cast<void>(cache_thread_.request_stop());
-  if (update_check_.active() || cache_thread_.joinable()) {
+  cache_operation_.RequestStop();
+  if (update_check_.active() || cache_operation_.active()) {
     ShowWindow(window_, SW_HIDE);
     if (!RefreshBackgroundPolling()) {
       StopAndJoinBackgroundThreads();
-      cache_operation_.reset();
     }
   }
   TryFinishClose();
 }
 
 void MainWindow::TryFinishClose() {
-  if (!closing_ || update_check_.active() || cache_thread_.joinable()) return;
+  if (!closing_ || update_check_.active() || cache_operation_.active()) return;
   if (!window_ || !IsWindow(window_)) return;
   KillTimer(window_, kBackgroundPollTimer);
   settings_.selected_entry = catalog_ && catalog_->Find(SelectedName()) ? SelectedName() : std::wstring();
@@ -1538,7 +1516,7 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   const auto* entry = specialRoot ? nullptr : catalog_->Find(name);
   const bool database = entry && entry->IsDatabase();
   const bool web = database && catalog::Catalog::IsWebConnection(entry->ValueOr(L"Connect"));
-  const bool launch_available = database && !cache_operation_;
+  const bool launch_available = database && !cache_operation_.active();
   const bool group = entry && entry->IsGroup();
   const bool editable = entry && !settings_.simple_mode;
   const bool file = database && !connection::ValueOrEmpty(entry->ValueOr(L"Connect"), L"File").empty();
@@ -1728,16 +1706,16 @@ void MainWindow::DisplaySelected() {
   }
   const bool database = entry->IsDatabase();
   const bool web = database && catalog::Catalog::IsWebConnection(entry->ValueOr(L"Connect"));
-  const bool launch_available = database && !cache_operation_;
+  const bool launch_available = database && !cache_operation_.active();
   EnableWindow(enterprise_, launch_available); EnableWindow(designer_, launch_available && !web);
   EnableWindow(edit_, !settings_.simple_mode); EnableWindow(remove_, !settings_.simple_mode);
-  EnableWindow(cache_, database && !settings_.simple_mode && !cache_operation_); EnableWindow(shortcut_, database && !settings_.simple_mode);
+  EnableWindow(cache_, database && !settings_.simple_mode && !cache_operation_.active()); EnableWindow(shortcut_, database && !settings_.simple_mode);
   InvalidateRect(details_, nullptr, TRUE);
   UpdateConnection();
 }
 
 void MainWindow::LaunchSelected(domain::LaunchMode mode) {
-  if (cache_operation_) {
+  if (cache_operation_.active()) {
     SetStatus(L"Запуск базы недоступен до завершения операции с кэшем.");
     return;
   }
@@ -2059,57 +2037,27 @@ void MainWindow::MoveSelectedToFolder() {
 }
 void MainWindow::ClearSelectedCache() {
   if (settings_.simple_mode || !catalog_) return;
-  if (cache_operation_) {
+  if (cache_operation_.active()) {
     SetStatus(L"Операция с кэшем уже выполняется…");
     return;
   }
   try {
     const auto database = catalog_->DatabaseFor(SelectedName());
-    const auto state = std::make_shared<CacheOperationState>();
-    cache_operation_ = state;
+    cache_operation_.StartFinding(database, window_, kCacheOperationFinishedMessage);
     DisplaySelected();
     SetStatus(L"Анализируем размер кэша…");
-    const HWND owner = window_;
-    cache_thread_ = std::jthread([state, owner, database](std::stop_token stop) {
-      std::vector<cache::CacheItem> candidates;
-      std::wstring error;
-      bool cancelled = false;
-      try {
-        if (!stop.stop_requested()) candidates = cache::CandidatesFor(database, stop);
-        cancelled = stop.stop_requested();
-      } catch (const std::exception& exception) {
-        if (stop.stop_requested()) cancelled = true;
-        else error = WideErrorText(exception.what());
-      } catch (...) {
-        if (stop.stop_requested()) cancelled = true;
-        else error = L"Неизвестная ошибка анализа кэша.";
-      }
-      {
-        std::lock_guard lock(state->mutex);
-        state->candidates = std::move(candidates);
-        state->error = std::move(error);
-        state->cancelled = cancelled;
-        state->completed = true;
-      }
-      PostMessageW(owner, kCacheOperationFinishedMessage, 0, 0);
-    });
     static_cast<void>(RefreshBackgroundPolling());
   } catch (const std::exception& error) {
-    cache_operation_.reset();
     DisplaySelected();
     logger_.Error(L"Ошибка подготовки очистки кэша: " + WideErrorText(error.what()));
     Message(window_, L"Выберите базу для очистки кэша.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
   } catch (...) {
-    cache_operation_.reset();
     DisplaySelected();
     Message(window_, L"Выберите базу для очистки кэша.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
   }
 }
 bool MainWindow::IsClearingCache() const {
-  const auto state = cache_operation_;
-  if (!state) return false;
-  std::lock_guard lock(state->mutex);
-  return state->stage == CacheOperationState::Stage::clearing;
+  return cache_operation_.clearing();
 }
 void MainWindow::ClearRecentBases() {
   try {
@@ -2460,49 +2408,29 @@ void MainWindow::CompleteUpdateCheck() {
   }
 }
 void MainWindow::CompleteCacheOperation() {
-  auto state = cache_operation_;
-  if (!state) return;
+  auto completed = cache_operation_.TakeResult();
+  if (!completed) return;
 
-  CacheOperationState::Stage stage;
-  std::vector<cache::CacheItem> candidates;
-  cache::ClearResult result;
-  std::wstring error;
-  bool cancelled = false;
-  {
-    std::lock_guard lock(state->mutex);
-    if (!state->completed) return;
-    stage = state->stage;
-    error = std::move(state->error);
-    cancelled = state->cancelled;
-    if (stage == CacheOperationState::Stage::finding) candidates = std::move(state->candidates);
-    else result = std::move(state->result);
-    state->completed = false;
-  }
-  if (cache_thread_.joinable()) cache_thread_.join();
   static_cast<void>(RefreshBackgroundPolling());
   if (closing_) {
-    cache_operation_.reset();
     TryFinishClose();
     return;
   }
-  if (cancelled) {
-    cache_operation_.reset();
+  if (completed->cancelled) {
     DisplaySelected();
     SetStatus(L"Анализ кэша отменён.");
     return;
   }
 
-  if (stage == CacheOperationState::Stage::finding) {
-    if (!error.empty()) {
-      cache_operation_.reset();
+  if (completed->stage == background::CacheClearOperation::Stage::finding) {
+    if (!completed->error.empty()) {
       DisplaySelected();
-      logger_.Error(L"Ошибка анализа кэша: " + error);
+      logger_.Error(L"Ошибка анализа кэша: " + completed->error);
       SetStatus(L"Не удалось проанализировать кэш.");
       Message(window_, L"Не удалось проанализировать кэш. Подробности — в журнале.", L"Очистка кэша", MB_OK | MB_ICONERROR);
       return;
     }
-    if (candidates.empty()) {
-      cache_operation_.reset();
+    if (completed->candidates.empty()) {
       DisplaySelected();
       SetStatus(L"Безопасных каталогов кэша для этой базы не найдено.");
       Message(window_, L"Безопасных каталогов кэша для этой базы не найдено.");
@@ -2511,54 +2439,29 @@ void MainWindow::CompleteCacheOperation() {
 
     uintmax_t totalBytes = 0;
     std::wstring list = L"Будут очищены только следующие каталоги кэша:\n";
-    for (const auto& item : candidates) {
+    for (const auto& item : completed->candidates) {
       totalBytes += item.bytes;
       list += item.path.wstring() + L" — " + cache::FormatSize(item.bytes) + L"\n";
     }
     list += L"\nПримерный объём для очистки: " + cache::FormatSize(totalBytes) + L".\n";
     if (cache::HasActiveOneCProcess()) list += L"\nОбнаружен активный процесс 1С. Закройте его перед очисткой.\n";
     if (MessageBoxW(window_, list.c_str(), L"Очистка кэша", MB_YESNO | MB_ICONWARNING) != IDYES) {
-      cache_operation_.reset();
       DisplaySelected();
       SetStatus(L"Очистка кэша отменена.");
       return;
     }
 
-    {
-      std::lock_guard lock(state->mutex);
-      state->stage = CacheOperationState::Stage::clearing;
-      state->cancelled = false;
-    }
     SetStatus(L"Очищаем кэш…");
-    const HWND owner = window_;
     try {
-      cache_thread_ = std::jthread([state, owner, candidates = std::move(candidates)] {
-        cache::ClearResult result;
-        std::wstring error;
-        try {
-          result = cache::Clear(candidates);
-        } catch (const std::exception& exception) {
-          error = WideErrorText(exception.what());
-        } catch (...) {
-          error = L"Неизвестная ошибка очистки кэша.";
-        }
-        {
-          std::lock_guard lock(state->mutex);
-          state->result = std::move(result);
-          state->error = std::move(error);
-          state->completed = true;
-        }
-        PostMessageW(owner, kCacheOperationFinishedMessage, 0, 0);
-      });
+      cache_operation_.StartClearing(
+          std::move(completed->candidates), window_, kCacheOperationFinishedMessage);
       static_cast<void>(RefreshBackgroundPolling());
     } catch (const std::exception& exception) {
-      cache_operation_.reset();
       DisplaySelected();
       logger_.Error(L"Не удалось запустить очистку кэша: " + WideErrorText(exception.what()));
       SetStatus(L"Не удалось запустить очистку кэша.");
       Message(window_, L"Не удалось запустить фоновую очистку кэша.", L"Очистка кэша", MB_OK | MB_ICONERROR);
     } catch (...) {
-      cache_operation_.reset();
       DisplaySelected();
       SetStatus(L"Не удалось запустить очистку кэша.");
       Message(window_, L"Не удалось запустить фоновую очистку кэша.", L"Очистка кэша", MB_OK | MB_ICONERROR);
@@ -2566,21 +2469,23 @@ void MainWindow::CompleteCacheOperation() {
     return;
   }
 
-  cache_operation_.reset();
   DisplaySelected();
-  if (!error.empty()) {
-    logger_.Error(L"Ошибка очистки кэша: " + error);
+  if (!completed->error.empty()) {
+    logger_.Error(L"Ошибка очистки кэша: " + completed->error);
     SetStatus(L"Не удалось очистить кэш.");
     Message(window_, L"Не удалось очистить кэш. Подробности — в журнале.", L"Очистка кэша", MB_OK | MB_ICONERROR);
     return;
   }
-  const auto size = cache::FormatSize(result.bytes);
-  logger_.Info(L"Очистка кэша: файлов=" + std::to_wstring(result.files) + L", байт=" + std::to_wstring(result.bytes) + L" (" + size + L")");
-  for (const auto& item : result.errors) logger_.Error(L"Ошибка очистки кэша: " + item);
-  SetStatus(result.errors.empty() ? L"Кэш очищен." : L"Кэш очищен с ошибками.");
-  const std::wstring text = L"Очищено файлов: " + std::to_wstring(result.files) + L"\nОсвобождено: " + size +
-      (result.errors.empty() ? L"" : L"\n\nНе удалось очистить некоторые каталоги. Подробности — в журнале.");
-  Message(window_, text, L"Очистка кэша", result.errors.empty() ? MB_OK | MB_ICONINFORMATION : MB_OK | MB_ICONWARNING);
+  const auto size = cache::FormatSize(completed->clear_result.bytes);
+  logger_.Info(L"Очистка кэша: файлов=" + std::to_wstring(completed->clear_result.files) + L", байт=" +
+      std::to_wstring(completed->clear_result.bytes) + L" (" + size + L")");
+  for (const auto& item : completed->clear_result.errors) logger_.Error(L"Ошибка очистки кэша: " + item);
+  SetStatus(completed->clear_result.errors.empty() ? L"Кэш очищен." : L"Кэш очищен с ошибками.");
+  const std::wstring text = L"Очищено файлов: " + std::to_wstring(completed->clear_result.files) +
+      L"\nОсвобождено: " + size + (completed->clear_result.errors.empty()
+          ? L"" : L"\n\nНе удалось очистить некоторые каталоги. Подробности — в журнале.");
+  Message(window_, text, L"Очистка кэша", completed->clear_result.errors.empty()
+      ? MB_OK | MB_ICONINFORMATION : MB_OK | MB_ICONWARNING);
 }
 
 void MainWindow::ShowUpdateCheckError() {
