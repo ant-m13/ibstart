@@ -280,19 +280,32 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
           const auto& tag = tags[tag_index];
           const bool matches = !search_filter.empty() && utf::FindNoCaseOrdinal(tag, search_filter) != std::wstring_view::npos;
           if (!tag_is_visible(tag)) continue;
+          struct TagSegment {
+            std::wstring_view text;
+            HFONT font;
+            int width;
+          };
+          std::vector<TagSegment> segments;
+          segments.reserve(matches ? 4 : 1);
           int text_width = 0;
+          const auto append_segment = [&](std::wstring_view fragment, HFONT segment_font) {
+            if (fragment.empty()) return;
+            const int width = measure(fragment, segment_font);
+            segments.push_back({fragment, segment_font, width});
+            text_width += width;
+          };
           if (matches) {
             size_t start = 0;
             size_t match = utf::FindNoCaseOrdinal(tag, search_filter, start);
             while (match != std::wstring_view::npos) {
-              text_width += measure(std::wstring_view(tag).substr(start, match - start), font);
-              text_width += measure(std::wstring_view(tag).substr(match, search_filter.size()), bold_font ? bold_font : font);
+              append_segment(std::wstring_view(tag).substr(start, match - start), font);
+              append_segment(std::wstring_view(tag).substr(match, search_filter.size()), bold_font ? bold_font : font);
               start = match + search_filter.size();
               match = utf::FindNoCaseOrdinal(tag, search_filter, start);
             }
-            text_width += measure(std::wstring_view(tag).substr(start), font);
+            append_segment(std::wstring_view(tag).substr(start), font);
           } else {
-            text_width = measure(tag, font);
+            append_segment(tag, font);
           }
           const int width = text_width + 14;
           const bool has_more_tags = std::any_of(tags.begin() + static_cast<std::ptrdiff_t>(tag_index + 1), tags.end(), tag_is_visible);
@@ -314,28 +327,12 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
             SelectObject(draw->nmcd.hdc, old_pen);
             SetTextColor(draw->nmcd.hdc, style.text);
             int text_x = x + 7;
-            const auto draw_segment = [&](std::wstring_view fragment, HFONT selected_font) {
-              if (fragment.empty()) return;
-              const HGDIOBJ previous = selected_font ? SelectObject(draw->nmcd.hdc, selected_font) : nullptr;
-              SIZE size{};
-              GetTextExtentPoint32W(draw->nmcd.hdc, fragment.data(), static_cast<int>(fragment.size()), &size);
-              RECT text_rect{text_x, y, text_x + size.cx, y + height};
-              DrawTextW(draw->nmcd.hdc, fragment.data(), static_cast<int>(fragment.size()), &text_rect, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-              text_x += size.cx;
+            for (const auto& segment : segments) {
+              const HGDIOBJ previous = segment.font ? SelectObject(draw->nmcd.hdc, segment.font) : nullptr;
+              RECT text_rect{text_x, y, text_x + segment.width, y + height};
+              DrawTextW(draw->nmcd.hdc, segment.text.data(), static_cast<int>(segment.text.size()), &text_rect,
+                  DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
               if (previous) SelectObject(draw->nmcd.hdc, previous);
-            };
-            if (matches) {
-              size_t start = 0;
-              size_t match = utf::FindNoCaseOrdinal(tag, search_filter, start);
-              while (match != std::wstring_view::npos) {
-                draw_segment(std::wstring_view(tag).substr(start, match - start), font);
-                draw_segment(std::wstring_view(tag).substr(match, search_filter.size()), bold_font ? bold_font : font);
-                start = match + search_filter.size();
-                match = utf::FindNoCaseOrdinal(tag, search_filter, start);
-              }
-              draw_segment(std::wstring_view(tag).substr(start), font);
-            } else {
-              draw_segment(tag, font);
             }
           }
           x += width + 4;
