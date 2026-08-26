@@ -31,6 +31,15 @@ bool IsSeparateSecretSwitch(std::wstring_view argument) {
   return std::any_of(std::begin(switches), std::end(switches), [&](auto value) { return EqualNoCase(argument, value); });
 }
 
+bool IsKnownNonSecretPSwitch(std::wstring_view argument) {
+  constexpr std::wstring_view switches[] = {L"/Path", L"/Port", L"/Profile"};
+  return std::any_of(std::begin(switches), std::end(switches), [&](const auto value) {
+    if (!StartsWithNoCase(argument, value)) return false;
+    return argument.size() == value.size() || argument[value.size()] == L'=' ||
+        std::iswspace(argument[value.size()]) != 0;
+  });
+}
+
 std::optional<size_t> ExplicitInlineSecretPrefixLength(std::wstring_view argument) {
   constexpr std::wstring_view prefixes[] = {
       L"/Password=", L"--password=", L"-password=", L"--token=", L"-token=",
@@ -42,8 +51,9 @@ std::optional<size_t> ExplicitInlineSecretPrefixLength(std::wstring_view argumen
 std::optional<size_t> InlineSecretPrefixLength(std::wstring_view argument) {
   if (const auto explicitPrefix = ExplicitInlineSecretPrefixLength(argument)) return explicitPrefix;
   // 1C also accepts /P immediately followed by a password. Prefer hiding an
-  // ambiguous /P... argument in diagnostics over exposing credentials.
-  if (argument.size() > 2 && StartsWithNoCase(argument, L"/P")) return 2;
+  // ambiguous /P... argument in diagnostics over exposing credentials, while
+  // keeping common non-secret switches such as /Path and /Port intact.
+  if (argument.size() > 2 && StartsWithNoCase(argument, L"/P") && !IsKnownNonSecretPSwitch(argument)) return 2;
   return std::nullopt;
 }
 
@@ -78,7 +88,7 @@ std::wstring Stamp(const wchar_t* format) {
 std::wstring MaskSecrets(std::wstring_view arguments) {
   std::wstring result(arguments);
   // Both forms are accepted by 1C: /P secret and /P"secret". Generic token/password forms are also masked.
-  const std::wregex paired(LR"mask(((?:/(?:Password|P)|--(?:password|token)|-(?:password|token))\s*(?:=\s*)?)("(?:[^"]*)"|[^\s]+))mask", std::regex_constants::icase);
+  const std::wregex paired(LR"mask(((?:/(?:Password|P(?!ath\b|ort\b|rofile\b)|--(?:password|token)|-(?:password|token))\s*(?:=\s*)?)("(?:[^"]*)"|[^\s]+))mask", std::regex_constants::icase);
   result = std::regex_replace(result, paired, L"$1***");
   // Pwd is the password key used inside 1C connection strings, including the
   // fallback /IBConnection form that is written to the launch log.
