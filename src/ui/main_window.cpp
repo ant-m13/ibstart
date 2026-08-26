@@ -2746,8 +2746,10 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
       Message(window_, L"Подходящая платформа 1С не найдена. Проверьте установку и настройки поиска.", L"ИБ Старт", MB_OK | MB_ICONERROR);
       return;
     }
-    const auto parameters = database.additional_parameters; if (utf::FindNoCaseOrdinal(parameters, L"/p") != std::wstring_view::npos && MessageBoxW(window_, L"В дополнительных параметрах обнаружен /P. Пароль может храниться в открытом виде в ibases.v8i. Продолжить?", L"Предупреждение", MB_YESNO | MB_ICONWARNING) != IDYES) return;
     const auto command = launcher::BuildCommand(database, *selected, options);
+    if (logging::ContainsSecretArguments(command) &&
+        MessageBoxW(window_, L"В параметрах запуска обнаружен пароль или токен. Секрет может храниться в открытом виде в ibases.v8i. Продолжить?",
+            L"Предупреждение", MB_YESNO | MB_ICONWARNING) != IDYES) return;
     if (usedNewestThinClient) logger_.Info(L"Требуемая версия " + selectedVersion + L" не найдена; для веб-базы выбран тонкий клиент " + selected->version + L".");
     launcher::Launch(command);
     launchSucceeded = true;

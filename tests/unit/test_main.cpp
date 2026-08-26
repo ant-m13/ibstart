@@ -628,6 +628,13 @@ void TestSecretMasking() {
     CHECK(redacted.find(L"VISIBLE_SUFFIX") == std::wstring::npos);
     CHECK(redacted.find(L"***") != std::wstring::npos);
   }
+
+  const ibstart::domain::LaunchCommand safeParameters{L"1cv8.exe", {L"ENTERPRISE", L"/Path", L"/Port", L"/Profile"}};
+  const ibstart::domain::LaunchCommand namedPassword{L"1cv8.exe", {L"ENTERPRISE", L"--password=alpha"}};
+  const ibstart::domain::LaunchCommand separateToken{L"1cv8.exe", {L"ENTERPRISE", L"--token", L"alpha"}};
+  CHECK(!ibstart::logging::ContainsSecretArguments(safeParameters));
+  CHECK(ibstart::logging::ContainsSecretArguments(namedPassword));
+  CHECK(ibstart::logging::ContainsSecretArguments(separateToken));
 }
 
 void TestLogPruning() {
