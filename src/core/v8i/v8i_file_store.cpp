@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cwctype>
 #include <fstream>
 #include <iomanip>
 #include <sstream>
@@ -64,6 +65,58 @@ std::filesystem::path UniqueTemporaryPath(const std::filesystem::path& target) {
   }
   throw std::runtime_error("Unable to allocate a temporary file alongside ibases.v8i: " + PathText(target));
 }
+
+std::wstring SaveMutexName(const std::filesystem::path& path) {
+  std::error_code error;
+  auto normalized = std::filesystem::weakly_canonical(path, error);
+  if (error) {
+    error.clear();
+    normalized = std::filesystem::absolute(path, error);
+    if (error) normalized = path.lexically_normal();
+  }
+  auto key = normalized.wstring();
+  std::transform(key.begin(), key.end(), key.begin(), [](wchar_t character) {
+    return static_cast<wchar_t>(std::towlower(character));
+  });
+  std::uint64_t hash = 1469598103934665603ULL;
+  for (const wchar_t character : key) {
+    hash ^= static_cast<std::uint16_t>(character);
+    hash *= 1099511628211ULL;
+  }
+  std::wostringstream name;
+  name << L"Local\\IBStart.V8iSave." << std::hex << std::setw(16) << std::setfill(L'0') << hash;
+  return name.str();
+}
+
+class SaveMutex final {
+ public:
+  explicit SaveMutex(const std::filesystem::path& path) {
+    const auto name = SaveMutexName(path);
+    handle_ = CreateMutexW(nullptr, FALSE, name.c_str());
+    if (!handle_) throw std::runtime_error("Cannot create ibases.v8i save mutex: " + utf::ToUtf8(utf::LastErrorMessage()));
+    const DWORD wait = WaitForSingleObject(handle_, INFINITE);
+    if (wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED) {
+      acquired_ = true;
+      return;
+    }
+    const DWORD lastError = wait == WAIT_FAILED ? GetLastError() : ERROR_GEN_FAILURE;
+    CloseHandle(handle_);
+    handle_ = nullptr;
+    throw std::runtime_error("Cannot acquire ibases.v8i save mutex: " + utf::ToUtf8(utf::LastErrorMessage(lastError)));
+  }
+
+  ~SaveMutex() {
+    if (acquired_) ReleaseMutex(handle_);
+    if (handle_) CloseHandle(handle_);
+  }
+
+  SaveMutex(const SaveMutex&) = delete;
+  SaveMutex& operator=(const SaveMutex&) = delete;
+
+ private:
+  HANDLE handle_{};
+  bool acquired_{false};
+};
 
 class SaveLock final {
  public:
@@ -196,6 +249,7 @@ void V8iFileStore::PruneBackups() {
 
 void V8iFileStore::Save(const V8iDocument& document) {
   maintenance_warnings_.clear();
+  SaveMutex saveMutex(path_);
   if (!fingerprint_known_) {
     throw ExternalModificationError("ibases.v8i could not be verified after the previous save. Reload it before saving again.");
   }
@@ -227,6 +281,9 @@ void V8iFileStore::Save(const V8iDocument& document) {
           throw ExternalModificationError("ibases.v8i was changed by another program. Reload it before saving.");
         }
       }  // MoveFileExW requires the target handle to be closed before replacement.
+      if (FingerprintOf(path_) != loaded_fingerprint_) {
+        throw ExternalModificationError("ibases.v8i was changed by another program. Reload it before saving.");
+      }
     } else {
       if (FingerprintOf(path_) != loaded_fingerprint_) {
         throw ExternalModificationError("ibases.v8i was changed by another program. Reload it before saving.");
