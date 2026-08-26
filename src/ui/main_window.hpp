@@ -6,9 +6,9 @@
 #include "core/storage/storage.hpp"
 #include "core/v8i/v8i_file_store.hpp"
 #include "ui/cache_clear_operation.hpp"
+#include "ui/context_menu_controller.hpp"
 #include "ui/details_view_controller.hpp"
 #include "ui/menu_controller.hpp"
-#include "ui/owner_draw_menu.hpp"
 #include "ui/tag_manager.hpp"
 #include "ui/tree_view_controller.hpp"
 #include "ui/update_check_operation.hpp"
@@ -52,7 +52,6 @@ class MainWindow {
   LRESULT DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const;
   bool MeasureContextMenuItem(MEASUREITEMSTRUCT* measure) const;
   bool DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const;
-  [[nodiscard]] const OwnerDrawMenuItem* FindMenuItem(ULONG_PTR item_data) const noexcept;
   void BeginTreeDrag(HTREEITEM item, POINT tree_point);
   void UpdateTreeDrag(POINT window_point);
   void EndTreeDrag(POINT window_point);
@@ -129,7 +128,7 @@ class MainWindow {
   HFONT details_key_font_{};
   HIMAGELIST drag_image_{};
   std::vector<HIMAGELIST> button_images_;
-  OwnerDrawMenuItems context_menu_items_;
+  ContextMenuController context_menus_;
   MenuController menus_;
   std::filesystem::path executable_;
   storage::StorageLayout layout_;

@@ -58,21 +58,6 @@ constexpr UINT kBackgroundPollIntervalMilliseconds = 100;
 constexpr int kMinimumWindowWidth = 940;
 constexpr int kMinimumSimpleWindowWidth = 520;
 constexpr int kMinimumWindowHeight = 460;
-OwnerDrawMenuIcon MenuIconForCommand(UINT command) {
-  switch (command) {
-    case kMoveUp: return OwnerDrawMenuIcon::move_up;
-    case kMoveDown: return OwnerDrawMenuIcon::move_down;
-    case kSimpleMode: return OwnerDrawMenuIcon::compact_mode;
-    case kTagsContextMenu:
-    case kEditTags:
-    case kConfigureTagColors:
-    case kShowTagsInList: return OwnerDrawMenuIcon::tag;
-    case kSortAscending: return OwnerDrawMenuIcon::sort_ascending;
-    case kSortDescending: return OwnerDrawMenuIcon::sort_descending;
-    default: return OwnerDrawMenuIcon::standard;
-  }
-}
-
 void Message(HWND owner, std::wstring_view text, std::wstring_view title = L"ИБ Старт", UINT type = MB_OK | MB_ICONINFORMATION) { MessageBoxW(owner, std::wstring(text).c_str(), std::wstring(title).c_str(), type); }
 std::wstring WideErrorText(std::string_view message) noexcept {
   try { return utf::FromUtf8(message); }
@@ -168,7 +153,6 @@ MainWindow::~MainWindow() {
     settings_.selected_entry = catalog_ && catalog_->Find(selected) ? selected : std::wstring();
     DestroyWindow(window_);
   }
-  context_menu_items_.Clear();
   for (const auto images : button_images_) if (images) ImageList_Destroy(images);
   if (controls_font_) DeleteObject(controls_font_);
   if (button_font_) DeleteObject(button_font_);
@@ -540,6 +524,7 @@ void MainWindow::CreateControls() {
   AttachButtonIcon(shortcut_, instance_, IDI_ACTION_SHORTCUT, button_images_);
   AttachButtonIcon(remove_, instance_, IDI_ACTION_DELETE, button_images_);
   status_ = CreateWindowW(STATUSCLASSNAMEW, L"", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window_, nullptr, instance_, nullptr);
+  context_menus_.Create(instance_);
   menus_.Create(window_, instance_);
   RefreshFileMenu();
   RefreshMainMenuBar();
@@ -868,20 +853,12 @@ LRESULT MainWindow::DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const {
       catalog_state_.Read().tags, catalog_state_.Read().tag_styles, search_filter_, controls_font_);
 }
 bool MainWindow::MeasureContextMenuItem(MEASUREITEMSTRUCT* measure) const {
-  if (!measure || measure->CtlType != ODT_MENU) return false;
-  const auto* item = FindMenuItem(measure->itemData);
-  return item && OwnerDrawMenu::Measure(window_, controls_font_, *item, measure);
+  return context_menus_.Measure(window_, controls_font_, measure) ||
+      menus_.Measure(window_, controls_font_, measure);
 }
 
 bool MainWindow::DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const {
-  if (!draw || draw->CtlType != ODT_MENU) return false;
-  const auto* item = FindMenuItem(draw->itemData);
-  return item && OwnerDrawMenu::Draw(controls_font_, *item, draw);
-}
-
-const OwnerDrawMenuItem* MainWindow::FindMenuItem(ULONG_PTR item_data) const noexcept {
-  if (const auto* item = context_menu_items_.Find(item_data)) return item;
-  return menus_.Find(item_data);
+  return context_menus_.Draw(controls_font_, draw) || menus_.Draw(controls_font_, draw);
 }
 
 void MainWindow::BeginTreeDrag(HTREEITEM item, POINT treePoint) {
@@ -1058,18 +1035,12 @@ void MainWindow::ShowDetailsContextMenu(POINT screen) {
     SetFocus(details_);
   }
 
-  HMENU menu = CreatePopupMenu();
-  if (!menu) return;
-  AppendMenuW(menu, MF_STRING, kCopyDetailValue, L"Копировать значение\tCtrl+C");
-  AppendMenuW(menu, MF_STRING, kCopyDetailPair, L"Копировать параметр и значение");
-  const UINT command = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, window_, nullptr);
-  DestroyMenu(menu);
+  const UINT command = context_menus_.ShowDetails(window_, screen);
   if (command == kCopyDetailValue) CopySelectedDetail(false);
   else if (command == kCopyDetailPair) CopySelectedDetail(true);
 }
 void MainWindow::ShowTreeContextMenu(POINT screen) {
   if (!tree_ || !catalog_) return;
-  context_menu_items_.Clear();
   if (screen.x == -1 && screen.y == -1) {
     const auto selected = TreeView_GetSelection(tree_);
     RECT bounds{};
@@ -1106,109 +1077,24 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   const std::wstring sortParent = catalogRoot ? std::wstring() : group ? entry->name : std::wstring();
   const auto& favorites = catalog_state_.Read().favorites;
   const bool favorite = std::find(favorites.begin(), favorites.end(), name) != favorites.end();
-
-  HMENU menu = CreatePopupMenu();
-  if (!menu) return;
   std::vector<std::wstring> quick_tags;
-  const auto appendTo = [&](HMENU target, bool enabled, bool checked, UINT command, int iconResource, std::wstring text, std::wstring shortcut = {}) {
-    context_menu_items_.Append(target, command, iconResource == 0 ? nullptr : LoadResourceIcon(instance_, iconResource, 20),
-        std::move(text), std::move(shortcut), MenuIconForCommand(command), enabled, checked);
-  };
-  const auto append = [&](bool enabled, bool checked, UINT command, int iconResource, std::wstring text, std::wstring shortcut = {}) {
-    appendTo(menu, enabled, checked, command, iconResource, std::move(text), std::move(shortcut));
-  };
-  const auto appendPopup = [&](HMENU submenu, UINT identity, std::wstring text) {
-    context_menu_items_.Append(menu, identity, nullptr, std::move(text), {}, MenuIconForCommand(identity), true, false, submenu);
-  };
-  const auto separator = [&] { AppendMenuW(menu, MF_SEPARATOR, 0, nullptr); };
+  if (database && !settings_.simple_mode) {
+    const auto& assigned = TagsFor(catalog_state_.Read().tags, *entry);
+    for (const auto& tag : KnownTags(catalog_state_.Read().tags, catalog_state_.Read().tag_styles)) {
+      if (!ContainsTag(assigned, tag)) quick_tags.push_back(tag);
+    }
+  }
+  const TreeContextMenuState state{
+      settings_.simple_mode, sortTarget, catalogRoot, database, web, launch_available, group,
+      editable, file, recentRoot, favorite, addParent, sortParent, quick_tags};
+  const UINT command = context_menus_.ShowTree(window_, screen, state);
+  if (!command) return;
   if (settings_.simple_mode) {
-    if (sortTarget) {
-      append(true, false, kSortAscending, 0, L"Сортировать по возрастанию");
-      append(true, false, kSortDescending, 0, L"Сортировать по убыванию");
-      SetForegroundWindow(window_);
-      const UINT command = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, window_, nullptr);
-      DestroyMenu(menu);
-      context_menu_items_.Clear();
-      if (command == kSortAscending) SortFolder(sortParent, catalog::SortDirection::ascending);
-      else if (command == kSortDescending) SortFolder(sortParent, catalog::SortDirection::descending);
-      return;
-    }
-    if (database) {
-      append(launch_available, false, kEnterprise, IDI_ACTION_ENTERPRISE, L"Предприятие", L"F3");
-      append(launch_available && !web, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор", L"F4");
-      separator();
-      append(true, false, kEdit, IDI_ACTION_EDIT, L"Изменить…", L"F2");
-      append(true, false, kDelete, IDI_ACTION_DELETE, L"Удалить…", L"Alt+Shift+Del");
-      separator();
-      append(true, false, kMoveToFolder, IDI_TREE_FOLDER, L"Переместить в папку…");
-      append(true, false, kMoveUp, 0, L"Переместить вверх", L"Ctrl+Shift+Up");
-      append(true, false, kMoveDown, 0, L"Переместить вниз", L"Ctrl+Shift+Down");
-    }
-    if (!database) {
-      DestroyMenu(menu);
-      context_menu_items_.Clear();
-      return;
-    }
-    SetForegroundWindow(window_);
-    const UINT command = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, window_, nullptr);
-    DestroyMenu(menu);
-    context_menu_items_.Clear();
-    if (command) SendMessageW(window_, WM_COMMAND, MAKEWPARAM(command, 0), 0);
+    if (sortTarget && command == kSortAscending) SortFolder(sortParent, catalog::SortDirection::ascending);
+    else if (sortTarget && command == kSortDescending) SortFolder(sortParent, catalog::SortDirection::descending);
+    else if (database) SendMessageW(window_, WM_COMMAND, MAKEWPARAM(command, 0), 0);
     return;
   }
-  if (!catalogRoot) {
-    append(launch_available, false, kEnterprise, IDI_ACTION_ENTERPRISE, L"Предприятие", L"F3");
-    append(launch_available && !web, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор", L"F4");
-    separator();
-    append(database, favorite, kToggleFavorite, IDI_ACTION_FAVORITE, favorite ? L"Убрать из избранного" : L"Добавить в избранное", L"Ctrl+Alt+I");
-    if (database) {
-      HMENU tagMenu = CreatePopupMenu();
-      if (tagMenu) {
-        AppendMenuW(tagMenu, MF_STRING, kEditTags, L"Управление тегами…");
-        AppendMenuW(tagMenu, MF_SEPARATOR, 0, nullptr);
-        const auto& assigned = TagsFor(catalog_state_.Read().tags, *entry);
-        bool hasAvailableTags = false;
-        for (const auto& tag : KnownTags(catalog_state_.Read().tags, catalog_state_.Read().tag_styles)) {
-          if (ContainsTag(assigned, tag)) continue;
-          const UINT command = kQuickTag1 + static_cast<UINT>(quick_tags.size());
-          quick_tags.push_back(tag);
-          AppendMenuW(tagMenu, MF_STRING, command, tag.c_str());
-          hasAvailableTags = true;
-        }
-        if (!hasAvailableTags) AppendMenuW(tagMenu, MF_STRING | MF_GRAYED, 0, L"Нет доступных тегов для добавления");
-        AppendMenuW(tagMenu, MF_SEPARATOR, 0, nullptr);
-        AppendMenuW(tagMenu, MF_STRING, kNewTagForSelected, L"Новый тег…");
-        AppendMenuW(tagMenu, MF_STRING, kConfigureTagColors, L"Настроить теги…");
-        appendPopup(tagMenu, kTagsContextMenu, L"Теги");
-      }
-    }
-    append(editable, false, kEdit, IDI_ACTION_EDIT, L"Изменить…", L"F2");
-    append(database && !settings_.simple_mode, false, kCache, IDI_ACTION_CACHE, L"Очистить кэш…", L"Ctrl+Shift+Del");
-    append(database && !settings_.simple_mode, false, kShortcut, IDI_ACTION_SHORTCUT, L"Создать ярлык", L"Ctrl+Shift+S");
-    append(file, false, kOpenFolder, IDI_TREE_FOLDER, L"Открыть папку", L"Ctrl+Shift+O");
-    append(recentRoot, false, kClearRecent, IDI_ACTION_DELETE, L"Очистить недавние базы…");
-    separator();
-    append(editable, false, kMoveUp, 0, L"Переместить вверх", L"Ctrl+Shift+Up");
-    append(editable, false, kMoveDown, 0, L"Переместить вниз", L"Ctrl+Shift+Down");
-    append(editable, false, kMoveToFolder, IDI_TREE_FOLDER, L"Переместить в папку…");
-    append(editable, false, kDelete, IDI_ACTION_DELETE, L"Удалить…", L"Alt+Shift+Del");
-  }
-  if (sortTarget) {
-    if (!catalogRoot) separator();
-    append(true, false, kSortAscending, 0, L"Сортировать по возрастанию");
-    append(true, false, kSortDescending, 0, L"Сортировать по убыванию");
-  }
-  separator();
-  append(!settings_.simple_mode, false, kAddDatabase, IDI_ACTION_ADD, group ? L"Добавить базу в группу…" : L"Добавить базу…", L"Ctrl+Alt+F");
-  append(!settings_.simple_mode, false, kAddGroup, IDI_TREE_FOLDER, group ? L"Добавить вложенную группу…" : L"Добавить группу…", L"Ctrl+Alt+G");
-  separator();
-  append(true, false, kRefresh, IDI_ACTION_REFRESH, L"Обновить список", L"F5");
-
-  SetForegroundWindow(window_);
-  const UINT command = TrackPopupMenuEx(menu, TPM_RETURNCMD | TPM_RIGHTBUTTON, screen.x, screen.y, window_, nullptr);
-  DestroyMenu(menu);
-  context_menu_items_.Clear();
-  if (!command) return;
   const size_t quickTagIndex = command >= kQuickTag1 ? static_cast<size_t>(command - kQuickTag1) : quick_tags.size();
   if (quickTagIndex < quick_tags.size()) AddTagToSelected(quick_tags[quickTagIndex]);
   else if (command == kAddDatabase) AddDatabase(addParent);
