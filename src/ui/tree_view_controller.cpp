@@ -119,29 +119,85 @@ void TreeViewController::Populate(const catalog::Catalog& database_catalog,
     const storage::CatalogState& catalog_state, const std::vector<std::wstring>& filter_favorites,
     std::wstring_view search_filter, const presentation::TreeTagFilter& tag_filter, bool simple_mode) const {
   if (!tree_) return;
-  TreeView_DeleteAllItems(tree_);
 
-  std::wstring catalog_root_name(kCatalogRootName);
-  TVINSERTSTRUCTW catalog_root{};
-  catalog_root.hParent = TVI_ROOT;
-  catalog_root.hInsertAfter = TVI_LAST;
-  catalog_root.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE | TVIF_PARAM | TVIF_STATE;
-  catalog_root.item.pszText = catalog_root_name.data();
-  catalog_root.item.iImage = catalog_root.item.iSelectedImage = kFolderImage;
-  catalog_root.item.lParam = kCatalogRootItemData;
-  catalog_root.item.stateMask = TVIS_EXPANDED;
-  catalog_root.item.state = TVIS_EXPANDED;
-  const HTREEITEM catalog_root_handle = TreeView_InsertItem(tree_, &catalog_root);
-  AddItems(database_catalog, catalog_state, filter_favorites, database_catalog.Tree(), catalog_root_handle,
-      search_filter, tag_filter);
-  if (catalog_root_handle) TreeView_Expand(tree_, catalog_root_handle, TVE_EXPAND);
+  // Rebuilding the native control destroys every HTREEITEM, including its
+  // expansion and selection state.  Keep the old state while the replacement
+  // hierarchy is created and suppress intermediate paints so users only see
+  // the final tree.
+  const auto expansion_states = CaptureExpansionStates();
+  const HTREEITEM previous_selection = TreeView_GetSelection(tree_);
+  const LPARAM selected_item_data = ItemData(previous_selection);
+  const std::wstring selected_name = SelectedName();
+  const HTREEITEM previous_first_visible =
+      TreeView_GetNextItem(tree_, nullptr, TVGN_FIRSTVISIBLE);
+  const LPARAM first_visible_data = ItemData(previous_first_visible);
+  const std::wstring first_visible_name = first_visible_data == 0
+      ? ItemName(previous_first_visible)
+      : std::wstring();
+  const bool can_suspend_drawing = IsWindow(tree_);
+  if (can_suspend_drawing) SendMessageW(tree_, WM_SETREDRAW, FALSE, 0);
+  const auto resume_drawing = [&] {
+    if (!can_suspend_drawing) return;
+    SendMessageW(tree_, WM_SETREDRAW, TRUE, 0);
+    RedrawWindow(tree_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+  };
 
-  if (simple_mode) return;
-  static_cast<void>(InsertSpecialRoot(database_catalog, catalog_state, filter_favorites, search_filter,
-      tag_filter, L"Избранное", catalog_state.favorites, kFavoriteImage, kFavoritesRootItemData));
-  const auto recent = presentation::CollectRecentDatabaseNames(database_catalog, catalog_state.history);
-  static_cast<void>(InsertSpecialRoot(database_catalog, catalog_state, filter_favorites, search_filter,
-      tag_filter, L"Недавние", recent, kRecentImage, kRecentRootItemData));
+  try {
+    TreeView_DeleteAllItems(tree_);
+
+    std::wstring catalog_root_name(kCatalogRootName);
+    TVINSERTSTRUCTW catalog_root{};
+    catalog_root.hParent = TVI_ROOT;
+    catalog_root.hInsertAfter = TVI_LAST;
+    catalog_root.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE | TVIF_PARAM | TVIF_STATE;
+    catalog_root.item.pszText = catalog_root_name.data();
+    catalog_root.item.iImage = catalog_root.item.iSelectedImage = kFolderImage;
+    catalog_root.item.lParam = kCatalogRootItemData;
+    catalog_root.item.stateMask = TVIS_EXPANDED;
+    catalog_root.item.state = TVIS_EXPANDED;
+    const HTREEITEM catalog_root_handle = TreeView_InsertItem(tree_, &catalog_root);
+    AddItems(database_catalog, catalog_state, filter_favorites, database_catalog.Tree(), catalog_root_handle,
+        search_filter, tag_filter);
+    if (catalog_root_handle) TreeView_Expand(tree_, catalog_root_handle, TVE_EXPAND);
+
+    if (!simple_mode) {
+      static_cast<void>(InsertSpecialRoot(database_catalog, catalog_state, filter_favorites, search_filter,
+          tag_filter, L"Избранное", catalog_state.favorites, kFavoriteImage, kFavoritesRootItemData));
+      const auto recent = presentation::CollectRecentDatabaseNames(database_catalog, catalog_state.history);
+      static_cast<void>(InsertSpecialRoot(database_catalog, catalog_state, filter_favorites, search_filter,
+          tag_filter, L"Недавние", recent, kRecentImage, kRecentRootItemData));
+    }
+
+    RestoreExpansionStates(expansion_states);
+    if (!selected_name.empty()) {
+      static_cast<void>(SelectItem(selected_name));
+      // EnsureVisible can expand ancestors of the selected row.  Reapply the
+      // captured state so a refresh never changes a branch the user collapsed.
+      RestoreExpansionStates(expansion_states);
+    } else if (selected_item_data != 0) {
+      if (const HTREEITEM item = FindTopLevelItem(selected_item_data)) {
+        TreeView_SelectItem(tree_, item);
+        TreeView_EnsureVisible(tree_, item);
+      }
+    }
+
+    // Keep the vertical viewport anchored to the same row where possible.
+    // This prevents a refresh from appearing as a jump even when the tree is
+    // too large to fit in the control.
+    if (!first_visible_name.empty()) {
+      if (const HTREEITEM item = FindItemByName(TreeView_GetRoot(tree_), first_visible_name)) {
+        SendMessageW(tree_, TVM_SELECTITEM, TVGN_FIRSTVISIBLE, reinterpret_cast<LPARAM>(item));
+      }
+    } else if (first_visible_data != 0) {
+      if (const HTREEITEM item = FindTopLevelItem(first_visible_data)) {
+        SendMessageW(tree_, TVM_SELECTITEM, TVGN_FIRSTVISIBLE, reinterpret_cast<LPARAM>(item));
+      }
+    }
+  } catch (...) {
+    resume_drawing();
+    throw;
+  }
+  resume_drawing();
 }
 
 void TreeViewController::RefreshRecentBranch(const catalog::Catalog& database_catalog,

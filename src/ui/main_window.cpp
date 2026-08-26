@@ -844,24 +844,9 @@ void MainWindow::PopulateTree() {
   DisplaySelected();
 }
 void MainWindow::PopulateTreeWithoutFlicker(std::wstring_view selected, bool select_catalog_root) {
-  const bool canSuspendDrawing = tree_ && IsWindow(tree_);
-  const auto expansionStates = tree_view_.CaptureExpansionStates();
-  if (canSuspendDrawing) SendMessageW(tree_, WM_SETREDRAW, FALSE, 0);
-  const auto resumeDrawing = [&] {
-    if (!canSuspendDrawing) return;
-    SendMessageW(tree_, WM_SETREDRAW, TRUE, 0);
-    RedrawWindow(tree_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
-  };
-  try {
-    PopulateTree();
-    tree_view_.RestoreExpansionStates(expansionStates);
-    if (select_catalog_root) static_cast<void>(tree_view_.SelectCatalogRoot());
-    else if (!selected.empty()) static_cast<void>(tree_view_.SelectItem(selected));
-  } catch (...) {
-    resumeDrawing();
-    throw;
-  }
-  resumeDrawing();
+  PopulateTree();
+  if (select_catalog_root) static_cast<void>(tree_view_.SelectCatalogRoot());
+  else if (!selected.empty()) static_cast<void>(tree_view_.SelectItem(selected));
 }
 void MainWindow::RefreshRecentTreeBranch(std::wstring_view selected_recent) {
   if (!tree_ || !catalog_ || settings_.simple_mode) return;
