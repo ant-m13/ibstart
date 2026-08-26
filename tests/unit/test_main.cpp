@@ -674,6 +674,10 @@ void TestSecretMasking() {
   const auto masked = ibstart::logging::MaskSecrets(
       L"/N admin /P \"s3cret\" --token=abc password=xyz /Password hunter2 Pwd=db-secret");
   CHECK(masked.find(L"s3cret") == std::wstring::npos); CHECK(masked.find(L"abc") == std::wstring::npos); CHECK(masked.find(L"xyz") == std::wstring::npos); CHECK(masked.find(L"hunter2") == std::wstring::npos); CHECK(masked.find(L"db-secret") == std::wstring::npos); CHECK(masked.find(L"admin") != std::wstring::npos);
+  const auto maskedSafeSwitches = ibstart::logging::MaskSecrets(L"/Path C:\\db /Port 1545 /Profile default");
+  CHECK(maskedSafeSwitches.find(L"/Path C:\\db") != std::wstring::npos);
+  CHECK(maskedSafeSwitches.find(L"/Port 1545") != std::wstring::npos);
+  CHECK(maskedSafeSwitches.find(L"/Profile default") != std::wstring::npos);
 
   const ibstart::domain::LaunchCommand quotedPassword{
       L"C:\\Program Files\\1cv8\\1cv8.exe", {L"ENTERPRISE", L"/P", L"alpha\"VISIBLE_SUFFIX"}};
@@ -697,6 +701,10 @@ void TestSecretMasking() {
   const ibstart::domain::LaunchCommand connectionWithoutSecret{
       L"1cv8.exe", {L"ENTERPRISE", L"/IBConnection", L"DBSrvr=\"srv\";DB=\"base\""}};
   CHECK(!ibstart::logging::ContainsSecretArguments(safeParameters));
+  const auto redactedSafeParameters = ibstart::logging::RedactedCommandLine(safeParameters);
+  CHECK(redactedSafeParameters.find(L"/Path") != std::wstring::npos);
+  CHECK(redactedSafeParameters.find(L"/Port") != std::wstring::npos);
+  CHECK(redactedSafeParameters.find(L"/Profile") != std::wstring::npos);
   CHECK(ibstart::logging::ContainsSecretArguments(namedPassword));
   CHECK(ibstart::logging::ContainsSecretArguments(separateToken));
   CHECK(ibstart::logging::ContainsSecretArguments(connectionSecret));
