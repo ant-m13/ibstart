@@ -52,8 +52,12 @@ bool EqualNoCase(std::wstring_view left, std::wstring_view right) {
   return left.size() == right.size() && _wcsnicmp(left.data(), right.data(), left.size()) == 0;
 }
 struct ParentKeyLess {
-  bool operator()(const std::wstring& left, const std::wstring& right) const {
-    return _wcsicmp(left.c_str(), right.c_str()) < 0;
+  using is_transparent = void;
+  bool operator()(std::wstring_view left, std::wstring_view right) const noexcept {
+    if (left.empty() || right.empty()) return left.size() < right.size();
+    const size_t common = std::min(left.size(), right.size());
+    const int comparison = _wcsnicmp(left.data(), right.data(), common);
+    return comparison == 0 ? left.size() < right.size() : comparison < 0;
   }
 };
 bool StartsWithNoCase(std::wstring_view value, std::wstring_view prefix) {
@@ -138,9 +142,12 @@ bool ValidParent(const v8i::V8iDocument& document, std::wstring_view parent) {
 }
 }  // namespace
 
-bool Catalog::CaseInsensitiveLess::operator()(const std::wstring& left,
-    const std::wstring& right) const noexcept {
-  return _wcsicmp(left.c_str(), right.c_str()) < 0;
+bool Catalog::CaseInsensitiveLess::operator()(std::wstring_view left,
+    std::wstring_view right) const noexcept {
+  if (left.empty() || right.empty()) return left.size() < right.size();
+  const size_t common = std::min(left.size(), right.size());
+  const int comparison = _wcsnicmp(left.data(), right.data(), common);
+  return comparison == 0 ? left.size() < right.size() : comparison < 0;
 }
 
 bool MatchesSearchText(const domain::Entry& entry, std::wstring_view query) {
@@ -184,13 +191,13 @@ domain::Entry* Catalog::Find(std::wstring_view name) {
 
 const domain::Entry* Catalog::Find(std::wstring_view name) const {
   EnsureLookup();
-  const auto found = lookup_->by_name.find(std::wstring(name));
+  const auto found = lookup_->by_name.find(name);
   return found == lookup_->by_name.end() ? nullptr : &document_.sections[found->second].entry;
 }
 
 const domain::Entry* Catalog::FindById(std::wstring_view id) const {
   EnsureLookup();
-  const auto found = lookup_->by_id.find(std::wstring(id));
+  const auto found = lookup_->by_id.find(id);
   return found == lookup_->by_id.end() ? nullptr : &document_.sections[found->second].entry;
 }
 
@@ -249,7 +256,7 @@ std::vector<TreeItem> Catalog::Tree() const {
   std::vector<std::wstring> ancestors;
   const auto build = [&](auto&& self, std::wstring_view parent) -> std::vector<TreeItem> {
     std::vector<TreeItem> result;
-    const auto found = children_by_parent.find(std::wstring(parent));
+    const auto found = children_by_parent.find(parent);
     if (found == children_by_parent.end()) return result;
     result.reserve(found->second.size());
     for (const auto* entry : found->second) {
