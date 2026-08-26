@@ -203,7 +203,7 @@ bool MatchesTagFilter(const catalog::Catalog& catalog, const catalog::TreeItem& 
 
 LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Catalog* catalog,
     const storage::Settings& settings, const storage::DatabaseTags& tags_by_database,
-    const storage::TagStyles& styles, std::wstring_view search_filter, HFONT controls_font) {
+    const storage::TagStyles& styles, std::wstring_view search_filter, HFONT controls_font, HFONT controls_bold_font) {
   if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) {
     if ((settings.simple_mode || !settings.show_tags_in_list) && search_filter.empty()) return CDRF_DODEFAULT;
     return CDRF_NOTIFYITEMDRAW;
@@ -234,11 +234,13 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
         GetClientRect(tree, &client);
         const int saved = SaveDC(draw->nmcd.hdc);
         const HFONT font = controls_font ? controls_font : reinterpret_cast<HFONT>(SendMessageW(tree, WM_GETFONT, 0, 0));
-        HFONT bold_font{};
-        LOGFONTW bold_description{};
-        if (font && GetObjectW(font, static_cast<int>(sizeof(bold_description)), &bold_description) == static_cast<int>(sizeof(bold_description))) {
-          bold_description.lfWeight = FW_BOLD;
-          bold_font = CreateFontIndirectW(&bold_description);
+        HFONT bold_font = controls_bold_font;
+        if (!bold_font) {
+          LOGFONTW bold_description{};
+          if (font && GetObjectW(font, static_cast<int>(sizeof(bold_description)), &bold_description) == static_cast<int>(sizeof(bold_description))) {
+            bold_description.lfWeight = FW_BOLD;
+            bold_font = CreateFontIndirectW(&bold_description);
+          }
         }
         if (font) SelectObject(draw->nmcd.hdc, font);
         SetBkMode(draw->nmcd.hdc, TRANSPARENT);
@@ -338,7 +340,7 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
           }
           x += width + 4;
         }
-        if (bold_font) DeleteObject(bold_font);
+        if (!controls_bold_font && bold_font) DeleteObject(bold_font);
         RestoreDC(draw->nmcd.hdc, saved);
       }
     }

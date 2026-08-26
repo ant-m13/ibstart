@@ -196,6 +196,7 @@ MainWindow::~MainWindow() {
   }
   for (const auto images : button_images_) if (images) ImageList_Destroy(images);
   if (controls_font_) DeleteObject(controls_font_);
+  if (controls_bold_font_) DeleteObject(controls_bold_font_);
   if (button_font_) DeleteObject(button_font_);
   if (details_title_font_) DeleteObject(details_title_font_);
   if (details_subtitle_font_) DeleteObject(details_subtitle_font_);
@@ -506,6 +507,7 @@ void MainWindow::CreateControls() {
   connection_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_TABSTOP | ES_AUTOHSCROLL | ES_READONLY,
       8, 0, 720, 22, window_, nullptr, instance_, nullptr);
   controls_font_ = CreateUiFont(window_, 9, FW_NORMAL);
+  controls_bold_font_ = CreateUiFont(window_, 9, FW_BOLD);
   button_font_ = CreateUiFont(window_, 9, FW_NORMAL);
   if (controls_font_) {
     for (const HWND control : {searchLabel, search_, tag_filter_label_, tag_filter_, tree_, details_, connection_}) {
@@ -867,7 +869,7 @@ void MainWindow::RefreshRecentTreeBranch(std::wstring_view selected_recent) {
 }
 LRESULT MainWindow::DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const {
   return presentation::DrawTreeSearchMatches(tree_, draw, catalog_ ? &*catalog_ : nullptr, settings_,
-      catalog_state_.Read().tags, catalog_state_.Read().tag_styles, search_filter_, controls_font_);
+      catalog_state_.Read().tags, catalog_state_.Read().tag_styles, search_filter_, controls_font_, controls_bold_font_);
 }
 bool MainWindow::MeasureContextMenuItem(MEASUREITEMSTRUCT* measure) const {
   return context_menus_.Measure(window_, controls_font_, measure) ||

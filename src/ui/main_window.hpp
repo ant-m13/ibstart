@@ -125,6 +125,7 @@ class MainWindow {
   HWND shortcut_{};
   HWND remove_{};
   HFONT controls_font_{};
+  HFONT controls_bold_font_{};
   HFONT button_font_{};
   HFONT details_title_font_{};
   HFONT details_subtitle_font_{};

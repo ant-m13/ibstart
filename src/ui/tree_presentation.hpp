@@ -40,6 +40,6 @@ void EraseTagStyle(storage::TagStyles& styles, std::wstring_view name);
 
 [[nodiscard]] LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Catalog* catalog,
     const storage::Settings& settings, const storage::DatabaseTags& tags, const storage::TagStyles& styles,
-    std::wstring_view search_filter, HFONT controls_font);
+    std::wstring_view search_filter, HFONT controls_font, HFONT controls_bold_font);
 
 }  // namespace ibstart::ui::presentation
