@@ -23,6 +23,7 @@ src/
     ├── database_editor_dialog + advanced_database_options_dialog
     ├── tag_manager + tag_*_dialog
     ├── update_check_operation + cache_clear_operation
+    ├── menu_controller + command_ids
     └── dialog_support / folder_picker / input_box / owner_draw_menu
 ```
 
@@ -36,7 +37,7 @@ src/
 
 `update/github_release_client` по явной команде пользователя получает небольшой release asset `IBStart.version` через стабильную HTTPS-ссылку GitHub `releases/latest/download`, без обращения к REST API. Он отвечает только за WinHTTP, тайм-ауты, HTTP-статусы, ограничение размера ответа и кооперативную отмену. `update/update_service` читает только SemVer-версию, строит ссылку на страницу релиза и сравнивает версии; он не скачивает исполняемые файлы, не меняет EXE и не сохраняет историю проверок. Сетевой запрос выполняется вне потока окна; UI получает лишь готовый результат.
 
-`ui/main_window` координирует жизненный цикл окна, команды и обновление представлений. Заполнение дерева и операции с native tree view находятся в `TreeViewController`, подготовка фильтров и отрисовка — в `tree_presentation`, сведения о выбранной базе — в `DetailsViewController`. Редактор базы и окно дополнительных параметров являются отдельными диалоговыми модулями; `TagManager` координирует формы тегов и сохранение метаданных, а `update_check_operation` и `cache_clear_operation` владеют фоновыми потоками. Низкоуровневые общие операции Win32-диалогов находятся в `dialog_support`.
+`ui/main_window` координирует жизненный цикл окна, маршрутизацию команд и обновление представлений. Идентификаторы команд централизованы в `command_ids`, а создание и обновление верхнего/файлового меню, owner-draw состояния и native menu handles инкапсулированы в `MenuController`; окно получает от него только нужные меню для точечных состояний (например, блокировки проверки обновлений). Заполнение дерева и операции с native tree view находятся в `TreeViewController`, подготовка фильтров и отрисовка — в `tree_presentation`, сведения о выбранной базе — в `DetailsViewController`. Редактор базы и окно дополнительных параметров являются отдельными диалоговыми модулями; `TagManager` координирует формы тегов и сохранение метаданных, а `update_check_operation` и `cache_clear_operation` владеют фоновыми потоками. Низкоуровневые общие операции Win32-диалогов находятся в `dialog_support`.
 
 Версия продукта задаётся только в `cmake/IBStartVersion.cmake`. На этапе конфигурации CMake из неё генерируются C++ header, Windows VERSIONINFO, manifest, `ibstart-version.txt` и пустой маркер `IBStart.portable` для portable-архива. Благодаря этому окно «О программе», свойства PE-файла и release workflow используют одно значение.
 
