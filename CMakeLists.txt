@@ -60,6 +60,7 @@ add_library(ibstart_core STATIC
   src/core/logging/logging.cpp
   src/core/shell/shortcut.cpp
   src/core/update/update_service.cpp
+  src/core/update/github_release_client.cpp
 )
 target_include_directories(ibstart_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src" "${IBSTART_GENERATED_DIR}")
 target_compile_definitions(ibstart_core PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
