@@ -24,9 +24,10 @@ std::wstring Env(const wchar_t* name) {
   return text;
 }
 
-uintmax_t SizeOf(const std::filesystem::path& root) {
+uintmax_t SizeOf(const std::filesystem::path& root, std::stop_token stop) {
   uintmax_t result = 0; std::error_code error;
   for (std::filesystem::recursive_directory_iterator it(root, std::filesystem::directory_options::skip_permission_denied, error), end; it != end; it.increment(error)) {
+    if (stop.stop_requested()) return 0;
     if (error) { error.clear(); continue; }
     if (it->is_regular_file(error)) {
       const auto size = it->file_size(error);
@@ -98,8 +99,9 @@ bool IsSafeCachePath(const std::filesystem::path& path) {
 }
 }  // namespace
 
-std::vector<CacheItem> CandidatesFor(const domain::Database& database) {
+std::vector<CacheItem> CandidatesFor(const domain::Database& database, std::stop_token stop) {
   std::vector<CacheItem> result;
+  if (stop.stop_requested()) return result;
   const auto identifier = SafeIdentifier(database.id.empty() ? database.name : database.id);
   if (!identifier) return result;
   // IBStart only targets explicit cache subdirectories; it never derives a path from Connect and therefore cannot remove a file base.
@@ -112,8 +114,13 @@ std::vector<CacheItem> CandidatesFor(const domain::Database& database) {
     paths.push_back(std::filesystem::path(local) / L"IBStart" / L"cache" / *identifier);
   }
   for (const auto& path : paths) {
+    if (stop.stop_requested()) return {};
     std::error_code error;
-    if (std::filesystem::is_directory(path, error)) result.push_back({path, SizeOf(path)});
+    if (std::filesystem::is_directory(path, error)) {
+      const auto bytes = SizeOf(path, stop);
+      if (stop.stop_requested()) return {};
+      result.push_back({path, bytes});
+    }
   }
   return result;
 }

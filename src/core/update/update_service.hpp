@@ -1,6 +1,7 @@
 #pragma once
 
 #include <optional>
+#include <stop_token>
 #include <string>
 #include <string_view>
 
@@ -20,7 +21,8 @@ struct Release {
 [[nodiscard]] Release ParseLatestVersionFile(std::string_view response);
 
 // Downloads the version asset of the latest published stable GitHub Release. A missing
-// stable release or asset is reported as std::nullopt; transport and malformed-response errors throw.
-[[nodiscard]] std::optional<Release> FetchLatestRelease();
+// stable release, missing asset, or requested cancellation is reported as std::nullopt;
+// transport and malformed-response errors throw.
+[[nodiscard]] std::optional<Release> FetchLatestRelease(std::stop_token stop = {});
 
 }  // namespace ibstart::update

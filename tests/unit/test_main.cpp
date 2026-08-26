@@ -25,6 +25,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <stop_token>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -503,6 +504,10 @@ void TestUpdateVersionsAndVersionFile() {
     static_cast<void>(ibstart::update::ParseLatestVersionFile("0.6"));
   } catch (const std::invalid_argument&) { invalidVersionFile = true; }
   CHECK(invalidVersionFile);
+
+  std::stop_source cancelledUpdate;
+  CHECK(cancelledUpdate.request_stop());
+  CHECK(!ibstart::update::FetchLatestRelease(cancelledUpdate.get_token()));
 }
 
 void TestCatalogSearch() {
@@ -760,12 +765,16 @@ void TestCacheIdentifiersDoNotCollide() {
   ibstart::domain::Database valid;
   valid.id = identifier;
   const auto validCandidates = ibstart::cache::CandidatesFor(valid);
+  std::stop_source cancelledScan;
+  CHECK(cancelledScan.request_stop());
+  const auto cancelledCandidates = ibstart::cache::CandidatesFor(valid, cancelledScan.get_token());
   ibstart::domain::Database unsafe;
   unsafe.id = L"a/b";
   const auto unsafeCandidates = ibstart::cache::CandidatesFor(unsafe);
   SetEnvironmentVariableW(L"LOCALAPPDATA", required == 0 ? nullptr : previous.c_str());
 
   CHECK(std::any_of(validCandidates.begin(), validCandidates.end(), [&](const auto& item) { return item.path == validCache; }));
+  CHECK(cancelledCandidates.empty());
   CHECK(unsafeCandidates.empty());
   std::error_code error;
   std::filesystem::remove_all(directory, error);
