@@ -313,10 +313,12 @@ TreeViewController::ViewState TreeViewController::CaptureViewState() const {
 void TreeViewController::RestoreViewState(const ViewState& state) const {
   if (!tree_) return;
   RestoreExpansionStates(state.expansion_states);
+  bool selection_restored = state.selected_name.empty() && state.selected_item_data == 0;
   if (!state.selected_name.empty()) {
     if (const HTREEITEM item = FindItemInBranch(state.selected_name, state.selected_branch_data)) {
       TreeView_SelectItem(tree_, item);
       TreeView_EnsureVisible(tree_, item);
+      selection_restored = true;
     }
     // EnsureVisible can expand ancestors of the selected row.  Reapply the
     // captured state so a refresh never changes a branch the user collapsed.
@@ -325,8 +327,10 @@ void TreeViewController::RestoreViewState(const ViewState& state) const {
     if (const HTREEITEM item = FindTopLevelItem(state.selected_item_data)) {
       TreeView_SelectItem(tree_, item);
       TreeView_EnsureVisible(tree_, item);
+      selection_restored = true;
     }
   }
+  if (!selection_restored) TreeView_SelectItem(tree_, nullptr);
 
   // Keep the vertical viewport anchored to the same row where possible. This
   // prevents an update from looking like a jump in a large tree.
