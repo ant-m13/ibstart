@@ -53,7 +53,9 @@ constexpr UINT kUpdateCheckFinishedMessage = WM_APP + 24;
 constexpr UINT kFocusShortcutSelectionMessage = WM_APP + 25;
 constexpr UINT kCacheOperationFinishedMessage = WM_APP + 26;
 constexpr UINT_PTR kBackgroundPollTimer = 1;
+constexpr UINT_PTR kSearchRefreshTimer = 2;
 constexpr UINT kBackgroundPollIntervalMilliseconds = 100;
+constexpr UINT kSearchRefreshDelayMilliseconds = 180;
 constexpr int kMinimumWindowWidth = 940;
 constexpr int kMinimumSimpleWindowWidth = 520;
 constexpr int kMinimumWindowHeight = 460;
@@ -322,6 +324,11 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
         PollBackgroundOperations();
         return 0;
       }
+      if (wparam == kSearchRefreshTimer) {
+        KillTimer(window, kSearchRefreshTimer);
+        if (!closing_ && !suppress_search_refresh_) PopulateTree();
+        return 0;
+      }
       break;
     case WM_KEYDOWN:
       if (wparam == VK_ESCAPE && !dragging_name_.empty()) {
@@ -336,7 +343,10 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
     case WM_COMMAND:
       if (closing_) return 0;
       if (reinterpret_cast<HWND>(lparam) == search_ && HIWORD(wparam) == EN_CHANGE) {
-        if (!suppress_search_refresh_) PopulateTree();
+        if (!suppress_search_refresh_) {
+          KillTimer(window, kSearchRefreshTimer);
+          SetTimer(window, kSearchRefreshTimer, kSearchRefreshDelayMilliseconds, nullptr);
+        }
         return 0;
       }
       if (reinterpret_cast<HWND>(lparam) == connection_ && HIWORD(wparam) == EN_SETFOCUS) { SendMessageW(connection_, EM_SETSEL, 0, -1); return 0; }
@@ -461,6 +471,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       return 0;
     case WM_DESTROY: {
       KillTimer(window, kBackgroundPollTimer);
+      KillTimer(window, kSearchRefreshTimer);
       WINDOWPLACEMENT placement{sizeof(placement)};
       if (GetWindowPlacement(window, &placement)) { const RECT& rect = placement.rcNormalPosition; settings_.window_x = rect.left; settings_.window_y = rect.top; settings_.window_width = rect.right - rect.left; settings_.window_height = rect.bottom - rect.top; }
       if (tree_ && IsWindow(tree_)) {
@@ -819,6 +830,7 @@ void MainWindow::ToggleFoldersFirstWhenSorting() {
 }
 void MainWindow::PopulateTree() {
   if (!tree_) return;
+  if (window_) KillTimer(window_, kSearchRefreshTimer);
   wchar_t text[512]{};
   GetWindowTextW(search_, text, static_cast<int>(std::size(text)));
   search_filter_ = text;
