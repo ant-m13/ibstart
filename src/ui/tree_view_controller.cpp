@@ -445,6 +445,7 @@ void TreeViewController::ReconcileChildren(const catalog::Catalog& database_cata
   HTREEITEM previous = nullptr;
   for (const auto* item : visible) {
     HTREEITEM handle = nullptr;
+    bool inserted = false;
     size_t existing_position = existing.size();
     if (const auto found = existing_by_name.find(item->name); found != existing_by_name.end() &&
         !used[found->second]) {
@@ -461,9 +462,10 @@ void TreeViewController::ReconcileChildren(const catalog::Catalog& database_cata
       row.item.iImage = row.item.iSelectedImage = item->database ? DatabaseImage(entry) : kFolderImage;
       handle = TreeView_InsertItem(tree_, &row);
       if (!handle) continue;
+      inserted = true;
     }
     if (existing_position < existing.size()) used[existing_position] = true;
-    UpdateTreeItem(handle, database_catalog, *item);
+    if (!inserted) UpdateTreeItem(handle, database_catalog, *item);
     if (item->database) {
       DeleteChildren(handle);
     } else {
