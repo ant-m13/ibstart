@@ -10,6 +10,7 @@
 #include <cerrno>
 #include <cwchar>
 #include <cwctype>
+#include <map>
 #include <optional>
 #include <set>
 #include <stdexcept>
@@ -20,6 +21,11 @@ namespace {
 bool EqualNoCase(std::wstring_view left, std::wstring_view right) {
   return left.size() == right.size() && _wcsnicmp(left.data(), right.data(), left.size()) == 0;
 }
+struct CaseInsensitiveLess {
+  bool operator()(const std::wstring& left, const std::wstring& right) const {
+    return _wcsicmp(left.c_str(), right.c_str()) < 0;
+  }
+};
 }
 
 const Field* Entry::Find(std::wstring_view key) const {
@@ -202,10 +208,22 @@ std::vector<const domain::Entry*> Catalog::ChildrenOf(std::wstring_view parent) 
 }
 
 std::vector<TreeItem> Catalog::Tree() const {
+  // Index children once instead of scanning every document section for every
+  // visited group.  Large ibases.v8i files commonly contain many groups, so
+  // the old recursive ChildrenOf() calls multiplied the same linear scan.
+  std::map<std::wstring, std::vector<const domain::Entry*>, CaseInsensitiveLess> children_by_parent;
+  for (const auto& section : document_.sections) {
+    children_by_parent[ParentName(section.entry.ValueOr(L"Folder"))].push_back(&section.entry);
+  }
+  for (auto& [_, children] : children_by_parent) std::sort(children.begin(), children.end(), LessEntry);
+
   std::vector<std::wstring> ancestors;
   const auto build = [&](auto&& self, std::wstring_view parent) -> std::vector<TreeItem> {
     std::vector<TreeItem> result;
-    for (const auto* entry : ChildrenOf(parent)) {
+    const auto found = children_by_parent.find(std::wstring(parent));
+    if (found == children_by_parent.end()) return result;
+    result.reserve(found->second.size());
+    for (const auto* entry : found->second) {
       TreeItem item{entry->name, entry->IsDatabase(), std::wstring(parent), {}};
       const bool cycle = std::any_of(ancestors.begin(), ancestors.end(), [&](const auto& ancestor) { return EqualNoCase(ancestor, entry->name); });
       if (entry->IsGroup() && !cycle) { ancestors.push_back(entry->name); item.children = self(self, entry->name); ancestors.pop_back(); }
