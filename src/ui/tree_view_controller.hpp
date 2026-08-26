@@ -50,6 +50,16 @@ class TreeViewController final {
   void RestoreExpansionStates(const ExpansionStates& states) const;
 
  private:
+  struct ViewState {
+    ExpansionStates expansion_states;
+    std::wstring selected_name;
+    LPARAM selected_item_data{};
+    LPARAM selected_branch_data{};
+    std::wstring first_visible_name;
+    LPARAM first_visible_data{};
+    LPARAM first_visible_branch_data{};
+  };
+
   enum TreeImage : int {
     kFileDatabaseImage,
     kServerDatabaseImage,
@@ -63,11 +73,27 @@ class TreeViewController final {
       const std::vector<std::wstring>& filter_favorites, const std::vector<catalog::TreeItem>& items,
       HTREEITEM parent, std::wstring_view search_filter,
       const presentation::TreeTagFilter& tag_filter) const;
-  [[nodiscard]] HTREEITEM InsertSpecialRoot(const catalog::Catalog& database_catalog,
+  void ReconcileChildren(const catalog::Catalog& database_catalog, const storage::CatalogState& catalog_state,
+      const std::vector<std::wstring>& filter_favorites, const std::vector<catalog::TreeItem>& items,
+      HTREEITEM parent, std::wstring_view search_filter,
+      const presentation::TreeTagFilter& tag_filter) const;
+  void ReconcileSpecialRoot(const catalog::Catalog& database_catalog,
       const storage::CatalogState& catalog_state, const std::vector<std::wstring>& filter_favorites,
       std::wstring_view search_filter, const presentation::TreeTagFilter& tag_filter,
-      std::wstring_view root_name, const std::vector<std::wstring>& names, int image, LPARAM item_data) const;
+      std::wstring_view root_name, const std::vector<std::wstring>& names, int image, LPARAM item_data,
+      HTREEITEM insert_after) const;
+  [[nodiscard]] HTREEITEM InsertCatalogRoot() const;
+  [[nodiscard]] ViewState CaptureViewState() const;
+  void RestoreViewState(const ViewState& state) const;
+  [[nodiscard]] bool MatchesFilters(const catalog::Catalog& database_catalog,
+      const storage::CatalogState& catalog_state, const std::vector<std::wstring>& filter_favorites,
+      const catalog::TreeItem& item, std::wstring_view search_filter,
+      const presentation::TreeTagFilter& tag_filter) const;
+  void UpdateTreeItem(HTREEITEM handle, const catalog::Catalog& database_catalog,
+      const catalog::TreeItem& item) const;
+  void DeleteChildren(HTREEITEM parent) const;
   [[nodiscard]] HTREEITEM FindTopLevelItem(LPARAM item_data) const;
+  [[nodiscard]] HTREEITEM FindItemInBranch(std::wstring_view name, LPARAM branch_data) const;
   [[nodiscard]] HTREEITEM FindItemByName(HTREEITEM item, std::wstring_view name) const;
   [[nodiscard]] static int DatabaseImage(const domain::Entry* entry);
 
