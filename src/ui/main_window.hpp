@@ -8,6 +8,7 @@
 #include "ui/cache_clear_operation.hpp"
 #include "ui/details_view_controller.hpp"
 #include "ui/owner_draw_menu.hpp"
+#include "ui/tag_manager.hpp"
 #include "ui/tree_view_controller.hpp"
 #include "ui/update_check_operation.hpp"
 
@@ -68,6 +69,7 @@ class MainWindow {
   void ConfigureTagColors();
   void AddTagToSelected(std::wstring tag);
   void AddNewTagToSelected();
+  void ApplyTagResult(TagManager::Result result, std::wstring_view selected = {});
   void DeleteSelected();
   void MoveSelected(int offset);
   void MoveSelectedToFolder();
@@ -138,6 +140,7 @@ class MainWindow {
   storage::Settings settings_;
   catalog::CatalogMetadataService catalog_state_;
   logging::Logger logger_;
+  TagManager tag_manager_;
   std::optional<v8i::V8iFileStore> store_;
   std::optional<catalog::Catalog> catalog_;
   std::vector<domain::PlatformInstallation> platforms_;
