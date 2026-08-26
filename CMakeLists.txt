@@ -77,6 +77,7 @@ add_executable(IBStart WIN32
   src/ui/tag_assignment_dialog.cpp
   src/ui/tag_manager_dialog.cpp
   src/ui/tree_presentation.cpp
+  src/ui/tree_view_controller.cpp
   src/ui/update_check_operation.cpp
   "${IBSTART_GENERATED_DIR}/IBStart.rc"
   "${IBSTART_GENERATED_DIR}/app.manifest"
