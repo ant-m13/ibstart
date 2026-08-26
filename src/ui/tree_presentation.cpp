@@ -204,7 +204,10 @@ bool MatchesTagFilter(const catalog::Catalog& catalog, const catalog::TreeItem& 
 LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Catalog* catalog,
     const storage::Settings& settings, const storage::DatabaseTags& tags_by_database,
     const storage::TagStyles& styles, std::wstring_view search_filter, HFONT controls_font) {
-  if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
+  if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) {
+    if ((settings.simple_mode || !settings.show_tags_in_list) && search_filter.empty()) return CDRF_DODEFAULT;
+    return CDRF_NOTIFYITEMDRAW;
+  }
   if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) return (!settings.simple_mode && settings.show_tags_in_list) || !search_filter.empty() ? CDRF_NOTIFYPOSTPAINT : CDRF_DODEFAULT;
   if (draw->nmcd.dwDrawStage != CDDS_ITEMPOSTPAINT) return CDRF_DODEFAULT;
 
@@ -256,9 +259,11 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
         const int overflow_width = measure(L"…", font) + 14;
         const auto draw_overflow = [&](int chip_x) {
           const storage::TagStyle style{};
-          const HBRUSH brush = CreateSolidBrush(style.background);
-          const HPEN pen = CreatePen(PS_SOLID, 1, style.background);
+          const HBRUSH brush = reinterpret_cast<HBRUSH>(GetStockObject(DC_BRUSH));
+          const HPEN pen = reinterpret_cast<HPEN>(GetStockObject(DC_PEN));
           if (brush && pen) {
+            SetDCBrushColor(draw->nmcd.hdc, style.background);
+            SetDCPenColor(draw->nmcd.hdc, style.background);
             const auto old_brush = SelectObject(draw->nmcd.hdc, brush);
             const auto old_pen = SelectObject(draw->nmcd.hdc, pen);
             RoundRect(draw->nmcd.hdc, chip_x, y, chip_x + overflow_width, y + height, height, height);
@@ -268,8 +273,6 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
             RECT text_rect{chip_x + 7, y, chip_x + overflow_width - 7, y + height};
             DrawTextW(draw->nmcd.hdc, L"…", 1, &text_rect, DT_SINGLELINE | DT_VCENTER | DT_CENTER | DT_NOPREFIX);
           }
-          if (brush) DeleteObject(brush);
-          if (pen) DeleteObject(pen);
         };
         for (size_t tag_index = 0; tag_index < tags.size(); ++tag_index) {
           const auto& tag = tags[tag_index];
@@ -297,9 +300,11 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
           }
           const auto* configured = TagStyleFor(styles, tag);
           const storage::TagStyle style = configured ? *configured : storage::TagStyle{};
-          const HBRUSH brush = CreateSolidBrush(style.background);
-          const HPEN pen = CreatePen(PS_SOLID, 1, style.background);
+          const HBRUSH brush = reinterpret_cast<HBRUSH>(GetStockObject(DC_BRUSH));
+          const HPEN pen = reinterpret_cast<HPEN>(GetStockObject(DC_PEN));
           if (brush && pen) {
+            SetDCBrushColor(draw->nmcd.hdc, style.background);
+            SetDCPenColor(draw->nmcd.hdc, style.background);
             const auto old_brush = SelectObject(draw->nmcd.hdc, brush);
             const auto old_pen = SelectObject(draw->nmcd.hdc, pen);
             RoundRect(draw->nmcd.hdc, x, y, x + width, y + height, height, height);
@@ -331,8 +336,6 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
               draw_segment(tag, font);
             }
           }
-          if (brush) DeleteObject(brush);
-          if (pen) DeleteObject(pen);
           x += width + 4;
         }
         if (bold_font) DeleteObject(bold_font);
@@ -345,11 +348,12 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
   if (const auto font = reinterpret_cast<HFONT>(SendMessageW(tree, WM_GETFONT, 0, 0))) SelectObject(draw->nmcd.hdc, font);
   SetBkMode(draw->nmcd.hdc, TRANSPARENT);
   SetTextColor(draw->nmcd.hdc, RGB(0, 97, 0));
-  const HBRUSH match_brush = CreateSolidBrush(RGB(198, 239, 206));
+  const HBRUSH match_brush = reinterpret_cast<HBRUSH>(GetStockObject(DC_BRUSH));
   if (!match_brush) {
     RestoreDC(draw->nmcd.hdc, saved);
     return CDRF_DODEFAULT;
   }
+  SetDCBrushColor(draw->nmcd.hdc, RGB(198, 239, 206));
 
   size_t start = 0;
   size_t match = utf::FindNoCaseOrdinal(label, search_filter, start);
@@ -364,7 +368,6 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
     start = match + search_filter.size();
     match = utf::FindNoCaseOrdinal(label, search_filter, start);
   }
-  DeleteObject(match_brush);
   RestoreDC(draw->nmcd.hdc, saved);
   return CDRF_DODEFAULT;
 }
