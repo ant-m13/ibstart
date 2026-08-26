@@ -88,8 +88,28 @@ std::wstring Stamp(const wchar_t* format) {
 std::wstring MaskSecrets(std::wstring_view arguments) {
   std::wstring result(arguments);
   // Both forms are accepted by 1C: /P secret and /P"secret". Generic token/password forms are also masked.
-  const std::wregex paired(LR"mask(((?:/(?:Password|P(?!ath\b|ort\b|rofile\b)|--(?:password|token)|-(?:password|token))\s*(?:=\s*)?)("(?:[^"]*)"|[^\s]+))mask", std::regex_constants::icase);
-  result = std::regex_replace(result, paired, L"$1***");
+  // Keep the expression portable: the MSVC ECMAScript implementation does
+  // not support the negative lookahead that would otherwise exclude /Path,
+  // /Port and /Profile.  Those switches are filtered while applying matches.
+  const std::wregex paired(LR"mask(((?:/(?:Password|P)|--(?:password|token)|-(?:password|token))\s*(?:=\s*)?)("(?:[^"]*)"|[^\s]+))mask", std::regex_constants::icase);
+  std::wstring masked;
+  masked.reserve(result.size());
+  size_t copied = 0;
+  for (std::wsregex_iterator current(result.cbegin(), result.cend(), paired), end; current != end; ++current) {
+    const auto& match = *current;
+    const auto position = static_cast<size_t>(match.position());
+    masked.append(result, copied, position - copied);
+    const auto whole = match.str(0);
+    if (StartsWithNoCase(whole, L"/P") && IsKnownNonSecretPSwitch(whole)) {
+      masked += whole;
+    } else {
+      masked += match.str(1);
+      masked += L"***";
+    }
+    copied = position + static_cast<size_t>(match.length());
+  }
+  masked.append(result, copied, result.size() - copied);
+  result.swap(masked);
   // Pwd is the password key used inside 1C connection strings, including the
   // fallback /IBConnection form that is written to the launch log.
   const std::wregex assignment(LR"(((?:password|pwd|token|secret)\s*=\s*)(\"(?:[^\"]*)\"|[^\s]+))", std::regex_constants::icase);
