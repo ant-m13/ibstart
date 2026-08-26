@@ -342,8 +342,11 @@ void TestCatalogOrderingAndCycles() {
   auto document = ibstart::v8i::V8iDocument::ParseUtf8("[Ten]\nOrderInList=10\n[Two]\nOrderInList=2\n");
   ibstart::catalog::Catalog catalog(std::move(document));
   const auto tree = catalog.Tree(); CHECK(tree.size() == 2); CHECK(tree.size() > 1 && tree[0].name == L"Two");
+  CHECK(!catalog.AddGroup(L" \t"));
+  CHECK(!catalog.AddServerDatabase(L"\r\n", L"Srvr=\"server\";Ref=\"base\""));
   CHECK(!catalog.AddGroup(L"Orphan", L"Missing"));
   CHECK(catalog.AddGroup(L"Parent")); CHECK(catalog.AddGroup(L"Child", L"Parent")); CHECK(!catalog.Move(L"Parent", L"Child", 0));
+  CHECK(!catalog.RenameGroup(L"Parent", L"   "));
   const auto url = ibstart::catalog::Catalog::WebUrl(L"WS=\"https://example.test/base\";WA=1");
   CHECK(url && *url == L"https://example.test/base"); CHECK(!ibstart::catalog::Catalog::IsWebConnection(L"WS=not-a-url"));
   CHECK(ibstart::catalog::IsBareWebConnection(L" https://example.test/base "));
