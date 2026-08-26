@@ -122,6 +122,7 @@ V8iDocument V8iFileStore::Read() {
   const auto after = FingerprintOf(path_);
   if (before != after) throw ExternalModificationError("ibases.v8i changed while it was being read. Reload it.");
   loaded_fingerprint_ = after;
+  fingerprint_known_ = true;
   return V8iDocument::ParseUtf8(bytes);
 }
 
@@ -195,6 +196,9 @@ void V8iFileStore::PruneBackups() {
 
 void V8iFileStore::Save(const V8iDocument& document) {
   maintenance_warnings_.clear();
+  if (!fingerprint_known_) {
+    throw ExternalModificationError("ibases.v8i could not be verified after the previous save. Reload it before saving again.");
+  }
   if (FingerprintOf(path_) != loaded_fingerprint_) {
     throw ExternalModificationError("ibases.v8i was changed by another program. Reload it before saving.");
   }
@@ -241,7 +245,26 @@ void V8iFileStore::Save(const V8iDocument& document) {
     if (error) AddMaintenanceWarning(FilesystemFailure("Cannot remove temporary ibases.v8i file", temporary, error));
     throw;
   }
-  loaded_fingerprint_ = FingerprintOf(path_);
+  // MoveFileExW is the commit point. A verifier error after this line must not
+  // be reported as a failed save: the new document is already visible on disk.
+  // Mark the fingerprint as unknown so a later save requires an explicit read
+  // instead of risking an overwrite of state that we could not verify.
+  try {
+    const auto committed = FingerprintOf(path_);
+    if (committed) {
+      loaded_fingerprint_ = committed;
+      fingerprint_known_ = true;
+    } else {
+      loaded_fingerprint_.reset();
+      fingerprint_known_ = false;
+      AddMaintenanceWarning("ibases.v8i was saved but disappeared before verification; reload is required before the next save.");
+    }
+  } catch (const std::exception& error) {
+    loaded_fingerprint_.reset();
+    fingerprint_known_ = false;
+    AddMaintenanceWarning("ibases.v8i was saved but its new fingerprint could not be verified; reload is required before the next save: " +
+        std::string(error.what()));
+  }
   PruneBackups();
 }
 
