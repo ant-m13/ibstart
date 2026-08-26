@@ -1,5 +1,7 @@
 #pragma once
 
+#include "core/domain/model.hpp"
+
 #include <filesystem>
 #include <mutex>
 #include <string>
@@ -8,6 +10,7 @@
 namespace ibstart::logging {
 
 [[nodiscard]] std::wstring MaskSecrets(std::wstring_view arguments);
+[[nodiscard]] std::wstring RedactedCommandLine(const domain::LaunchCommand& command);
 
 class Logger {
  public:
