@@ -5,6 +5,7 @@
 #include <Windows.h>
 
 #include <fstream>
+#include <string_view>
 #include <stdexcept>
 #include <string>
 
