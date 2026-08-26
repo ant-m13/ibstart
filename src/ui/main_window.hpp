@@ -39,7 +39,7 @@ class MainWindow {
   void CreateControls();
   void Layout(int width, int height);
   void LoadCatalog(bool report_error = true);
-  bool SaveCatalog();
+  bool SaveCatalog(catalog::Catalog candidate);
   void PopulateTree();
   void PopulateTreeWithoutFlicker(std::wstring_view selected = {}, bool select_catalog_root = false);
   void AddTreeItems(const std::vector<catalog::TreeItem>& items, HTREEITEM parent, std::wstring_view filter,

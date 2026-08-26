@@ -1962,8 +1962,7 @@ void MainWindow::LoadCatalog(bool report_error) {
   } catch (const std::exception& error) { logger_.Error(L"Ошибка загрузки: " + ibstart::utf::FromUtf8(error.what())); if (report_error) Message(window_, L"Не удалось загрузить список баз. Проверьте путь и кодировку UTF-8.", L"ИБ Старт", MB_OK | MB_ICONERROR); }
 }
 
-bool MainWindow::SaveCatalog() {
-  if (!catalog_) return false;
+bool MainWindow::SaveCatalog(catalog::Catalog candidate) {
   const auto logMaintenanceWarnings = [&] {
     if (!store_) return;
     for (const auto& warning : store_->maintenance_warnings()) {
@@ -1980,7 +1979,7 @@ bool MainWindow::SaveCatalog() {
       }
       store_.emplace(settings_.active_ibases);
     }
-    store_->Save(catalog_->document());
+    store_->Save(candidate.document());
     logMaintenanceWarnings();
   } catch (const v8i::ExternalModificationError&) {
     logMaintenanceWarnings();
@@ -1994,6 +1993,7 @@ bool MainWindow::SaveCatalog() {
     return false;
   }
 
+  catalog_ = std::move(candidate);
   bool settingsSaved = true;
   try {
     RememberRecentList(settings_.active_ibases);
@@ -2057,8 +2057,10 @@ std::optional<size_t> MainWindow::CatalogPosition(std::wstring_view name, std::w
   return find(find, catalog_->Tree(), L"");
 }
 void MainWindow::SortFolder(std::wstring_view folder, catalog::SortDirection direction) {
-  if (!catalog_ || !catalog_->SortChildrenByName(folder, direction, settings_.folders_first_when_sorting)) return;
-  if (!SaveCatalog()) return;
+  if (!catalog_) return;
+  auto candidate = *catalog_;
+  if (!candidate.SortChildrenByName(folder, direction, settings_.folders_first_when_sorting)) return;
+  if (!SaveCatalog(std::move(candidate))) return;
   PopulateTreeWithoutFlicker(folder, folder.empty());
   if (folder.empty()) {
     SetStatus(direction == catalog::SortDirection::ascending ? L"Корень списка отсортирован по возрастанию и сохранён в ibases.v8i." :
@@ -2342,8 +2344,9 @@ void MainWindow::EndTreeDrag(POINT windowPoint) {
   if (position != std::numeric_limits<size_t>::max() && EqualNoCase(sourceParent, targetParent)) {
     if (const auto sourcePosition = CatalogPosition(draggedName, sourceParent); sourcePosition && *sourcePosition < position) --position;
   }
-  if (!catalog_->Move(draggedName, targetParent, position)) { SetStatus(L"Перемещение невозможно: нельзя поместить группу внутрь самой себя."); return; }
-  if (!SaveCatalog()) return;
+  auto candidate = *catalog_;
+  if (!candidate.Move(draggedName, targetParent, position)) { SetStatus(L"Перемещение невозможно: нельзя поместить группу внутрь самой себя."); return; }
+  if (!SaveCatalog(std::move(candidate))) return;
   PopulateTreeWithoutFlicker(draggedName);
   SetStatus(targetParent.empty() ? L"Элемент перемещён в корень списка." : L"Элемент перемещён: " + draggedName);
 }
@@ -2754,11 +2757,12 @@ void MainWindow::AddDatabase(std::wstring parent) {
   initial.kind = DatabaseConnectionKind::file;
   auto entered = EditDatabase(window_, L"Добавление информационной базы", std::move(initial), platforms_);
   if (!entered) return;
+  auto candidate = *catalog_;
   bool added = false;
   if (entered->kind == DatabaseConnectionKind::file) {
-    added = catalog_->AddFileDatabase(entered->name, std::filesystem::path(connection::ValueOrEmpty(entered->connect, L"File")), parent);
+    added = candidate.AddFileDatabase(entered->name, std::filesystem::path(connection::ValueOrEmpty(entered->connect, L"File")), parent);
   } else {
-    added = catalog_->AddServerDatabase(entered->name, entered->connect, parent);
+    added = candidate.AddServerDatabase(entered->name, entered->connect, parent);
   }
   if (!added) {
     const std::wstring message = entered->kind == DatabaseConnectionKind::file
@@ -2767,23 +2771,28 @@ void MainWindow::AddDatabase(std::wstring parent) {
     Message(window_, message, L"ИБ Старт", MB_OK | MB_ICONWARNING);
     return;
   }
-  if (auto* entry = catalog_->Find(entered->name)) {
+  if (auto* entry = candidate.Find(entered->name)) {
     entered->id = entry->ValueOr(L"ID");
     entered->folder = entry->ValueOr(L"Folder");
     if (entered->order_in_list.empty()) entered->order_in_list = entry->ValueOr(L"OrderInList");
     if (entered->order_in_tree.empty()) entered->order_in_tree = entry->ValueOr(L"OrderInTree");
     ApplyDatabaseEditorData(*entry, *entered);
   }
-  SaveCatalog(); PopulateTree(); SelectTreeItem(entered->name);
+  if (!SaveCatalog(std::move(candidate))) return;
+  PopulateTree();
+  SelectTreeItem(entered->name);
 }
 void MainWindow::AddGroup(std::wstring parent) {
   if (settings_.simple_mode || !catalog_) return;
   const auto name = InputBox(window_, L"Добавить группу", L"Название группы:", NextName(L"Новая группа"));
   if (!name) return;
-  if (!catalog_->AddGroup(*name, parent)) {
+  auto candidate = *catalog_;
+  if (!candidate.AddGroup(*name, parent)) {
     Message(window_, L"Имя группы уже используется или родительская группа недоступна.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
   } else {
-    SaveCatalog(); PopulateTree(); SelectTreeItem(*name);
+    if (!SaveCatalog(std::move(candidate))) return;
+    PopulateTree();
+    SelectTreeItem(*name);
   }
 }
 void MainWindow::EditSelected() {
@@ -2795,12 +2804,13 @@ void MainWindow::EditSelected() {
   if (!entry->IsDatabase()) {
     const auto changed = InputBox(window_, L"Изменить группу", L"Название группы:", entry->name);
     if (!changed || TrimText(*changed).empty()) return;
-    if (!catalog_->RenameGroup(selected, TrimText(*changed))) {
+    auto candidate = *catalog_;
+    if (!candidate.RenameGroup(selected, TrimText(*changed))) {
       Message(window_, L"Имя группы уже используется.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
       return;
     }
     const auto renamed = TrimText(*changed);
-    SaveCatalog();
+    if (!SaveCatalog(std::move(candidate))) return;
     PopulateTree();
     SelectTreeItem(renamed);
     return;
@@ -2808,14 +2818,16 @@ void MainWindow::EditSelected() {
   const auto previousTagId = TagId(*entry);
   const auto edited = EditDatabase(window_, L"Редактирование информационной базы", DatabaseEditorDataFromEntry(*entry), platforms_);
   if (!edited) return;
-  if (selected != edited->name && !catalog_->RenameDatabase(selected, edited->name)) {
+  auto candidate = *catalog_;
+  if (selected != edited->name && !candidate.RenameDatabase(selected, edited->name)) {
     Message(window_, L"Имя базы уже используется.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
     return;
   }
-  entry = catalog_->Find(edited->name);
+  entry = candidate.Find(edited->name);
   if (!entry) return;
   ApplyDatabaseEditorData(*entry, *edited);
   const auto updatedTagId = TagId(*entry);
+  if (!SaveCatalog(std::move(candidate))) return;
   if (selected != edited->name || previousTagId != updatedTagId) {
     try {
       catalog_state_.RenameDatabaseMetadata(selected, edited->name, previousTagId, updatedTagId);
@@ -2824,7 +2836,6 @@ void MainWindow::EditSelected() {
       Message(window_, L"База переименована, но её избранное или теги не удалось сохранить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
     }
   }
-  SaveCatalog();
   RefreshTagFilter();
   PopulateTree();
   SelectTreeItem(edited->name);
@@ -2910,7 +2921,9 @@ void MainWindow::DeleteSelected() {
   const auto item = entry->IsDatabase() ? L"информационную базу" : L"группу";
   const auto message = L"Удалить " + std::wstring(item) + L" \"" + name + L"\" из списка.";
   if (MessageBoxW(window_, message.c_str(), L"ИБ Старт", MB_YESNO) != IDYES) return;
-  if (!catalog_->Remove(name)) return;
+  auto candidate = *catalog_;
+  if (!candidate.Remove(name)) return;
+  if (!SaveCatalog(std::move(candidate))) return;
   if (!tagId.empty()) {
     try {
       catalog_state_.RemoveTags(tagId);
@@ -2919,18 +2932,18 @@ void MainWindow::DeleteSelected() {
       Message(window_, L"База удалена из списка, но её теги не удалось удалить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
     }
   }
-  SaveCatalog();
   RefreshTagFilter();
   PopulateTree();
 }
 void MainWindow::MoveSelected(int offset) {
   if (!catalog_) return;
   const auto name = SelectedName();
-  if (!catalog_->MoveBy(name, offset)) {
+  auto candidate = *catalog_;
+  if (!candidate.MoveBy(name, offset)) {
     SetStatus(offset < 0 ? L"Элемент уже находится первым в группе." : L"Элемент уже находится последним в группе.");
     return;
   }
-  if (!SaveCatalog()) return;
+  if (!SaveCatalog(std::move(candidate))) return;
   PopulateTreeWithoutFlicker(name);
 }
 void MainWindow::MoveSelectedToFolder() {
@@ -2950,11 +2963,12 @@ void MainWindow::MoveSelectedToFolder() {
     SetStatus(group ? L"Группа уже находится в выбранной папке." : L"База уже находится в выбранной папке.");
     return;
   }
-  if (!catalog_->Move(name, *target, std::numeric_limits<size_t>::max())) {
+  auto candidate = *catalog_;
+  if (!candidate.Move(name, *target, std::numeric_limits<size_t>::max())) {
     Message(window_, L"Не удалось переместить выбранный элемент в папку.", L"Перемещение в папку", MB_OK | MB_ICONWARNING);
     return;
   }
-  if (!SaveCatalog()) return;
+  if (!SaveCatalog(std::move(candidate))) return;
   PopulateTreeWithoutFlicker(name);
   const std::wstring item = group ? L"Группа" : L"База";
   SetStatus(target->empty() ? item + L" перемещена в корневой уровень." : item + L" перемещена в папку: " + *target);
