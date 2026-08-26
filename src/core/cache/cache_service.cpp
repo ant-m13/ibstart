@@ -8,7 +8,9 @@
 #include <cwctype>
 #include <fstream>
 #include <iomanip>
+#include <optional>
 #include <sstream>
+#include <string_view>
 
 namespace ibstart::cache {
 namespace {
@@ -35,9 +37,15 @@ uintmax_t SizeOf(const std::filesystem::path& root) {
   return result;
 }
 
-std::wstring SafeId(std::wstring value) {
-  for (auto& character : value) if (!std::iswalnum(character) && character != L'_' && character != L'-') character = L'_';
-  return value.empty() ? L"unknown" : value;
+std::optional<std::wstring> SafeIdentifier(std::wstring value) {
+  if (value.empty() || value == L"." || value == L".." || value.back() == L'.' || value.back() == L' ') return std::nullopt;
+  constexpr std::wstring_view invalid = L"<>:\"/\\|?*";
+  if (std::any_of(value.begin(), value.end(), [&](wchar_t character) {
+        return character < 0x20 || invalid.find(character) != std::wstring_view::npos;
+      })) {
+    return std::nullopt;
+  }
+  return value;
 }
 
 std::wstring NormalizedLower(const std::filesystem::path& path) {
@@ -92,15 +100,16 @@ bool IsSafeCachePath(const std::filesystem::path& path) {
 
 std::vector<CacheItem> CandidatesFor(const domain::Database& database) {
   std::vector<CacheItem> result;
-  const auto identifier = SafeId(database.id.empty() ? database.name : database.id);
+  const auto identifier = SafeIdentifier(database.id.empty() ? database.name : database.id);
+  if (!identifier) return result;
   // IBStart only targets explicit cache subdirectories; it never derives a path from Connect and therefore cannot remove a file base.
   std::vector<std::filesystem::path> paths;
   const auto roaming = Env(L"APPDATA");
   const auto local = Env(L"LOCALAPPDATA");
-  if (!roaming.empty()) paths.push_back(std::filesystem::path(roaming) / L"1C" / L"1Cv8" / identifier);
+  if (!roaming.empty()) paths.push_back(std::filesystem::path(roaming) / L"1C" / L"1Cv8" / *identifier);
   if (!local.empty()) {
-    paths.push_back(std::filesystem::path(local) / L"1C" / L"1Cv8" / identifier);
-    paths.push_back(std::filesystem::path(local) / L"IBStart" / L"cache" / identifier);
+    paths.push_back(std::filesystem::path(local) / L"1C" / L"1Cv8" / *identifier);
+    paths.push_back(std::filesystem::path(local) / L"IBStart" / L"cache" / *identifier);
   }
   for (const auto& path : paths) {
     std::error_code error;

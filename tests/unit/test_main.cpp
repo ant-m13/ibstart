@@ -665,6 +665,36 @@ void TestCacheRejectsLicenseDescendants() {
   std::filesystem::remove_all(directory, error);
 }
 
+void TestCacheIdentifiersDoNotCollide() {
+  const auto directory = Temp(L"cache-identifiers");
+  const auto local = directory / L"local";
+  const std::wstring identifier = L"{11111111-1111-4111-8111-111111111111}";
+  const auto validCache = local / L"1C" / L"1Cv8" / identifier;
+  std::filesystem::create_directories(validCache);
+  WriteBytes(validCache / L"cache.dat", "data");
+  std::filesystem::create_directories(local / L"1C" / L"1Cv8" / L"a_b");
+
+  const DWORD required = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
+  std::wstring previous(required, L'\0');
+  if (required != 0) {
+    const DWORD copied = GetEnvironmentVariableW(L"LOCALAPPDATA", previous.data(), required);
+    previous.resize(copied);
+  }
+  SetEnvironmentVariableW(L"LOCALAPPDATA", local.c_str());
+  ibstart::domain::Database valid;
+  valid.id = identifier;
+  const auto validCandidates = ibstart::cache::CandidatesFor(valid);
+  ibstart::domain::Database unsafe;
+  unsafe.id = L"a/b";
+  const auto unsafeCandidates = ibstart::cache::CandidatesFor(unsafe);
+  SetEnvironmentVariableW(L"LOCALAPPDATA", required == 0 ? nullptr : previous.c_str());
+
+  CHECK(std::any_of(validCandidates.begin(), validCandidates.end(), [&](const auto& item) { return item.path == validCache; }));
+  CHECK(unsafeCandidates.empty());
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
 void TestPortableMode() {
   const auto directory = Temp(L"portable"); const auto executable = directory / L"IBStart.exe"; WriteBytes(executable, ""); WriteBytes(directory / L"IBStart.portable", "");
   const auto layout = ibstart::storage::ResolveLayout(executable); CHECK(layout.portable); CHECK(layout.root == directory / L"data"); ibstart::storage::EnsureWritable(layout);
@@ -924,6 +954,7 @@ int wmain() {
   run(L"LogPruning", TestLogPruning);
   run(L"CacheSizeFormatting", TestCacheSizeFormatting);
   run(L"CacheRejectsLicenseDescendants", TestCacheRejectsLicenseDescendants);
+  run(L"CacheIdentifiersDoNotCollide", TestCacheIdentifiersDoNotCollide);
   run(L"PortableMode", TestPortableMode);
   run(L"CatalogStateRepository", TestCatalogStateRepository);
   run(L"CatalogMetadataService", TestCatalogMetadataService);
