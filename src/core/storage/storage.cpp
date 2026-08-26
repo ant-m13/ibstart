@@ -249,14 +249,14 @@ std::optional<JsonValue> ReadJsonValue(std::string_view json, size_t& position) 
   return JsonValue{JsonValueKind::scalar, json.substr(start, position - start)};
 }
 
-std::optional<JsonObject> ReadJsonObject(std::string_view json, size_t position) {
+std::optional<JsonObject> ReadJsonObject(std::string_view json, size_t& position) {
   SkipJsonWhitespace(json, position);
   if (position >= json.size() || json[position++] != '{') return std::nullopt;
   JsonObject result;
   for (;;) {
     SkipJsonWhitespace(json, position);
     if (position >= json.size()) return std::nullopt;
-    if (json[position] == '}') return result;
+    if (json[position] == '}') { ++position; return result; }
     const auto rawKey = ReadJsonRawString(json, position);
     const auto key = rawKey ? TryUnescape(*rawKey) : std::nullopt;
     if (!key) return std::nullopt;
@@ -341,7 +341,10 @@ void ForEachArrayObject(const JsonObject& root, std::string_view array_key, Visi
 std::optional<JsonObject> RootJsonObject(std::string_view json) {
   size_t position = 0;
   SkipJsonWhitespace(json, position);
-  return ReadJsonObject(json, position);
+  auto result = ReadJsonObject(json, position);
+  if (!result) return std::nullopt;
+  SkipJsonWhitespace(json, position);
+  return position == json.size() ? std::move(result) : std::nullopt;
 }
 
 void AppendHistoryToState(CatalogState& state, domain::HistoryItem item) {
