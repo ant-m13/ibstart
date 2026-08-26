@@ -3,6 +3,7 @@
 #include "ui/dialog_support.hpp"
 #include "ui/folder_picker.hpp"
 #include "ui/input_box.hpp"
+#include "ui/tag_assignment_dialog.hpp"
 #include "ui/tag_manager_dialog.hpp"
 #include "ui/tree_presentation.hpp"
 
@@ -42,26 +43,17 @@
 
 namespace ibstart::ui {
 using dialog::CreateUiFont;
-using dialog::CloseModalDialog;
 using dialog::DialogControlColor;
-using dialog::DialogOuterSize;
-using dialog::DisableModalOwner;
 using dialog::InputBox;
-using dialog::PositionDialogNearOwner;
-using dialog::RestoreModalOwner;
 using dialog::ScaleForDpi;
-using dialog::SetControlFont;
 using presentation::ContainsTag;
-using presentation::EraseTagStyle;
 using presentation::KnownTags;
-using presentation::ParseTags;
 using presentation::TagId;
 using presentation::TagStyleFor;
 using presentation::TagsFor;
 using presentation::TagsText;
 namespace {
 constexpr wchar_t kClassName[] = L"IBStart.MainWindow";
-constexpr wchar_t kTagAssignmentClass[] = L"IBStart.TagAssignment";
 constexpr UINT kActivateMessage = WM_APP + 23;
 constexpr UINT kUpdateCheckFinishedMessage = WM_APP + 24;
 constexpr UINT kFocusShortcutSelectionMessage = WM_APP + 25;
@@ -271,13 +263,6 @@ std::wstring TrimText(std::wstring_view value) {
   while (last > first && std::iswspace(value[last - 1])) --last;
   return std::wstring(value.substr(first, last - first));
 }
-std::wstring ReadControlText(HWND control) {
-  const int length = GetWindowTextLengthW(control);
-  std::wstring result(static_cast<size_t>(length) + 1, L'\0');
-  GetWindowTextW(control, result.data(), length + 1);
-  result.resize(static_cast<size_t>(length));
-  return result;
-}
 std::wstring TreeItemName(HWND tree, HTREEITEM item) {
   if (!tree || !item) return {};
   wchar_t text[512]{};
@@ -439,187 +424,6 @@ bool CopyTextToClipboard(HWND owner, std::wstring_view text) {
   if (SetClipboardData(CF_UNICODETEXT, memory)) return true;
   GlobalFree(memory);
   return false;
-}
-
-enum TagAssignmentControl : int {
-  kTagAssignmentList = 1750,
-  kTagAssignmentName,
-  kTagAssignmentAdd
-};
-
-struct TagAssignmentState {
-  HWND list{};
-  HWND name{};
-  HFONT font{};
-  HFONT button_font{};
-  const storage::TagStyles* styles{};
-  std::optional<std::vector<std::wstring>> result;
-  bool done{false};
-};
-
-int AddTagAssignmentItem(TagAssignmentState& state, std::wstring_view tag, bool checked) {
-  std::wstring value(tag);
-  LVITEMW item{};
-  item.mask = LVIF_TEXT;
-  item.iItem = ListView_GetItemCount(state.list);
-  item.pszText = value.data();
-  const int row = ListView_InsertItem(state.list, &item);
-  if (row >= 0) ListView_SetCheckState(state.list, row, checked);
-  return row;
-}
-
-bool AddTagAssignmentEntry(HWND dialog, TagAssignmentState& state) {
-  const std::wstring name = TrimText(ReadControlText(state.name));
-  if (name.empty()) {
-    Message(dialog, L"Укажите название нового тега.", L"Теги базы", MB_OK | MB_ICONWARNING);
-    return false;
-  }
-  const int count = ListView_GetItemCount(state.list);
-  for (int row = 0; row < count; ++row) {
-    if (!EqualNoCase(ListViewText(state.list, row, 0), name)) continue;
-    ListView_SetCheckState(state.list, row, TRUE);
-    ListView_SetItemState(state.list, row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-    ListView_EnsureVisible(state.list, row, FALSE);
-    SetWindowTextW(state.name, L"");
-    return true;
-  }
-  const int row = AddTagAssignmentItem(state, name, true);
-  if (row < 0) {
-    Message(dialog, L"Не удалось добавить тег в список.", L"Теги базы", MB_OK | MB_ICONERROR);
-    return false;
-  }
-  ListView_SetItemState(state.list, row, LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
-  ListView_EnsureVisible(state.list, row, FALSE);
-  SetWindowTextW(state.name, L"");
-  return true;
-}
-
-std::vector<std::wstring> SelectedAssignmentTags(const TagAssignmentState& state) {
-  std::vector<std::wstring> result;
-  const int count = ListView_GetItemCount(state.list);
-  for (int row = 0; row < count; ++row) {
-    if (ListView_GetCheckState(state.list, row)) result.push_back(ListViewText(state.list, row, 0));
-  }
-  return result;
-}
-
-LRESULT CALLBACK TagAssignmentProc(HWND wnd, UINT message, WPARAM wparam, LPARAM lparam) {
-  auto* state = reinterpret_cast<TagAssignmentState*>(GetWindowLongPtrW(wnd, GWLP_USERDATA));
-  if (message == WM_NCCREATE) {
-    SetWindowLongPtrW(wnd, GWLP_USERDATA, reinterpret_cast<LONG_PTR>(reinterpret_cast<CREATESTRUCTW*>(lparam)->lpCreateParams));
-    return TRUE;
-  }
-  if (message == WM_CTLCOLORSTATIC || message == WM_CTLCOLORBTN) return DialogControlColor(message, wparam, lparam);
-  if (message == WM_NOTIFY && state) {
-    const auto* header = reinterpret_cast<const NMHDR*>(lparam);
-    if (header && header->idFrom == kTagAssignmentList && header->code == NM_CUSTOMDRAW) {
-      auto* draw = reinterpret_cast<NMLVCUSTOMDRAW*>(lparam);
-      if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) return CDRF_NOTIFYITEMDRAW;
-      if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
-        const std::wstring tag = ListViewText(state->list, static_cast<int>(draw->nmcd.dwItemSpec), 0);
-        const auto* configured = state->styles ? TagStyleFor(*state->styles, tag) : nullptr;
-        const storage::TagStyle style = configured ? *configured : storage::TagStyle{};
-        draw->clrTextBk = style.background;
-        draw->clrText = style.text;
-        return CDRF_DODEFAULT;
-      }
-    }
-  }
-  if (message == WM_COMMAND && state) {
-    const int command = LOWORD(wparam);
-    if (command == kTagAssignmentAdd) {
-      AddTagAssignmentEntry(wnd, *state);
-      return 0;
-    }
-    if (command == IDOK) {
-      state->result = SelectedAssignmentTags(*state);
-      state->done = true;
-      DestroyWindow(wnd);
-      return 0;
-    }
-    if (command == IDCANCEL) {
-      state->done = true;
-      DestroyWindow(wnd);
-      return 0;
-    }
-  }
-  if (message == WM_CLOSE && state) {
-    state->done = true;
-    DestroyWindow(wnd);
-    return 0;
-  }
-  return DefWindowProcW(wnd, message, wparam, lparam);
-}
-
-std::optional<std::vector<std::wstring>> EditTagAssignment(HWND owner, const std::vector<std::wstring>& assigned,
-    const storage::DatabaseTags& tags, const storage::TagStyles& styles) {
-  TagAssignmentState state;
-  state.styles = &styles;
-  static ATOM atom = [] {
-    WNDCLASSW klass{};
-    klass.hInstance = GetModuleHandleW(nullptr);
-    klass.lpszClassName = kTagAssignmentClass;
-    klass.lpfnWndProc = TagAssignmentProc;
-    klass.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    klass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-    return RegisterClassW(&klass);
-  }();
-  (void)atom;
-  if (owner) EnableWindow(owner, FALSE);
-  const UINT dpi = owner ? GetDpiForWindow(owner) : GetDpiForSystem();
-  constexpr DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP;
-  constexpr DWORD extendedStyle = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
-  const SIZE outerSize = DialogOuterSize(owner, 570, 358, style, extendedStyle);
-  HWND dialog = CreateWindowExW(extendedStyle, kTagAssignmentClass, L"Теги базы", style,
-      CW_USEDEFAULT, CW_USEDEFAULT, outerSize.cx, outerSize.cy, owner, nullptr, GetModuleHandleW(nullptr), &state);
-  if (!dialog) {
-    RestoreModalOwner(owner);
-    return std::nullopt;
-  }
-  state.font = CreateUiFont(dialog, 9, FW_NORMAL);
-  state.button_font = CreateUiFont(dialog, 9, FW_NORMAL);
-  const auto px = [dpi](int logical) { return ScaleForDpi(logical, dpi); };
-  const HWND caption = CreateWindowW(L"STATIC", L"Отметьте существующие теги или быстро добавьте новый.", WS_CHILD | WS_VISIBLE,
-      px(10), px(10), px(550), px(18), dialog, nullptr, nullptr, nullptr);
-  state.list = CreateWindowExW(WS_EX_CLIENTEDGE, WC_LISTVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | LVS_REPORT | LVS_NOCOLUMNHEADER | LVS_SINGLESEL | LVS_SHOWSELALWAYS,
-      px(10), px(31), px(550), px(219), dialog, reinterpret_cast<HMENU>(kTagAssignmentList), nullptr, nullptr);
-  const HWND newCaption = CreateWindowW(L"STATIC", L"Новый тег", WS_CHILD | WS_VISIBLE,
-      px(10), px(261), px(370), px(18), dialog, nullptr, nullptr, nullptr);
-  state.name = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL,
-      px(10), px(280), px(370), px(25), dialog, reinterpret_cast<HMENU>(kTagAssignmentName), nullptr, nullptr);
-  const HWND add = CreateWindowW(L"BUTTON", L"Добавить и отметить", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-      px(390), px(279), px(170), px(27), dialog, reinterpret_cast<HMENU>(kTagAssignmentAdd), nullptr, nullptr);
-  const HWND accept = CreateWindowW(L"BUTTON", L"Готово", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_DEFPUSHBUTTON,
-      px(370), px(320), px(90), px(28), dialog, reinterpret_cast<HMENU>(IDOK), nullptr, nullptr);
-  const HWND cancel = CreateWindowW(L"BUTTON", L"Отмена", WS_CHILD | WS_VISIBLE | WS_TABSTOP,
-      px(470), px(320), px(90), px(28), dialog, reinterpret_cast<HMENU>(IDCANCEL), nullptr, nullptr);
-  SetControlFont(caption, state.font);
-  SetControlFont(newCaption, state.font);
-  SetControlFont(state.list, state.font);
-  SetControlFont(state.name, state.font);
-  SetControlFont(add, state.button_font ? state.button_font : state.font);
-  SetControlFont(accept, state.button_font ? state.button_font : state.font);
-  SetControlFont(cancel, state.button_font ? state.button_font : state.font);
-  ListView_SetExtendedListViewStyle(state.list, LVS_EX_CHECKBOXES | LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER);
-  LVCOLUMNW column{};
-  column.mask = LVCF_WIDTH;
-  column.cx = px(524);
-  ListView_InsertColumn(state.list, 0, &column);
-  for (const auto& tag : KnownTags(tags, styles)) AddTagAssignmentItem(state, tag, ContainsTag(assigned, tag));
-  PositionDialogNearOwner(dialog, owner);
-  ShowWindow(dialog, SW_SHOW);
-  SetFocus(state.list);
-  MSG message{};
-  int result = 1;
-  while (!state.done && (result = GetMessageW(&message, nullptr, 0, 0)) > 0) {
-    if (!IsDialogMessageW(dialog, &message)) { TranslateMessage(&message); DispatchMessageW(&message); }
-  }
-  if (IsWindow(dialog)) DestroyWindow(dialog);
-  if (result == 0) PostQuitMessage(static_cast<int>(message.wParam));
-  RestoreModalOwner(owner);
-  if (state.font) DeleteObject(state.font);
-  if (state.button_font) DeleteObject(state.button_font);
-  return state.result;
 }
 
 }  // namespace
@@ -2138,7 +1942,8 @@ void MainWindow::EditSelectedTags() {
     return;
   }
   const auto& metadata = catalog_state_.Read();
-  const auto edited = EditTagAssignment(window_, TagsFor(metadata.tags, *entry), metadata.tags, metadata.tag_styles);
+  const auto edited = dialog::EditTagAssignment(
+      window_, TagsFor(metadata.tags, *entry), metadata.tags, metadata.tag_styles);
   if (!edited) return;
 
   const auto& values = *edited;
