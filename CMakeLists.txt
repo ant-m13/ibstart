@@ -77,6 +77,7 @@ add_executable(IBStart WIN32
   src/ui/folder_picker.cpp
   src/ui/input_box.cpp
   src/ui/main_window.cpp
+  src/ui/menu_controller.cpp
   src/ui/owner_draw_menu.cpp
   src/ui/tag_assignment_dialog.cpp
   src/ui/tag_manager.cpp

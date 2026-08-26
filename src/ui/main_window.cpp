@@ -169,8 +169,6 @@ MainWindow::~MainWindow() {
     DestroyWindow(window_);
   }
   context_menu_items_.Clear();
-  main_menu_items_.Clear();
-  file_menu_items_.Clear();
   for (const auto images : button_images_) if (images) ImageList_Destroy(images);
   if (controls_font_) DeleteObject(controls_font_);
   if (button_font_) DeleteObject(button_font_);
@@ -542,10 +540,7 @@ void MainWindow::CreateControls() {
   AttachButtonIcon(shortcut_, instance_, IDI_ACTION_SHORTCUT, button_images_);
   AttachButtonIcon(remove_, instance_, IDI_ACTION_DELETE, button_images_);
   status_ = CreateWindowW(STATUSCLASSNAMEW, L"", WS_CHILD | WS_VISIBLE, 0, 0, 0, 0, window_, nullptr, instance_, nullptr);
-  menu_ = CreateMenu();
-  file_menu_ = CreatePopupMenu();
-  view_menu_ = CreatePopupMenu();
-  help_menu_ = CreatePopupMenu();
+  menus_.Create(window_, instance_);
   RefreshFileMenu();
   RefreshMainMenuBar();
   SetSimpleMode(settings_.simple_mode);
@@ -886,8 +881,7 @@ bool MainWindow::DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const {
 
 const OwnerDrawMenuItem* MainWindow::FindMenuItem(ULONG_PTR item_data) const noexcept {
   if (const auto* item = context_menu_items_.Find(item_data)) return item;
-  if (const auto* item = main_menu_items_.Find(item_data)) return item;
-  return file_menu_items_.Find(item_data);
+  return menus_.Find(item_data);
 }
 
 void MainWindow::BeginTreeDrag(HTREEITEM item, POINT treePoint) {
@@ -1548,77 +1542,10 @@ void MainWindow::ClearRecentBases() {
 }
 void MainWindow::CreateShortcut() { if (!catalog_) return; try { const auto database = catalog_->DatabaseFor(tree_view_.SelectedName()); shell::CreateDesktopShortcut(executable_, database.id, database.name); Message(window_, L"Ярлык создан на рабочем столе."); } catch (...) { Message(window_, L"Не удалось создать ярлык.", L"ИБ Старт", MB_OK | MB_ICONERROR); } }
 void MainWindow::RefreshFileMenu() {
-  if (!file_menu_) return;
-  while (GetMenuItemCount(file_menu_) > 0) {
-    const HMENU submenu = GetSubMenu(file_menu_, 0);
-    RemoveMenu(file_menu_, 0, MF_BYPOSITION);
-    if (submenu) DestroyMenu(submenu);
-  }
-  file_menu_items_.Clear();
-  const auto append = [&](bool enabled, bool checked, UINT command, int iconResource, std::wstring text, std::wstring shortcut = {}) {
-    file_menu_items_.Append(file_menu_, command, iconResource == 0 ? nullptr : LoadResourceIcon(instance_, iconResource, 20),
-        std::move(text), std::move(shortcut), MenuIconForCommand(command), enabled, checked);
-  };
-  const auto appendPopup = [&](HMENU submenu, UINT identity, int iconResource, std::wstring text) {
-    file_menu_items_.Append(file_menu_, identity, iconResource == 0 ? nullptr : LoadResourceIcon(instance_, iconResource, 20),
-        std::move(text), {}, MenuIconForCommand(identity), true, false, submenu);
-  };
-  append(true, false, kOpenList, IDI_TREE_FOLDER, L"Открыть список баз…", L"Ctrl+O");
-  append(true, false, kOpenStandardList, IDI_TREE_FOLDER, L"Открыть стандартный список 1С");
-  HMENU recent = CreatePopupMenu();
-  if (recent) {
-    size_t count = 0;
-    for (const auto& path : settings_.recent_ibases) {
-      if (count >= 9) break;
-      const UINT command = kRecentList1 + static_cast<UINT>(count++);
-      AppendMenuW(recent, MF_STRING, command, path.wstring().c_str());
-    }
-    if (count == 0) AppendMenuW(recent, MF_STRING | MF_GRAYED, 0, L"Нет недавно открытых списков");
-    appendPopup(recent, kRecentListsMenu, IDI_ACTION_REFRESH, L"Недавно открытые списки");
-  }
-  if (!settings_.simple_mode) {
-    AppendMenuW(file_menu_, MF_SEPARATOR, 0, nullptr);
-    append(true, false, kAddDatabase, IDI_ACTION_ADD, L"Добавить базу…", L"Ctrl+Alt+F");
-    append(true, false, kAddGroup, IDI_TREE_FOLDER, L"Добавить группу…", L"Ctrl+Alt+G");
-    AppendMenuW(file_menu_, MF_SEPARATOR, 0, nullptr);
-    append(true, false, kRefresh, IDI_ACTION_REFRESH, L"Обновить список", L"F5");
-  }
-  AppendMenuW(file_menu_, MF_SEPARATOR, 0, nullptr);
-  append(true, false, kExit, IDI_ACTION_EXIT, L"Выход", L"Alt+F4");
+  menus_.RefreshFile(settings_);
 }
 void MainWindow::RefreshMainMenuBar() {
-  if (!menu_ || !file_menu_ || !view_menu_ || !help_menu_) return;
-  const auto clearMenu = [](HMENU menu) {
-    while (GetMenuItemCount(menu) > 0) RemoveMenu(menu, 0, MF_BYPOSITION);
-  };
-  clearMenu(view_menu_);
-  clearMenu(help_menu_);
-  main_menu_items_.Clear();
-  const auto append = [&](HMENU target, UINT command, int iconResource, std::wstring text, std::wstring shortcut = {}, bool checked = false) {
-    main_menu_items_.Append(target, command, iconResource == 0 ? nullptr : LoadResourceIcon(instance_, iconResource, 20),
-        std::move(text), std::move(shortcut), MenuIconForCommand(command), true, checked, nullptr,
-        command == kToggleFoldersFirstWhenSorting);
-  };
-  if (settings_.simple_mode) {
-    append(view_menu_, kSimpleMode, 0, L"Выйти из простого режима", L"Ctrl+Alt+M", true);
-  } else {
-    append(view_menu_, kToggleFavorite, IDI_ACTION_FAVORITE, L"Добавить/убрать из избранного", L"Ctrl+Alt+I");
-    append(view_menu_, kToggleFoldersFirstWhenSorting, IDI_TREE_FOLDER, L"Папки всегда сверху при сортировке", {}, settings_.folders_first_when_sorting);
-    append(view_menu_, kEditTags, 0, L"Управление тегами выбранной базы…");
-    append(view_menu_, kConfigureTagColors, 0, L"Настроить теги…");
-    append(view_menu_, kShowTagsInList, 0, L"Показывать теги в списке баз", {}, settings_.show_tags_in_list);
-    append(view_menu_, kClearRecent, IDI_ACTION_DELETE, L"Очистить недавние базы…");
-    append(view_menu_, kSimpleMode, 0, L"Простой режим", L"Ctrl+Alt+M");
-    append(help_menu_, kCheckForUpdates, IDI_ACTION_UPDATE, L"Проверить обновления…");
-    AppendMenuW(help_menu_, MF_SEPARATOR, 0, nullptr);
-    append(help_menu_, kAbout, IDI_IBSTART, L"О программе…", L"F1");
-  }
-  clearMenu(menu_);
-  if (!settings_.simple_mode) AppendMenuW(menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(file_menu_), L"Файл");
-  AppendMenuW(menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(view_menu_), settings_.simple_mode ? L"Режим" : L"Вид");
-  if (!settings_.simple_mode) AppendMenuW(menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(help_menu_), L"Справка");
-  SetMenu(window_, menu_);
-  DrawMenuBar(window_);
+  menus_.RefreshMain(settings_);
 }
 void MainWindow::RememberRecentList(storage::Settings& settings, const std::filesystem::path& path) {
   if (path.empty()) return;
@@ -1729,7 +1656,8 @@ void MainWindow::ToggleTagDisplay() {
     Message(window_, L"Не удалось сохранить настройку отображения тегов.", L"ИБ Старт", MB_OK | MB_ICONERROR);
     return;
   }
-  if (view_menu_) CheckMenuItem(view_menu_, kShowTagsInList, MF_BYCOMMAND | (settings_.show_tags_in_list ? MF_CHECKED : MF_UNCHECKED));
+  if (menus_.view_menu()) CheckMenuItem(menus_.view_menu(), kShowTagsInList,
+      MF_BYCOMMAND | (settings_.show_tags_in_list ? MF_CHECKED : MF_UNCHECKED));
   RedrawWindow(tree_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
 }
 void MainWindow::SetStatus(std::wstring text) { if (status_) SendMessageW(status_, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(text.c_str())); }
@@ -1797,20 +1725,20 @@ void MainWindow::CheckForUpdates() {
     SetStatus(L"Проверка обновлений уже выполняется…");
     return;
   }
-  EnableMenuItem(help_menu_, kCheckForUpdates, MF_BYCOMMAND | MF_GRAYED);
+  EnableMenuItem(menus_.help_menu(), kCheckForUpdates, MF_BYCOMMAND | MF_GRAYED);
   DrawMenuBar(window_);
   SetStatus(L"Проверяем наличие обновлений…");
   try {
     update_check_.Start(window_, kUpdateCheckFinishedMessage);
     static_cast<void>(RefreshBackgroundPolling());
   } catch (const std::exception& error) {
-    EnableMenuItem(help_menu_, kCheckForUpdates, MF_BYCOMMAND | MF_ENABLED);
+    EnableMenuItem(menus_.help_menu(), kCheckForUpdates, MF_BYCOMMAND | MF_ENABLED);
     DrawMenuBar(window_);
     logger_.Error(L"Не удалось запустить проверку обновлений: " + WideErrorText(error.what()));
     SetStatus(L"Не удалось запустить проверку обновлений.");
     Message(window_, L"Не удалось запустить фоновую проверку обновлений.", L"Проверка обновлений", MB_OK | MB_ICONERROR);
   } catch (...) {
-    EnableMenuItem(help_menu_, kCheckForUpdates, MF_BYCOMMAND | MF_ENABLED);
+    EnableMenuItem(menus_.help_menu(), kCheckForUpdates, MF_BYCOMMAND | MF_ENABLED);
     DrawMenuBar(window_);
     SetStatus(L"Не удалось запустить проверку обновлений.");
     Message(window_, L"Не удалось запустить фоновую проверку обновлений.", L"Проверка обновлений", MB_OK | MB_ICONERROR);
@@ -1827,7 +1755,7 @@ void MainWindow::CompleteUpdateCheck() {
     TryFinishClose();
     return;
   }
-  EnableMenuItem(help_menu_, kCheckForUpdates, MF_BYCOMMAND | MF_ENABLED);
+  EnableMenuItem(menus_.help_menu(), kCheckForUpdates, MF_BYCOMMAND | MF_ENABLED);
   DrawMenuBar(window_);
   if (cancelled) {
     SetStatus(L"Проверка обновлений отменена.");
