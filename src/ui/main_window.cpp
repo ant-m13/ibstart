@@ -3,8 +3,6 @@
 #include "ui/dialog_support.hpp"
 #include "ui/folder_picker.hpp"
 #include "ui/input_box.hpp"
-#include "ui/tag_assignment_dialog.hpp"
-#include "ui/tag_manager_dialog.hpp"
 #include "ui/tree_presentation.hpp"
 
 #include "app/instance_activation.hpp"
@@ -162,7 +160,8 @@ bool CopyTextToClipboard(HWND owner, std::wstring_view text) {
 MainWindow::MainWindow(HINSTANCE instance, std::filesystem::path executable, storage::StorageLayout layout,
     storage::Settings settings, std::optional<std::wstring> launch_id)
     : instance_(instance), executable_(std::move(executable)), layout_(std::move(layout)), settings_(std::move(settings)),
-      catalog_state_(layout_), logger_(layout_.root / L"logs"), initial_launch_id_(std::move(launch_id)) {}
+      catalog_state_(layout_), logger_(layout_.root / L"logs"), tag_manager_(catalog_state_, logger_),
+      initial_launch_id_(std::move(launch_id)) {}
 MainWindow::~MainWindow() {
   StopAndJoinBackgroundThreads();
   CancelTreeDrag();
@@ -1426,73 +1425,29 @@ void MainWindow::EditSelectedTags() {
   if (settings_.simple_mode || !catalog_) return;
   const auto name = tree_view_.SelectedName();
   const auto* entry = catalog_->Find(name);
-  if (!entry || !entry->IsDatabase()) {
-    Message(window_, L"Выберите информационную базу для изменения тегов.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
-    return;
-  }
-  const auto& metadata = catalog_state_.Read();
-  const auto edited = dialog::EditTagAssignment(
-      window_, TagsFor(metadata.tags, *entry), metadata.tags, metadata.tag_styles);
-  if (!edited) return;
-
-  const auto& values = *edited;
-  try {
-    catalog_state_.SetTags(TagId(*entry), values);
-  } catch (const std::exception& error) {
-    logger_.Error(L"Ошибка сохранения тегов: " + ibstart::utf::FromUtf8(error.what()));
-    Message(window_, L"Не удалось сохранить теги базы.", L"ИБ Старт", MB_OK | MB_ICONERROR);
-    return;
-  }
-  RefreshTagFilter();
-  PopulateTree();
-  static_cast<void>(tree_view_.SelectItem(name));
-  SetStatus(values.empty() ? L"Теги базы очищены." : L"Теги базы сохранены: " + TagsText(values));
+  ApplyTagResult(tag_manager_.EditAssignment(window_, entry), name);
 }
 void MainWindow::ConfigureTagColors() {
-  const auto& metadata = catalog_state_.Read();
-  const auto updated = dialog::EditTagManager(window_, metadata.tags, metadata.tag_styles);
-  if (!updated) return;
-  try {
-    catalog_state_.ReplaceTagConfiguration(updated->tags, updated->styles);
-  } catch (const std::exception& error) {
-    logger_.Error(L"Ошибка сохранения настроек тегов: " + ibstart::utf::FromUtf8(error.what()));
-    Message(window_, L"Не удалось сохранить настройки тегов.", L"ИБ Старт", MB_OK | MB_ICONERROR);
-    return;
-  }
-  RefreshTagFilter();
-  PopulateTree();
-  SetStatus(L"Настройки тегов сохранены.");
+  ApplyTagResult(tag_manager_.Configure(window_));
 }
 void MainWindow::AddTagToSelected(std::wstring tag) {
   if (settings_.simple_mode || !catalog_) return;
-  tag = TrimText(tag);
   const auto name = tree_view_.SelectedName();
   const auto* entry = catalog_->Find(name);
-  if (tag.empty() || !entry || !entry->IsDatabase()) return;
-  try {
-    if (!catalog_state_.AddTag(TagId(*entry), tag)) {
-      SetStatus(L"У базы уже есть тег «" + tag + L"».");
-      return;
-    }
-  } catch (const std::exception& error) {
-    logger_.Error(L"Ошибка добавления тега: " + ibstart::utf::FromUtf8(error.what()));
-    Message(window_, L"Не удалось добавить тег базе.", L"ИБ Старт", MB_OK | MB_ICONERROR);
-    return;
-  }
-  RefreshTagFilter();
-  PopulateTree();
-  static_cast<void>(tree_view_.SelectItem(name));
-  SetStatus(L"Тег добавлен: " + TagsText(TagsFor(catalog_state_.Read().tags, *entry)));
+  ApplyTagResult(tag_manager_.AddTag(window_, entry, std::move(tag)), name);
 }
 void MainWindow::AddNewTagToSelected() {
-  const auto entered = InputBox(window_, L"Новый тег", L"Название тега:", L"");
-  if (!entered) return;
-  const auto requested = TrimText(*entered);
-  if (requested.empty()) return;
-  const auto& metadata = catalog_state_.Read();
-  const auto known = KnownTags(metadata.tags, metadata.tag_styles);
-  const auto found = std::find_if(known.begin(), known.end(), [&](const auto& tag) { return EqualNoCase(tag, requested); });
-  AddTagToSelected(found == known.end() ? requested : *found);
+  const auto name = tree_view_.SelectedName();
+  const auto* entry = !settings_.simple_mode && catalog_ ? catalog_->Find(name) : nullptr;
+  ApplyTagResult(tag_manager_.AddNewTag(window_, entry), name);
+}
+void MainWindow::ApplyTagResult(TagManager::Result result, std::wstring_view selected) {
+  if (result.changed) {
+    RefreshTagFilter();
+    PopulateTree();
+    if (!selected.empty()) static_cast<void>(tree_view_.SelectItem(selected));
+  }
+  if (!result.status.empty()) SetStatus(std::move(result.status));
 }
 void MainWindow::DeleteSelected() {
   if (!catalog_) return;
