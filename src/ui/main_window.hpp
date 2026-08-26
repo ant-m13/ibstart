@@ -42,6 +42,7 @@ class MainWindow {
   bool SaveCatalog(catalog::Catalog candidate);
   void PopulateTree();
   void PopulateTreeWithoutFlicker(std::wstring_view selected = {}, bool select_catalog_root = false);
+  void RefreshRecentTreeBranch(std::wstring_view selected_recent = {});
   void AddTreeItems(const std::vector<catalog::TreeItem>& items, HTREEITEM parent, std::wstring_view filter,
       const presentation::TreeTagFilter& tag_filter);
   void SortFolder(std::wstring_view folder, catalog::SortDirection direction);

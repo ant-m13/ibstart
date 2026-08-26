@@ -554,6 +554,23 @@ void TestTreeFilters() {
   CHECK(!ibstart::ui::presentation::MatchesTagFilter(catalog, *folder, tag, tags, {}));
 }
 
+void TestRecentDatabaseNames() {
+  auto document = ibstart::v8i::V8iDocument::ParseUtf8(
+      "[Alpha]\nConnect=File=\"C:\\\\alpha\"\nID=alpha-id\n"
+      "[Beta]\nConnect=File=\"C:\\\\beta\"\nID=beta-id\n"
+      "[Fallback]\nConnect=File=\"C:\\\\fallback\"\n"
+      "[Folder]\nFolder=/\n");
+  ibstart::catalog::Catalog catalog(std::move(document));
+  const std::vector<ibstart::domain::HistoryItem> history = {
+      {L"beta-id", {}, ibstart::domain::LaunchMode::enterprise},
+      {L"missing-id", {}, ibstart::domain::LaunchMode::designer},
+      {L"alpha-id", {}, ibstart::domain::LaunchMode::designer},
+      {L"Fallback", {}, ibstart::domain::LaunchMode::enterprise},
+  };
+  CHECK(ibstart::ui::presentation::CollectRecentDatabaseNames(catalog, history) ==
+      std::vector<std::wstring>{L"Beta", L"Alpha", L"Fallback"});
+}
+
 void TestStandardFolderPaths() {
   auto document = ibstart::v8i::V8iDocument::ParseUtf8(
       "[Root database]\nConnect=File=\"C:\\\\root\"\nFolder=/\n"
@@ -1042,6 +1059,7 @@ int wmain() {
   run(L"InstanceActivationPayload", TestInstanceActivationPayload);
   run(L"CatalogSearch", TestCatalogSearch);
   run(L"TreeFilters", TestTreeFilters);
+  run(L"RecentDatabaseNames", TestRecentDatabaseNames);
   run(L"NoBomAndCatalog", TestNoBomAndCatalog);
   run(L"SafeStore", TestSafeStore);
   run(L"ConfirmedV8iOverwrite", TestConfirmedV8iOverwrite);
