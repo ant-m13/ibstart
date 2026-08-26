@@ -325,10 +325,10 @@ bool Catalog::Move(std::wstring_view name, std::wstring parent, size_t position)
   siblings.erase(std::remove_if(siblings.begin(), siblings.end(), [&](const domain::Entry* candidate) { return candidate == entry; }), siblings.end());
   siblings.insert(siblings.begin() + std::min(position, siblings.size()), entry);
   for (size_t index = 0; index < siblings.size(); ++index) {
-    auto* entry = const_cast<domain::Entry*>(siblings[index]);
+    auto* sibling = const_cast<domain::Entry*>(siblings[index]);
     const auto order = std::to_wstring(index + 1);
-    entry->Set(L"OrderInList", order);
-    entry->Set(L"OrderInTree", order);
+    sibling->Set(L"OrderInList", order);
+    sibling->Set(L"OrderInTree", order);
   }
   if (!EqualNoCase(oldParent, parent)) Renumber(oldParent);
   return true;
