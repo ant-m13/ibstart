@@ -182,6 +182,20 @@ void TestSafeStore() {
   std::error_code error; std::filesystem::remove_all(directory, error);
 }
 
+void TestConfirmedV8iOverwrite() {
+  const auto directory = Temp(L"store-overwrite");
+  const auto file = directory / L"ibases.v8i";
+  WriteBytes(file, std::string("invalid-") + static_cast<char>(0xFF));
+  ibstart::v8i::V8iFileStore store(file);
+  store.AcceptCurrentContentsForOverwrite();
+  const auto replacement = ibstart::v8i::V8iDocument::ParseUtf8("[Replacement]\nConnect=x\n");
+  store.Save(replacement);
+  CHECK(ReadBytes(file) == "[Replacement]\nConnect=x\n");
+  CHECK(store.Backups().size() == 1);
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
 void TestCommandBuilderAndSelection() {
   const std::vector<ibstart::domain::PlatformInstallation> platforms = {
     {L"C:\\Program Files\\1cv8\\8.3.9\\bin\\1cv8.exe", L"8.3.9", ibstart::domain::ClientBitness::x64, true},
@@ -1030,6 +1044,7 @@ int wmain() {
   run(L"TreeFilters", TestTreeFilters);
   run(L"NoBomAndCatalog", TestNoBomAndCatalog);
   run(L"SafeStore", TestSafeStore);
+  run(L"ConfirmedV8iOverwrite", TestConfirmedV8iOverwrite);
   run(L"V8iSaveRejectsActiveWriter", TestV8iSaveRejectsActiveWriter);
   run(L"V8iConcurrentSavesConflict", TestV8iConcurrentSavesConflict);
   run(L"CommandBuilderAndSelection", TestCommandBuilderAndSelection);

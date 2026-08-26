@@ -22,6 +22,7 @@ class V8iFileStore {
 
   [[nodiscard]] const std::filesystem::path& path() const noexcept { return path_; }
   [[nodiscard]] V8iDocument Read();
+  void AcceptCurrentContentsForOverwrite();
   void Save(const V8iDocument& document);
   [[nodiscard]] std::vector<std::filesystem::path> Backups() const;
   [[nodiscard]] const std::vector<std::string>& maintenance_warnings() const noexcept { return maintenance_warnings_; }

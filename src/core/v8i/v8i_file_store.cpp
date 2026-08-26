@@ -179,6 +179,14 @@ V8iDocument V8iFileStore::Read() {
   return V8iDocument::ParseUtf8(bytes);
 }
 
+void V8iFileStore::AcceptCurrentContentsForOverwrite() {
+  const auto before = FingerprintOf(path_);
+  const auto after = FingerprintOf(path_);
+  if (before != after) throw ExternalModificationError("ibases.v8i changed while overwrite was being prepared. Try again.");
+  loaded_fingerprint_ = after;
+  fingerprint_known_ = true;
+}
+
 void V8iFileStore::CreateBackup() const {
   std::error_code error;
   if (!std::filesystem::exists(path_, error)) {
