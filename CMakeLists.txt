@@ -58,6 +58,7 @@ add_library(ibstart_core STATIC
   src/core/cache/cache_service.cpp
   src/core/scanner/file_base_scanner.cpp
   src/core/storage/storage.cpp
+  src/core/storage/storage_paths.cpp
   src/core/logging/logging.cpp
   src/core/shell/shortcut.cpp
   src/core/update/update_service.cpp
