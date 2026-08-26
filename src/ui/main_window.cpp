@@ -33,7 +33,6 @@
 #include <initializer_list>
 #include <iterator>
 #include <limits>
-#include <map>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -65,59 +64,6 @@ constexpr UINT kRecentList1 = 300;
 constexpr UINT kQuickTag1 = 400;
 constexpr UINT kTagsContextMenu = 250;
 constexpr UINT kRecentListsMenu = 299;
-enum TreeImage : int { kFileDatabaseImage, kServerDatabaseImage, kWebDatabaseImage, kFolderImage, kFavoriteImage, kRecentImage };
-constexpr LPARAM kRecentRootItemData = 1;
-constexpr LPARAM kFavoritesRootItemData = 2;
-constexpr LPARAM kCatalogRootItemData = 3;
-constexpr wchar_t kCatalogRootName[] = L"Информационные базы";
-
-using TreeExpansionStates = std::map<std::wstring, bool>;
-
-TreeExpansionStates CaptureTreeExpansionStates(HWND tree) {
-  TreeExpansionStates result;
-  const auto collect = [&](const auto& self, HTREEITEM item) -> void {
-    for (auto current = item; current; current = TreeView_GetNextSibling(tree, current)) {
-      const auto child = TreeView_GetChild(tree, current);
-      if (child) {
-        wchar_t name[512]{};
-        TVITEMW row{};
-        row.mask = TVIF_TEXT;
-        row.hItem = current;
-        row.pszText = name;
-        row.cchTextMax = static_cast<int>(std::size(name));
-        if (TreeView_GetItem(tree, &row)) {
-          result.emplace(name, (TreeView_GetItemState(tree, current, TVIS_EXPANDED) & TVIS_EXPANDED) != 0);
-        }
-        self(self, child);
-      }
-    }
-  };
-  if (tree) collect(collect, TreeView_GetRoot(tree));
-  return result;
-}
-
-void RestoreTreeExpansionStates(HWND tree, const TreeExpansionStates& states) {
-  const auto restore = [&](const auto& self, HTREEITEM item) -> void {
-    for (auto current = item; current; current = TreeView_GetNextSibling(tree, current)) {
-      const auto child = TreeView_GetChild(tree, current);
-      if (!child) continue;
-      wchar_t name[512]{};
-      TVITEMW row{};
-      row.mask = TVIF_TEXT;
-      row.hItem = current;
-      row.pszText = name;
-      row.cchTextMax = static_cast<int>(std::size(name));
-      if (TreeView_GetItem(tree, &row)) {
-        if (const auto found = states.find(name); found != states.end()) {
-          TreeView_Expand(tree, current, found->second ? TVE_EXPAND : TVE_COLLAPSE);
-        }
-      }
-      self(self, child);
-    }
-  };
-  if (tree) restore(restore, TreeView_GetRoot(tree));
-}
-
 OwnerDrawMenuIcon MenuIconForCommand(UINT command) {
   switch (command) {
     case kMoveUp: return OwnerDrawMenuIcon::move_up;
@@ -140,61 +86,6 @@ std::wstring WideErrorText(std::string_view message) noexcept {
 }
 HICON LoadResourceIcon(HINSTANCE instance, int resource, int size) {
   return static_cast<HICON>(LoadImageW(instance, MAKEINTRESOURCEW(resource), IMAGE_ICON, size, size, LR_DEFAULTCOLOR));
-}
-HICON CreateWebDatabaseIcon() {
-  constexpr int size = 20;
-  HDC screen = GetDC(nullptr);
-  HDC color = screen ? CreateCompatibleDC(screen) : nullptr;
-  HDC mask = screen ? CreateCompatibleDC(screen) : nullptr;
-  HBITMAP colorBitmap = screen ? CreateCompatibleBitmap(screen, size, size) : nullptr;
-  HBITMAP maskBitmap = CreateBitmap(size, size, 1, 1, nullptr);
-  HICON icon{};
-  if (color && mask && colorBitmap && maskBitmap) {
-    const auto previousColor = SelectObject(color, colorBitmap);
-    RECT bounds{0, 0, size, size};
-    FillRect(color, &bounds, static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH)));
-    const HBRUSH globeBrush = CreateSolidBrush(RGB(225, 245, 255));
-    const HPEN globePen = CreatePen(PS_SOLID, 2, RGB(0, 112, 156));
-    const auto previousBrush = SelectObject(color, globeBrush);
-    const auto previousPen = SelectObject(color, globePen);
-    Ellipse(color, 2, 2, 18, 18);
-    SelectObject(color, GetStockObject(HOLLOW_BRUSH));
-    Ellipse(color, 6, 2, 14, 18);
-    MoveToEx(color, 3, 10, nullptr);
-    LineTo(color, 17, 10);
-    MoveToEx(color, 5, 6, nullptr);
-    LineTo(color, 15, 6);
-    MoveToEx(color, 5, 14, nullptr);
-    LineTo(color, 15, 14);
-    SelectObject(color, previousBrush);
-    SelectObject(color, previousPen);
-    DeleteObject(globeBrush);
-    DeleteObject(globePen);
-    SelectObject(color, previousColor);
-
-    const auto previousMask = SelectObject(mask, maskBitmap);
-    PatBlt(mask, 0, 0, size, size, WHITENESS);
-    const HBRUSH maskBrush = static_cast<HBRUSH>(GetStockObject(BLACK_BRUSH));
-    const HPEN maskPen = static_cast<HPEN>(GetStockObject(BLACK_PEN));
-    const auto previousMaskBrush = SelectObject(mask, maskBrush);
-    const auto previousMaskPen = SelectObject(mask, maskPen);
-    Ellipse(mask, 1, 1, 19, 19);
-    SelectObject(mask, previousMaskBrush);
-    SelectObject(mask, previousMaskPen);
-    SelectObject(mask, previousMask);
-
-    ICONINFO info{};
-    info.fIcon = TRUE;
-    info.hbmColor = colorBitmap;
-    info.hbmMask = maskBitmap;
-    icon = CreateIconIndirect(&info);
-  }
-  if (color) DeleteDC(color);
-  if (mask) DeleteDC(mask);
-  if (colorBitmap) DeleteObject(colorBitmap);
-  if (maskBitmap) DeleteObject(maskBitmap);
-  if (screen) ReleaseDC(nullptr, screen);
-  return icon;
 }
 void AttachButtonIcon(HWND button, HINSTANCE instance, int resource, std::vector<HIMAGELIST>& storage) {
   HIMAGELIST images = ImageList_Create(20, 20, ILC_COLOR32 | ILC_MASK, 1, 1);
@@ -239,13 +130,6 @@ std::wstring ConnectionKind(std::wstring_view connect) {
   if (connection::Value(connect, L"Srvr")) return L"Серверная информационная база";
   return L"Информационная база";
 }
-int DatabaseTreeImage(const domain::Entry* entry) {
-  if (!entry) return kServerDatabaseImage;
-  const auto connect = entry->ValueOr(L"Connect");
-  if (catalog::Catalog::IsWebConnection(connect)) return kWebDatabaseImage;
-  if (connection::Value(connect, L"File")) return kFileDatabaseImage;
-  return kServerDatabaseImage;
-}
 std::wstring SingleLine(std::wstring value) {
   std::replace(value.begin(), value.end(), L'\r', L' '); std::replace(value.begin(), value.end(), L'\n', L' '); std::replace(value.begin(), value.end(), L'\t', L' '); return value;
 }
@@ -259,82 +143,6 @@ std::wstring TrimText(std::wstring_view value) {
   size_t last = value.size();
   while (last > first && std::iswspace(value[last - 1])) --last;
   return std::wstring(value.substr(first, last - first));
-}
-std::wstring TreeItemName(HWND tree, HTREEITEM item) {
-  if (!tree || !item) return {};
-  wchar_t text[512]{};
-  TVITEMW data{}; data.mask = TVIF_TEXT; data.hItem = item; data.pszText = text; data.cchTextMax = 512;
-  return TreeView_GetItem(tree, &data) ? text : L"";
-}
-LPARAM TreeItemData(HWND tree, HTREEITEM item) {
-  if (!tree || !item) return 0;
-  TVITEMW data{}; data.mask = TVIF_PARAM; data.hItem = item;
-  return TreeView_GetItem(tree, &data) ? data.lParam : 0;
-}
-bool IsVirtualTreeBranch(HWND tree, HTREEITEM item) {
-  for (auto current = item; current; current = TreeView_GetParent(tree, current)) {
-    const LPARAM data = TreeItemData(tree, current);
-    if (data == kRecentRootItemData || data == kFavoritesRootItemData) return true;
-  }
-  return false;
-}
-LPARAM TreeBranchData(HWND tree, HTREEITEM item) {
-  for (auto current = item; current; current = TreeView_GetParent(tree, current)) {
-    const LPARAM data = TreeItemData(tree, current);
-    if (data == kRecentRootItemData || data == kFavoritesRootItemData || data == kCatalogRootItemData) return data;
-  }
-  return 0;
-}
-HTREEITEM FindTopLevelTreeItem(HWND tree, LPARAM data) {
-  if (!tree) return nullptr;
-  for (auto item = TreeView_GetRoot(tree); item; item = TreeView_GetNextSibling(tree, item)) {
-    if (TreeItemData(tree, item) == data) return item;
-  }
-  return nullptr;
-}
-HTREEITEM FindTreeItemByName(HWND tree, HTREEITEM item, std::wstring_view name) {
-  for (auto current = item; current; current = TreeView_GetNextSibling(tree, current)) {
-    if (TreeItemData(tree, current) == 0 && TreeItemName(tree, current) == name) return current;
-    if (const auto child = FindTreeItemByName(tree, TreeView_GetChild(tree, current), name)) return child;
-  }
-  return nullptr;
-}
-HTREEITEM InsertSpecialTreeRoot(HWND tree, const catalog::Catalog& database_catalog,
-    const storage::CatalogState& catalog_state, const std::vector<std::wstring>& filter_favorites,
-    std::wstring_view filter, const presentation::TreeTagFilter& tag_filter, std::wstring_view root_name,
-    const std::vector<std::wstring>& names, int image, LPARAM item_data) {
-  std::wstring root_text(root_name);
-  TVINSERTSTRUCTW root{};
-  root.hParent = TVI_ROOT;
-  root.hInsertAfter = TVI_LAST;
-  root.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE | TVIF_PARAM;
-  root.item.pszText = root_text.data();
-  root.item.lParam = item_data;
-  root.item.iImage = root.item.iSelectedImage = image;
-  const HTREEITEM root_handle = TreeView_InsertItem(tree, &root);
-  if (!root_handle) return nullptr;
-
-  bool any = false;
-  for (const auto& name : names) {
-    const auto* entry = database_catalog.Find(name);
-    const catalog::TreeItem item{name, true, {}, {}};
-    if (!entry || !entry->IsDatabase() ||
-        !presentation::MatchesSearchFilter(database_catalog, item, filter, catalog_state.tags) ||
-        !presentation::MatchesTagFilter(database_catalog, item, tag_filter, catalog_state.tags, filter_favorites)) continue;
-    TVINSERTSTRUCTW row{};
-    row.hParent = root_handle;
-    row.hInsertAfter = TVI_LAST;
-    row.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE;
-    row.item.pszText = const_cast<wchar_t*>(entry->name.c_str());
-    row.item.iImage = row.item.iSelectedImage = DatabaseTreeImage(entry);
-    if (TreeView_InsertItem(tree, &row)) any = true;
-  }
-  if (any) {
-    TreeView_Expand(tree, root_handle, TVE_EXPAND);
-    return root_handle;
-  }
-  TreeView_DeleteItem(tree, root_handle);
-  return nullptr;
 }
 struct FileDatabasePassport {
   std::filesystem::path directory;
@@ -433,14 +241,14 @@ MainWindow::~MainWindow() {
   StopAndJoinBackgroundThreads();
   CancelTreeDrag();
   if (window_ && IsWindow(window_)) {
-    settings_.selected_entry = catalog_ && catalog_->Find(SelectedName()) ? SelectedName() : std::wstring();
+    const auto selected = tree_view_.SelectedName();
+    settings_.selected_entry = catalog_ && catalog_->Find(selected) ? selected : std::wstring();
     DestroyWindow(window_);
   }
   context_menu_items_.Clear();
   main_menu_items_.Clear();
   file_menu_items_.Clear();
   for (const auto images : button_images_) if (images) ImageList_Destroy(images);
-  if (tree_images_) ImageList_Destroy(tree_images_);
   if (controls_font_) DeleteObject(controls_font_);
   if (button_font_) DeleteObject(button_font_);
   if (details_title_font_) DeleteObject(details_title_font_);
@@ -486,7 +294,8 @@ void MainWindow::TryFinishClose() {
   if (!closing_ || update_check_.active() || cache_operation_.active()) return;
   if (!window_ || !IsWindow(window_)) return;
   KillTimer(window_, kBackgroundPollTimer);
-  settings_.selected_entry = catalog_ && catalog_->Find(SelectedName()) ? SelectedName() : std::wstring();
+  const auto selected = tree_view_.SelectedName();
+  settings_.selected_entry = catalog_ && catalog_->Find(selected) ? selected : std::wstring();
   DestroyWindow(window_);
 }
 
@@ -592,9 +401,9 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
         case kEnterprise: LaunchSelected(domain::LaunchMode::enterprise); break; case kDesigner: LaunchSelected(domain::LaunchMode::designer); break;
         case kAddDatabase: AddDatabase(); break; case kAddGroup: AddGroup(); break; case kOpenList: OpenList(); break; case kOpenStandardList: OpenStandardList(); break;
         case kRefresh: {
-          const std::wstring selected = SelectedName();
+          const std::wstring selected = tree_view_.SelectedName();
           LoadCatalog();
-          if (!selected.empty()) SelectTreeItem(selected);
+          if (!selected.empty()) static_cast<void>(tree_view_.SelectItem(selected));
           break;
         }
         case kEdit: EditSelected(); break; case kCache: ClearSelectedCache(); break; case kClearRecent: ClearRecentBases(); break; case kShortcut: CreateShortcut(); break; case kOpenFolder: OpenSelectedFolder(); break; case kDelete: DeleteSelected(); break;
@@ -613,13 +422,15 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
         if (notification->code == NM_CUSTOMDRAW) return DrawTreeSearchMatches(reinterpret_cast<NMTVCUSTOMDRAW*>(lparam));
         if (notification->code == TVN_ITEMEXPANDINGW) {
           const auto* expanding = reinterpret_cast<NMTREEVIEWW*>(lparam);
-          if (expanding && TreeItemData(tree_, expanding->itemNew.hItem) == kCatalogRootItemData && expanding->action == TVE_COLLAPSE) return TRUE;
+          if (expanding && tree_view_.ItemData(expanding->itemNew.hItem) ==
+              TreeViewController::kCatalogRootItemData && expanding->action == TVE_COLLAPSE) return TRUE;
         }
         if (notification->code == TVN_SELCHANGEDW) { DisplaySelected(); return 0; }
         if (notification->code == TVN_GETINFOTIPW) {
           const auto* hint = reinterpret_cast<NMTVGETINFOTIPW*>(lparam);
-          if (!settings_.simple_mode && hint && hint->pszText && hint->cchTextMax > 0 && catalog_ && TreeItemData(tree_, hint->hItem) == 0) {
-            if (const auto* entry = catalog_->Find(TreeItemName(tree_, hint->hItem)); entry && entry->IsDatabase()) {
+          if (!settings_.simple_mode && hint && hint->pszText && hint->cchTextMax > 0 && catalog_ &&
+              tree_view_.ItemData(hint->hItem) == 0) {
+            if (const auto* entry = catalog_->Find(tree_view_.ItemName(hint->hItem)); entry && entry->IsDatabase()) {
               const auto& tags = TagsFor(catalog_state_.Read().tags, *entry);
               if (!tags.empty()) {
                 const std::wstring text = L"Теги: " + TagsText(tags);
@@ -722,7 +533,10 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       KillTimer(window, kBackgroundPollTimer);
       WINDOWPLACEMENT placement{sizeof(placement)};
       if (GetWindowPlacement(window, &placement)) { const RECT& rect = placement.rcNormalPosition; settings_.window_x = rect.left; settings_.window_y = rect.top; settings_.window_width = rect.right - rect.left; settings_.window_height = rect.bottom - rect.top; }
-      if (tree_ && IsWindow(tree_)) settings_.selected_entry = catalog_ && catalog_->Find(SelectedName()) ? SelectedName() : std::wstring();
+      if (tree_ && IsWindow(tree_)) {
+        const auto selected = tree_view_.SelectedName();
+        settings_.selected_entry = catalog_ && catalog_->Find(selected) ? selected : std::wstring();
+      }
       try { storage::SaveSettings(layout_, settings_); } catch (...) {}
       window_ = nullptr;
       PostQuitMessage(0); return 0;
@@ -741,7 +555,7 @@ void MainWindow::CreateControls() {
   SendMessageW(tag_filter_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Избранные"));
   SendMessageW(tag_filter_, CB_SETCURSEL, 0, 0);
   tree_ = CreateWindowExW(WS_EX_CLIENTEDGE, WC_TREEVIEWW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT | TVS_SHOWSELALWAYS | TVS_INFOTIP, 8, 74, 360, 420, window_, nullptr, instance_, nullptr);
-  TreeView_SetExtendedStyle(tree_, TVS_EX_DOUBLEBUFFER, TVS_EX_DOUBLEBUFFER);
+  tree_view_.Attach(tree_, instance_);
   details_title_ = CreateWindowW(L"STATIC", L"Выберите базу или группу", WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX,
       390, 49, 460, 26, window_, nullptr, instance_, nullptr);
   details_subtitle_ = CreateWindowW(L"STATIC", L"Сведения появятся здесь", WS_CHILD | WS_VISIBLE | SS_LEFT | SS_NOPREFIX,
@@ -769,25 +583,6 @@ void MainWindow::CreateControls() {
   if (details_title_font_) SendMessageW(details_title_, WM_SETFONT, reinterpret_cast<WPARAM>(details_title_font_), TRUE);
   if (details_subtitle_font_) SendMessageW(details_subtitle_, WM_SETFONT, reinterpret_cast<WPARAM>(details_subtitle_font_), TRUE);
 
-  tree_images_ = ImageList_Create(20, 20, ILC_COLOR32 | ILC_MASK, 6, 1);
-  if (tree_images_) {
-    bool complete = true;
-    const auto appendTreeIcon = [&](HICON icon) {
-      if (!icon || ImageList_AddIcon(tree_images_, icon) < 0) complete = false;
-      if (icon) DestroyIcon(icon);
-    };
-    for (const int resource : {IDI_TREE_FILE_DATABASE, IDI_TREE_SERVER_DATABASE}) {
-      appendTreeIcon(LoadResourceIcon(instance_, resource, 20));
-    }
-    HICON webIcon = CreateWebDatabaseIcon();
-    if (!webIcon) webIcon = LoadResourceIcon(instance_, IDI_TREE_SERVER_DATABASE, 20);
-    appendTreeIcon(webIcon);
-    for (const int resource : {IDI_TREE_FOLDER, IDI_ACTION_FAVORITE, IDI_ACTION_REFRESH}) {
-      appendTreeIcon(LoadResourceIcon(instance_, resource, 20));
-    }
-    if (complete) TreeView_SetImageList(tree_, tree_images_, TVSIL_NORMAL);
-    else { ImageList_Destroy(tree_images_); tree_images_ = nullptr; }
-  }
   enterprise_ = CreateWindowW(L"BUTTON", L"Предприятие (F3)", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 380, 292, 150, 30, window_, reinterpret_cast<HMENU>(kEnterprise), instance_, nullptr);
   designer_ = CreateWindowW(L"BUTTON", L"Конфигуратор (F4)", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 534, 292, 150, 30, window_, reinterpret_cast<HMENU>(kDesigner), instance_, nullptr);
   edit_ = CreateWindowW(L"BUTTON", L"Изменить", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_PUSHBUTTON, 688, 292, 105, 30, window_, reinterpret_cast<HMENU>(kEdit), instance_, nullptr);
@@ -926,7 +721,7 @@ void MainWindow::Layout(int width, int height) {
 }
 
 void MainWindow::LoadCatalog(bool report_error) {
-  const std::wstring selected = SelectedName();
+  const std::wstring selected = tree_view_.SelectedName();
   const bool hasInitialLaunch = initial_launch_id_.has_value();
   try {
     if (settings_.active_ibases.empty()) { if (const auto standard = storage::FindStandardIbases()) settings_.active_ibases = *standard; }
@@ -950,7 +745,7 @@ void MainWindow::LoadCatalog(bool report_error) {
     PopulateTree();
     if (!hasInitialLaunch) {
       const std::wstring& restore = selected.empty() ? settings_.selected_entry : selected;
-      if (!restore.empty()) SelectTreeItem(restore);
+      if (!restore.empty()) static_cast<void>(tree_view_.SelectItem(restore));
     }
   } catch (const std::exception& error) { logger_.Error(L"Ошибка загрузки: " + ibstart::utf::FromUtf8(error.what())); if (report_error) Message(window_, L"Не удалось загрузить список баз. Проверьте путь и кодировку UTF-8.", L"ИБ Старт", MB_OK | MB_ICONERROR); }
 }
@@ -1094,56 +889,21 @@ void MainWindow::ToggleFoldersFirstWhenSorting() {
     Message(window_, L"Не удалось сохранить настройку сортировки.", L"ИБ Старт", MB_OK | MB_ICONERROR);
   }
 }
-void MainWindow::AddTreeItems(const std::vector<catalog::TreeItem>& items, HTREEITEM parent, std::wstring_view filter,
-    const presentation::TreeTagFilter& tag_filter) {
-  if (!catalog_) return;
-  const auto& catalog_state = catalog_state_.Read();
-  for (const auto& item : items) {
-    if (!presentation::MatchesSearchFilter(*catalog_, item, filter, catalog_state.tags) ||
-        !presentation::MatchesTagFilter(*catalog_, item, tag_filter, catalog_state.tags, filter_favorites_)) continue;
-    TVINSERTSTRUCTW row{}; row.hParent = parent; row.hInsertAfter = TVI_LAST;
-    row.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE;
-    row.item.pszText = const_cast<wchar_t*>(item.name.c_str());
-    const auto* entry = catalog_ ? catalog_->Find(item.name) : nullptr;
-    row.item.iImage = row.item.iSelectedImage = item.database ? DatabaseTreeImage(entry) : kFolderImage;
-    const HTREEITEM handle = TreeView_InsertItem(tree_, &row);
-    if (!item.database) {
-      AddTreeItems(item.children, handle, filter, tag_filter);
-      if (!filter.empty()) TreeView_Expand(tree_, handle, TVE_EXPAND);
-    }
-  }
-}
 void MainWindow::PopulateTree() {
   if (!tree_) return;
-  wchar_t text[512]{}; GetWindowTextW(search_, text, 512); search_filter_ = text; const std::wstring_view filter = search_filter_; TreeView_DeleteAllItems(tree_);
+  wchar_t text[512]{};
+  GetWindowTextW(search_, text, static_cast<int>(std::size(text)));
+  search_filter_ = text;
   if (catalog_) {
-    const auto tag_filter = CurrentTagFilter();
-    const auto& catalog_state = catalog_state_.Read();
-    TVINSERTSTRUCTW catalogRoot{};
-    catalogRoot.hParent = TVI_ROOT;
-    catalogRoot.hInsertAfter = TVI_LAST;
-    catalogRoot.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE | TVIF_PARAM | TVIF_STATE;
-    catalogRoot.item.pszText = const_cast<wchar_t*>(kCatalogRootName);
-    catalogRoot.item.iImage = catalogRoot.item.iSelectedImage = kFolderImage;
-    catalogRoot.item.lParam = kCatalogRootItemData;
-    catalogRoot.item.stateMask = TVIS_EXPANDED;
-    catalogRoot.item.state = TVIS_EXPANDED;
-    const HTREEITEM catalogRootHandle = TreeView_InsertItem(tree_, &catalogRoot);
-    AddTreeItems(catalog_->Tree(), catalogRootHandle, filter, tag_filter);
-    if (catalogRootHandle) TreeView_Expand(tree_, catalogRootHandle, TVE_EXPAND);
-
-    if (!settings_.simple_mode) {
-      InsertSpecialTreeRoot(tree_, *catalog_, catalog_state, filter_favorites_, filter, tag_filter,
-          L"Избранное", catalog_state.favorites, kFavoriteImage, kFavoritesRootItemData);
-      const auto recent = presentation::CollectRecentDatabaseNames(*catalog_, catalog_state.history);
-      InsertSpecialTreeRoot(tree_, *catalog_, catalog_state, filter_favorites_, filter, tag_filter,
-          L"Недавние", recent, kRecentImage, kRecentRootItemData);
-    }
+    tree_view_.Populate(*catalog_, catalog_state_.Read(), filter_favorites_, search_filter_,
+        CurrentTagFilter(), settings_.simple_mode);
+  } else {
+    tree_view_.Clear();
   }
   if (initial_launch_id_ && catalog_) {
     auto wanted = *initial_launch_id_; initial_launch_id_.reset();
     for (const auto* entry : catalog_->Databases()) if (entry->ValueOr(L"ID", entry->name) == wanted) { wanted = entry->name; break; }
-    if (SelectTreeItem(wanted)) {
+    if (tree_view_.SelectItem(wanted)) {
       logger_.Info(L"Выбрана база по ярлыку: " + wanted);
       // During application startup the main window receives focus after WM_CREATE.
       // Posting this message makes the shortcut target the active tree row both for
@@ -1157,7 +917,7 @@ void MainWindow::PopulateTree() {
 }
 void MainWindow::PopulateTreeWithoutFlicker(std::wstring_view selected, bool select_catalog_root) {
   const bool canSuspendDrawing = tree_ && IsWindow(tree_);
-  const auto expansionStates = CaptureTreeExpansionStates(tree_);
+  const auto expansionStates = tree_view_.CaptureExpansionStates();
   if (canSuspendDrawing) SendMessageW(tree_, WM_SETREDRAW, FALSE, 0);
   const auto resumeDrawing = [&] {
     if (!canSuspendDrawing) return;
@@ -1166,9 +926,9 @@ void MainWindow::PopulateTreeWithoutFlicker(std::wstring_view selected, bool sel
   };
   try {
     PopulateTree();
-    RestoreTreeExpansionStates(tree_, expansionStates);
-    if (select_catalog_root) SelectCatalogRoot();
-    else if (!selected.empty()) SelectTreeItem(selected);
+    tree_view_.RestoreExpansionStates(expansionStates);
+    if (select_catalog_root) static_cast<void>(tree_view_.SelectCatalogRoot());
+    else if (!selected.empty()) static_cast<void>(tree_view_.SelectItem(selected));
   } catch (...) {
     resumeDrawing();
     throw;
@@ -1177,53 +937,8 @@ void MainWindow::PopulateTreeWithoutFlicker(std::wstring_view selected, bool sel
 }
 void MainWindow::RefreshRecentTreeBranch(std::wstring_view selected_recent) {
   if (!tree_ || !catalog_ || settings_.simple_mode) return;
-  const auto& catalog_state = catalog_state_.Read();
-  const auto recent = presentation::CollectRecentDatabaseNames(*catalog_, catalog_state.history);
-  const auto tag_filter = CurrentTagFilter();
-  const HTREEITEM previous_root = FindTopLevelTreeItem(tree_, kRecentRootItemData);
-  const bool previous_expanded = !previous_root ||
-      (TreeView_GetItemState(tree_, previous_root, TVIS_EXPANDED) & TVIS_EXPANDED) != 0;
-  const HTREEITEM first_visible = TreeView_GetNextItem(tree_, nullptr, TVGN_FIRSTVISIBLE);
-  const bool restore_first_visible = first_visible &&
-      TreeBranchData(tree_, first_visible) != kRecentRootItemData && selected_recent.empty();
-  const bool can_suspend_drawing = IsWindow(tree_);
-  if (can_suspend_drawing) SendMessageW(tree_, WM_SETREDRAW, FALSE, 0);
-  const auto resume_drawing = [&] {
-    if (!can_suspend_drawing) return;
-    SendMessageW(tree_, WM_SETREDRAW, TRUE, 0);
-    RedrawWindow(tree_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
-  };
-  try {
-    // Build the replacement before deleting the current branch so the tree's
-    // visible row count does not collapse and reset its vertical viewport.
-    const HTREEITEM replacement_root = InsertSpecialTreeRoot(tree_, *catalog_, catalog_state, filter_favorites_,
-        search_filter_, tag_filter, L"Недавние", recent, kRecentImage, kRecentRootItemData);
-    if (!replacement_root) {
-      resume_drawing();
-      return;
-    }
-
-    const HTREEITEM replacement_selection = selected_recent.empty() ? nullptr :
-        FindTreeItemByName(tree_, TreeView_GetChild(tree_, replacement_root), selected_recent);
-    if (!selected_recent.empty() && !replacement_selection) {
-      TreeView_DeleteItem(tree_, replacement_root);
-      resume_drawing();
-      return;
-    }
-    if (!previous_expanded && !replacement_selection) TreeView_Expand(tree_, replacement_root, TVE_COLLAPSE);
-    // Move the caret to the new recent item while the old one is still valid;
-    // deleting the old branch then cannot redirect selection to the catalog.
-    if (replacement_selection) TreeView_SelectItem(tree_, replacement_selection);
-    if (previous_root) TreeView_DeleteItem(tree_, previous_root);
-    if (replacement_selection) TreeView_EnsureVisible(tree_, replacement_selection);
-    else if (restore_first_visible) {
-      SendMessageW(tree_, TVM_SELECTITEM, TVGN_FIRSTVISIBLE, reinterpret_cast<LPARAM>(first_visible));
-    }
-  } catch (...) {
-    resume_drawing();
-    throw;
-  }
-  resume_drawing();
+  tree_view_.RefreshRecentBranch(*catalog_, catalog_state_.Read(), filter_favorites_, search_filter_,
+      CurrentTagFilter(), selected_recent);
 }
 LRESULT MainWindow::DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const {
   return presentation::DrawTreeSearchMatches(tree_, draw, catalog_ ? &*catalog_ : nullptr, settings_,
@@ -1271,15 +986,10 @@ const OwnerDrawMenuItem* MainWindow::FindMenuItem(ULONG_PTR item_data) const noe
   return file_menu_items_.Find(item_data);
 }
 
-std::wstring MainWindow::SelectedName() const {
-  const HTREEITEM selected = TreeView_GetSelection(tree_);
-  return TreeItemData(tree_, selected) == 0 ? TreeItemName(tree_, selected) : L"";
-}
-bool MainWindow::SelectedItemIsRecentRoot() const { return TreeItemData(tree_, TreeView_GetSelection(tree_)) == kRecentRootItemData; }
 void MainWindow::BeginTreeDrag(HTREEITEM item, POINT treePoint) {
-  if (!tree_ || !catalog_ || !item || TreeItemData(tree_, item) != 0) return;
+  if (!tree_ || !catalog_ || !item || tree_view_.ItemData(item) != 0) return;
   TreeView_SelectItem(tree_, item);
-  dragging_name_ = SelectedName();
+  dragging_name_ = tree_view_.SelectedName();
   if (dragging_name_.empty() || !catalog_->Find(dragging_name_)) { dragging_name_.clear(); return; }
   drag_image_ = TreeView_CreateDragImage(tree_, item);
   if (drag_image_) {
@@ -1308,11 +1018,11 @@ void MainWindow::UpdateTreeDrag(POINT windowPoint) {
     TreeView_HitTest(tree_, &hit);
     if (!hit.hItem) {
       toRoot = true;
-    } else if (TreeItemData(tree_, hit.hItem) == kCatalogRootItemData) {
+    } else if (tree_view_.ItemData(hit.hItem) == TreeViewController::kCatalogRootItemData) {
       toRoot = true;
       targetItem = hit.hItem;
-    } else if (!IsVirtualTreeBranch(tree_, hit.hItem)) {
-      targetName = TreeItemName(tree_, hit.hItem);
+    } else if (!tree_view_.IsVirtualBranch(hit.hItem)) {
+      targetName = tree_view_.ItemName(hit.hItem);
       const auto* target = catalog_->Find(targetName);
       if (!target || EqualNoCase(target->name, dragged->name)) targetName.clear();
       else {
@@ -1459,33 +1169,6 @@ void MainWindow::ShowDetailsContextMenu(POINT screen) {
   if (command == kCopyDetailValue) CopySelectedDetail(false);
   else if (command == kCopyDetailPair) CopySelectedDetail(true);
 }
-bool MainWindow::SelectTreeItem(std::wstring_view name) {
-  if (!tree_ || name.empty()) return false;
-  const auto find = [&](auto&& self, HTREEITEM item) -> HTREEITEM {
-    for (; item; item = TreeView_GetNextSibling(tree_, item)) {
-      wchar_t text[512]{}; TVITEMW row{}; row.mask = TVIF_TEXT; row.hItem = item; row.pszText = text; row.cchTextMax = 512;
-      if (TreeItemData(tree_, item) == 0 && TreeView_GetItem(tree_, &row) && name == text) return item;
-      if (const auto child = self(self, TreeView_GetChild(tree_, item))) return child;
-    }
-    return nullptr;
-  };
-  const auto item = find(find, TreeView_GetRoot(tree_));
-  if (!item) return false;
-  TreeView_SelectItem(tree_, item);
-  TreeView_EnsureVisible(tree_, item);
-  return true;
-}
-bool MainWindow::SelectCatalogRoot() {
-  if (!tree_) return false;
-  for (HTREEITEM item = TreeView_GetRoot(tree_); item; item = TreeView_GetNextSibling(tree_, item)) {
-    if (TreeItemData(tree_, item) != kCatalogRootItemData) continue;
-    TreeView_SelectItem(tree_, item);
-    TreeView_EnsureVisible(tree_, item);
-    return true;
-  }
-  return false;
-}
-
 void MainWindow::ShowTreeContextMenu(POINT screen) {
   if (!tree_ || !catalog_) return;
   context_menu_items_.Clear();
@@ -1507,12 +1190,12 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
     else TreeView_SelectItem(tree_, nullptr);
   }
 
-  const auto name = SelectedName();
+  const auto name = tree_view_.SelectedName();
   const auto selectedItem = TreeView_GetSelection(tree_);
-  const LPARAM selectedData = TreeItemData(tree_, selectedItem);
-  const bool catalogRoot = selectedData == kCatalogRootItemData;
+  const LPARAM selectedData = tree_view_.ItemData(selectedItem);
+  const bool catalogRoot = selectedData == TreeViewController::kCatalogRootItemData;
   const bool specialRoot = selectedData != 0 && !catalogRoot;
-  const bool recentRoot = SelectedItemIsRecentRoot();
+  const bool recentRoot = tree_view_.SelectedItemIsRecentRoot();
   const auto* entry = specialRoot ? nullptr : catalog_->Find(name);
   const bool database = entry && entry->IsDatabase();
   const bool web = database && catalog::Catalog::IsWebConnection(entry->ValueOr(L"Connect"));
@@ -1643,12 +1326,14 @@ void MainWindow::DisplaySelected() {
     return;
   }
   ListView_DeleteAllItems(details_);
-  const auto name = SelectedName();
-  const LPARAM selectedData = TreeItemData(tree_, TreeView_GetSelection(tree_));
+  const auto name = tree_view_.SelectedName();
+  const LPARAM selectedData = tree_view_.ItemData(TreeView_GetSelection(tree_));
   const auto* entry = catalog_ && selectedData == 0 ? catalog_->Find(name) : nullptr;
   if (!entry) {
-    SetWindowTextW(details_title_, selectedData == kCatalogRootItemData ? kCatalogRootName : name.empty() ? L"Выберите базу или группу" : name.c_str());
-    SetWindowTextW(details_subtitle_, selectedData == kCatalogRootItemData ? L"Корневой уровень списка баз" : name.empty() ? L"Сведения появятся здесь" : L"Служебный раздел списка");
+    SetWindowTextW(details_title_, selectedData == TreeViewController::kCatalogRootItemData
+        ? TreeViewController::kCatalogRootName.data() : name.empty() ? L"Выберите базу или группу" : name.c_str());
+    SetWindowTextW(details_subtitle_, selectedData == TreeViewController::kCatalogRootItemData
+        ? L"Корневой уровень списка баз" : name.empty() ? L"Сведения появятся здесь" : L"Служебный раздел списка");
     EnableWindow(enterprise_, FALSE); EnableWindow(designer_, FALSE); EnableWindow(edit_, FALSE);
     EnableWindow(cache_, FALSE); EnableWindow(shortcut_, FALSE); EnableWindow(remove_, FALSE);
     UpdateConnection();
@@ -1719,8 +1404,9 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
     SetStatus(L"Запуск базы недоступен до завершения операции с кэшем.");
     return;
   }
-  if (!catalog_) return; const auto name = SelectedName(); const auto* entry = catalog_->Find(name); if (!entry || !entry->IsDatabase()) { Message(window_, L"Выберите информационную базу."); return; }
-  const bool selectedFromRecent = TreeBranchData(tree_, TreeView_GetSelection(tree_)) == kRecentRootItemData;
+  if (!catalog_) return; const auto name = tree_view_.SelectedName(); const auto* entry = catalog_->Find(name); if (!entry || !entry->IsDatabase()) { Message(window_, L"Выберите информационную базу."); return; }
+  const bool selectedFromRecent = tree_view_.BranchData(TreeView_GetSelection(tree_)) ==
+      TreeViewController::kRecentRootItemData;
   bool launchSucceeded = false;
   try {
     const auto database = catalog_->DatabaseFor(name);
@@ -1802,7 +1488,7 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
 
 std::wstring MainWindow::NextName(std::wstring_view stem) const { for (unsigned number = 1;; ++number) { const auto candidate = std::wstring(stem) + L" " + std::to_wstring(number); if (!catalog_ || !catalog_->Find(candidate)) return candidate; } }
 void MainWindow::OpenSelectedFolder() {
-  if (!catalog_) return; const auto name = SelectedName(); const auto* entry = catalog_->Find(name); if (!entry || !entry->IsDatabase()) return;
+  if (!catalog_) return; const auto name = tree_view_.SelectedName(); const auto* entry = catalog_->Find(name); if (!entry || !entry->IsDatabase()) return;
   const auto folder = connection::ValueOrEmpty(entry->ValueOr(L"Connect"), L"File");
   if (folder.empty()) return;
   std::error_code error;
@@ -1840,7 +1526,7 @@ void MainWindow::AddDatabase(std::wstring parent) {
   }
   if (!SaveCatalog(std::move(candidate))) return;
   PopulateTree();
-  SelectTreeItem(entered->name);
+  static_cast<void>(tree_view_.SelectItem(entered->name));
 }
 void MainWindow::AddGroup(std::wstring parent) {
   if (settings_.simple_mode || !catalog_) return;
@@ -1852,12 +1538,12 @@ void MainWindow::AddGroup(std::wstring parent) {
   } else {
     if (!SaveCatalog(std::move(candidate))) return;
     PopulateTree();
-    SelectTreeItem(*name);
+    static_cast<void>(tree_view_.SelectItem(*name));
   }
 }
 void MainWindow::EditSelected() {
   if (!catalog_) return;
-  const auto selected = SelectedName();
+  const auto selected = tree_view_.SelectedName();
   auto* entry = catalog_->Find(selected);
   if (!entry) return;
   if (settings_.simple_mode && !entry->IsDatabase()) return;
@@ -1872,7 +1558,7 @@ void MainWindow::EditSelected() {
     const auto renamed = TrimText(*changed);
     if (!SaveCatalog(std::move(candidate))) return;
     PopulateTree();
-    SelectTreeItem(renamed);
+    static_cast<void>(tree_view_.SelectItem(renamed));
     return;
   }
   const auto previousTagId = TagId(*entry);
@@ -1899,11 +1585,11 @@ void MainWindow::EditSelected() {
   }
   RefreshTagFilter();
   PopulateTree();
-  SelectTreeItem(edited->name);
+  static_cast<void>(tree_view_.SelectItem(edited->name));
 }
 void MainWindow::EditSelectedTags() {
   if (settings_.simple_mode || !catalog_) return;
-  const auto name = SelectedName();
+  const auto name = tree_view_.SelectedName();
   const auto* entry = catalog_->Find(name);
   if (!entry || !entry->IsDatabase()) {
     Message(window_, L"Выберите информационную базу для изменения тегов.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
@@ -1924,7 +1610,7 @@ void MainWindow::EditSelectedTags() {
   }
   RefreshTagFilter();
   PopulateTree();
-  SelectTreeItem(name);
+  static_cast<void>(tree_view_.SelectItem(name));
   SetStatus(values.empty() ? L"Теги базы очищены." : L"Теги базы сохранены: " + TagsText(values));
 }
 void MainWindow::ConfigureTagColors() {
@@ -1945,7 +1631,7 @@ void MainWindow::ConfigureTagColors() {
 void MainWindow::AddTagToSelected(std::wstring tag) {
   if (settings_.simple_mode || !catalog_) return;
   tag = TrimText(tag);
-  const auto name = SelectedName();
+  const auto name = tree_view_.SelectedName();
   const auto* entry = catalog_->Find(name);
   if (tag.empty() || !entry || !entry->IsDatabase()) return;
   try {
@@ -1960,7 +1646,7 @@ void MainWindow::AddTagToSelected(std::wstring tag) {
   }
   RefreshTagFilter();
   PopulateTree();
-  SelectTreeItem(name);
+  static_cast<void>(tree_view_.SelectItem(name));
   SetStatus(L"Тег добавлен: " + TagsText(TagsFor(catalog_state_.Read().tags, *entry)));
 }
 void MainWindow::AddNewTagToSelected() {
@@ -1975,7 +1661,7 @@ void MainWindow::AddNewTagToSelected() {
 }
 void MainWindow::DeleteSelected() {
   if (!catalog_) return;
-  const auto name = SelectedName();
+  const auto name = tree_view_.SelectedName();
   const auto* entry = catalog_->Find(name);
   if (!entry) return;
   if (settings_.simple_mode && !entry->IsDatabase()) return;
@@ -1999,7 +1685,7 @@ void MainWindow::DeleteSelected() {
 }
 void MainWindow::MoveSelected(int offset) {
   if (!catalog_) return;
-  const auto name = SelectedName();
+  const auto name = tree_view_.SelectedName();
   auto candidate = *catalog_;
   if (!candidate.MoveBy(name, offset)) {
     SetStatus(offset < 0 ? L"Элемент уже находится первым в группе." : L"Элемент уже находится последним в группе.");
@@ -2010,7 +1696,7 @@ void MainWindow::MoveSelected(int offset) {
 }
 void MainWindow::MoveSelectedToFolder() {
   if (!catalog_) return;
-  const auto name = SelectedName();
+  const auto name = tree_view_.SelectedName();
   const auto* entry = catalog_->Find(name);
   if (!entry) {
     Message(window_, L"Выберите базу или группу для перемещения.", L"Перемещение в папку", MB_OK | MB_ICONWARNING);
@@ -2042,7 +1728,7 @@ void MainWindow::ClearSelectedCache() {
     return;
   }
   try {
-    const auto database = catalog_->DatabaseFor(SelectedName());
+    const auto database = catalog_->DatabaseFor(tree_view_.SelectedName());
     cache_operation_.StartFinding(database, window_, kCacheOperationFinishedMessage);
     DisplaySelected();
     SetStatus(L"Анализируем размер кэша…");
@@ -2072,7 +1758,7 @@ void MainWindow::ClearRecentBases() {
     Message(window_, L"Не удалось очистить список недавних баз.", L"ИБ Старт", MB_OK | MB_ICONERROR);
   }
 }
-void MainWindow::CreateShortcut() { if (!catalog_) return; try { const auto database = catalog_->DatabaseFor(SelectedName()); shell::CreateDesktopShortcut(executable_, database.id, database.name); Message(window_, L"Ярлык создан на рабочем столе."); } catch (...) { Message(window_, L"Не удалось создать ярлык.", L"ИБ Старт", MB_OK | MB_ICONERROR); } }
+void MainWindow::CreateShortcut() { if (!catalog_) return; try { const auto database = catalog_->DatabaseFor(tree_view_.SelectedName()); shell::CreateDesktopShortcut(executable_, database.id, database.name); Message(window_, L"Ярлык создан на рабочем столе."); } catch (...) { Message(window_, L"Не удалось создать ярлык.", L"ИБ Старт", MB_OK | MB_ICONERROR); } }
 void MainWindow::RefreshFileMenu() {
   if (!file_menu_) return;
   while (GetMenuItemCount(file_menu_) > 0) {
@@ -2264,7 +1950,7 @@ void MainWindow::UpdateConnection() {
     SetWindowTextW(connection_, L"");
     return;
   }
-  const auto* entry = catalog_->Find(SelectedName());
+  const auto* entry = catalog_->Find(tree_view_.SelectedName());
   if (!entry || !entry->IsDatabase()) {
     SetWindowTextW(connection_, L"");
     return;
@@ -2275,7 +1961,7 @@ void MainWindow::UpdateConnection() {
 void MainWindow::SetStatus(std::wstring text) { if (status_) SendMessageW(status_, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(text.c_str())); }
 std::wstring MainWindow::CatalogStatistics() const { return L"Баз: " + std::to_wstring(catalog_ ? catalog_->Databases().size() : 0) + L" | Платформ: " + std::to_wstring(platforms_.size()); }
 void MainWindow::SetSimpleMode(bool enabled) {
-  const std::wstring selected = SelectedName();
+  const std::wstring selected = tree_view_.SelectedName();
   settings_.simple_mode = enabled;
   const int visible = enabled ? SW_HIDE : SW_SHOW;
   for (const HWND control : {tag_filter_label_, tag_filter_, details_title_, details_subtitle_, details_, status_,
@@ -2295,7 +1981,7 @@ void MainWindow::SetSimpleMode(bool enabled) {
   RefreshFileMenu();
   RefreshMainMenuBar();
   PopulateTree();
-  if (!selected.empty()) SelectTreeItem(selected);
+  if (!selected.empty()) static_cast<void>(tree_view_.SelectItem(selected));
   DisplaySelected();
   RECT client{};
   if (GetClientRect(window_, &client)) Layout(client.right - client.left, client.bottom - client.top);
@@ -2303,7 +1989,7 @@ void MainWindow::SetSimpleMode(bool enabled) {
 }
 void MainWindow::ToggleFavorite() {
   if (!catalog_) return;
-  const auto name = SelectedName();
+  const auto name = tree_view_.SelectedName();
   const auto* entry = catalog_->Find(name);
   if (!entry || !entry->IsDatabase()) {
     Message(window_, L"Выберите базу для добавления в избранное.");
@@ -2330,7 +2016,7 @@ void MainWindow::LaunchFavorite(size_t slot) {
   const auto name = favorites[slot];
   SetWindowTextW(search_, L"");
   PopulateTree();
-  if (SelectTreeItem(name)) LaunchSelected(domain::LaunchMode::enterprise);
+  if (tree_view_.SelectItem(name)) LaunchSelected(domain::LaunchMode::enterprise);
 }
 void MainWindow::CheckForUpdates() {
   if (update_check_.active()) {

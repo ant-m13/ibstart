@@ -7,6 +7,7 @@
 #include "core/v8i/v8i_file_store.hpp"
 #include "ui/cache_clear_operation.hpp"
 #include "ui/owner_draw_menu.hpp"
+#include "ui/tree_view_controller.hpp"
 #include "ui/update_check_operation.hpp"
 
 #include <Windows.h>
@@ -41,8 +42,6 @@ class MainWindow {
   void PopulateTree();
   void PopulateTreeWithoutFlicker(std::wstring_view selected = {}, bool select_catalog_root = false);
   void RefreshRecentTreeBranch(std::wstring_view selected_recent = {});
-  void AddTreeItems(const std::vector<catalog::TreeItem>& items, HTREEITEM parent, std::wstring_view filter,
-      const presentation::TreeTagFilter& tag_filter);
   void SortFolder(std::wstring_view folder, catalog::SortDirection direction);
   void ToggleFoldersFirstWhenSorting();
   void RefreshTagFilter();
@@ -52,15 +51,11 @@ class MainWindow {
   bool MeasureContextMenuItem(MEASUREITEMSTRUCT* measure) const;
   bool DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const;
   [[nodiscard]] const OwnerDrawMenuItem* FindMenuItem(ULONG_PTR item_data) const noexcept;
-  [[nodiscard]] std::wstring SelectedName() const;
-  [[nodiscard]] bool SelectedItemIsRecentRoot() const;
   void BeginTreeDrag(HTREEITEM item, POINT tree_point);
   void UpdateTreeDrag(POINT window_point);
   void EndTreeDrag(POINT window_point);
   void CancelTreeDrag();
   [[nodiscard]] std::optional<size_t> CatalogPosition(std::wstring_view name, std::wstring_view parent) const;
-  bool SelectTreeItem(std::wstring_view name);
-  bool SelectCatalogRoot();
   void ShowTreeContextMenu(POINT screen);
   void ShowDetailsContextMenu(POINT screen);
   void CopySelectedDetail(bool include_name);
@@ -130,7 +125,6 @@ class MainWindow {
   HFONT details_title_font_{};
   HFONT details_subtitle_font_{};
   HFONT details_key_font_{};
-  HIMAGELIST tree_images_{};
   HIMAGELIST drag_image_{};
   HMENU menu_{};
   HMENU file_menu_{};
@@ -152,6 +146,7 @@ class MainWindow {
   std::vector<std::wstring> filter_favorites_;
   std::optional<std::wstring> initial_launch_id_;
   bool suppress_search_refresh_{false};
+  TreeViewController tree_view_;
   background::UpdateCheckOperation update_check_;
   background::CacheClearOperation cache_operation_;
   std::wstring search_filter_;
