@@ -85,7 +85,8 @@ class MainWindow {
   void OpenList();
   void OpenStandardList();
   void OpenRecentList(size_t index);
-  void RememberRecentList(const std::filesystem::path& path);
+  bool ActivateCatalog(const std::filesystem::path& path);
+  static void RememberRecentList(storage::Settings& settings, const std::filesystem::path& path);
   void RefreshFileMenu();
   void RefreshMainMenuBar();
   void ToggleTagDisplay();

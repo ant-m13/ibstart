@@ -1996,7 +1996,7 @@ bool MainWindow::SaveCatalog(catalog::Catalog candidate) {
   catalog_ = std::move(candidate);
   bool settingsSaved = true;
   try {
-    RememberRecentList(settings_.active_ibases);
+    RememberRecentList(settings_, settings_.active_ibases);
     storage::SaveSettings(layout_, settings_);
   } catch (const std::exception& error) {
     settingsSaved = false;
@@ -3106,14 +3106,59 @@ void MainWindow::RefreshMainMenuBar() {
   SetMenu(window_, menu_);
   DrawMenuBar(window_);
 }
-void MainWindow::RememberRecentList(const std::filesystem::path& path) {
+void MainWindow::RememberRecentList(storage::Settings& settings, const std::filesystem::path& path) {
   if (path.empty()) return;
-  for (auto it = settings_.recent_ibases.begin(); it != settings_.recent_ibases.end();) {
-    if (EqualNoCase(it->wstring(), path.wstring())) it = settings_.recent_ibases.erase(it);
+  for (auto it = settings.recent_ibases.begin(); it != settings.recent_ibases.end();) {
+    if (EqualNoCase(it->wstring(), path.wstring())) it = settings.recent_ibases.erase(it);
     else ++it;
   }
-  settings_.recent_ibases.insert(settings_.recent_ibases.begin(), path);
-  if (settings_.recent_ibases.size() > 9) settings_.recent_ibases.resize(9);
+  settings.recent_ibases.insert(settings.recent_ibases.begin(), path);
+  if (settings.recent_ibases.size() > 9) settings.recent_ibases.resize(9);
+}
+bool MainWindow::ActivateCatalog(const std::filesystem::path& path) {
+  std::optional<v8i::V8iFileStore> loadedStore;
+  std::optional<catalog::Catalog> loadedCatalog;
+  std::vector<domain::PlatformInstallation> loadedPlatforms;
+  auto loadedSettings = settings_;
+  try {
+    loadedStore.emplace(path);
+    loadedCatalog.emplace(loadedStore->Read());
+    loadedPlatforms = platform::Discover(loadedSettings.platform_search_paths);
+    loadedSettings.active_ibases = path;
+    loadedSettings.selected_entry.clear();
+    RememberRecentList(loadedSettings, path);
+  } catch (const std::exception& error) {
+    logger_.Error(L"Ошибка загрузки списка " + path.wstring() + L": " + ibstart::utf::FromUtf8(error.what()));
+    Message(window_, L"Не удалось открыть выбранный список баз. Текущий список и активный путь не изменены. Проверьте формат и кодировку UTF-8.",
+        L"ИБ Старт", MB_OK | MB_ICONERROR);
+    return false;
+  }
+
+  store_ = std::move(loadedStore);
+  catalog_ = std::move(loadedCatalog);
+  platforms_ = std::move(loadedPlatforms);
+  settings_ = std::move(loadedSettings);
+  TreeView_SelectItem(tree_, nullptr);
+
+  try {
+    storage::SaveSettings(layout_, settings_);
+  } catch (const std::exception& error) {
+    logger_.Error(L"Список открыт, но активный путь не сохранён в настройках: " + ibstart::utf::FromUtf8(error.what()));
+    Message(window_, L"Список открыт, но сохранить его как активный не удалось. После перезапуска может открыться предыдущий список.",
+        L"ИБ Старт", MB_OK | MB_ICONWARNING);
+  }
+  try {
+    static_cast<void>(catalog_state_.Reload());
+  } catch (const std::exception& error) {
+    logger_.Error(L"Список открыт, но локальные теги и история не перечитаны: " + ibstart::utf::FromUtf8(error.what()));
+  }
+  RefreshTagFilter();
+  PopulateTree();
+  RefreshFileMenu();
+  DrawMenuBar(window_);
+  SetStatus(path.wstring() + L" | " + CatalogStatistics());
+  logger_.Info(L"Загружен список баз: " + path.wstring() + L" | " + CatalogStatistics());
+  return true;
 }
 void MainWindow::OpenList() {
   if (settings_.simple_mode) return;
@@ -3126,14 +3171,7 @@ void MainWindow::OpenList() {
   dialog.nMaxFile = MAX_PATH;
   dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
   if (!GetOpenFileNameW(&dialog)) return;
-  settings_.active_ibases = filename;
-  settings_.selected_entry.clear();
-  TreeView_SelectItem(tree_, nullptr);
-  RememberRecentList(settings_.active_ibases);
-  storage::SaveSettings(layout_, settings_);
-  RefreshFileMenu();
-  DrawMenuBar(window_);
-  LoadCatalog();
+  static_cast<void>(ActivateCatalog(filename));
 }
 void MainWindow::OpenStandardList() {
   const auto standard = storage::FindStandardIbases();
@@ -3141,35 +3179,29 @@ void MainWindow::OpenStandardList() {
     Message(window_, L"Стандартный файл ibases.v8i не найден. Откройте список вручную.", L"Список баз", MB_OK | MB_ICONINFORMATION);
     return;
   }
-  settings_.active_ibases = *standard;
-  settings_.selected_entry.clear();
-  TreeView_SelectItem(tree_, nullptr);
-  RememberRecentList(*standard);
-  storage::SaveSettings(layout_, settings_);
-  RefreshFileMenu();
-  DrawMenuBar(window_);
-  LoadCatalog();
+  static_cast<void>(ActivateCatalog(*standard));
 }
 void MainWindow::OpenRecentList(size_t index) {
   if (index >= settings_.recent_ibases.size()) return;
   const auto path = settings_.recent_ibases[index];
   std::error_code error;
   if (!std::filesystem::is_regular_file(path, error) || error) {
-    settings_.recent_ibases.erase(settings_.recent_ibases.begin() + static_cast<std::ptrdiff_t>(index));
-    storage::SaveSettings(layout_, settings_);
+    auto updatedSettings = settings_;
+    updatedSettings.recent_ibases.erase(updatedSettings.recent_ibases.begin() + static_cast<std::ptrdiff_t>(index));
+    try {
+      storage::SaveSettings(layout_, updatedSettings);
+    } catch (const std::exception& exception) {
+      logger_.Error(L"Недоступный список не удалось удалить из истории: " + ibstart::utf::FromUtf8(exception.what()));
+      Message(window_, L"Список больше не доступен, но удалить его из истории не удалось.", L"Список баз", MB_OK | MB_ICONWARNING);
+      return;
+    }
+    settings_ = std::move(updatedSettings);
     RefreshFileMenu();
     DrawMenuBar(window_);
     Message(window_, L"Этот список больше не доступен. Он удалён из истории.", L"Список баз", MB_OK | MB_ICONWARNING);
     return;
   }
-  settings_.active_ibases = path;
-  settings_.selected_entry.clear();
-  TreeView_SelectItem(tree_, nullptr);
-  RememberRecentList(path);
-  storage::SaveSettings(layout_, settings_);
-  RefreshFileMenu();
-  DrawMenuBar(window_);
-  LoadCatalog();
+  static_cast<void>(ActivateCatalog(path));
 }
 void MainWindow::ToggleTagDisplay() {
   if (settings_.simple_mode) return;
