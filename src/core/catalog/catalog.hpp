@@ -3,6 +3,7 @@
 #include "core/domain/model.hpp"
 #include "core/v8i/v8i_document.hpp"
 
+#include <functional>
 #include <map>
 #include <optional>
 #include <string>
@@ -61,11 +62,12 @@ class Catalog {
 
  private:
   struct CaseInsensitiveLess {
-    bool operator()(const std::wstring& left, const std::wstring& right) const noexcept;
+    using is_transparent = void;
+    bool operator()(std::wstring_view left, std::wstring_view right) const noexcept;
   };
   struct LookupIndex {
     std::map<std::wstring, size_t, CaseInsensitiveLess> by_name;
-    std::map<std::wstring, size_t> by_id;
+    std::map<std::wstring, size_t, std::less<>> by_id;
   };
 
   void EnsureLookup() const;
