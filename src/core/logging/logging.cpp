@@ -48,7 +48,9 @@ void Logger::Prune() {
     if (!error && item.is_regular_file() && item.path().extension() == L".log") files.push_back(item.path());
   }
   std::sort(files.begin(), files.end(), [](const auto& left, const auto& right) { return left.filename() > right.filename(); });
-  for (size_t index = 10; index < files.size(); ++index) std::filesystem::remove(files[index], error);
+  // path_ is created lazily by the first Write.  Keep room for that current
+  // file so the documented ten-log limit is not exceeded after startup.
+  for (size_t index = 9; index < files.size(); ++index) std::filesystem::remove(files[index], error);
 }
 
 void Logger::Write(std::wstring_view level, std::wstring_view message) {

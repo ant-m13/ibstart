@@ -616,6 +616,22 @@ void TestSecretMasking() {
   CHECK(masked.find(L"s3cret") == std::wstring::npos); CHECK(masked.find(L"abc") == std::wstring::npos); CHECK(masked.find(L"xyz") == std::wstring::npos); CHECK(masked.find(L"hunter2") == std::wstring::npos); CHECK(masked.find(L"db-secret") == std::wstring::npos); CHECK(masked.find(L"admin") != std::wstring::npos);
 }
 
+void TestLogPruning() {
+  const auto directory = Temp(L"log-pruning");
+  for (int index = 0; index < 10; ++index) {
+    WriteBytes(directory / (L"ibstart_20260101_0000" + std::to_wstring(index) + L".log"), "old");
+  }
+  ibstart::logging::Logger logger(directory);
+  logger.Info(L"new log entry");
+  size_t logs = 0;
+  for (const auto& item : std::filesystem::directory_iterator(directory)) {
+    if (item.is_regular_file() && item.path().extension() == L".log") ++logs;
+  }
+  CHECK(logs <= 10);
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
 void TestCacheSizeFormatting() {
   CHECK(ibstart::cache::FormatSize(0) == L"0 Б");
   CHECK(ibstart::cache::FormatSize(1023) == L"1023 Б");
@@ -902,6 +918,7 @@ int wmain() {
   run(L"StandardFolderPaths", TestStandardFolderPaths);
   run(L"FileBaseScanRegistration", TestFileBaseScanRegistration);
   run(L"SecretMasking", TestSecretMasking);
+  run(L"LogPruning", TestLogPruning);
   run(L"CacheSizeFormatting", TestCacheSizeFormatting);
   run(L"CacheRejectsLicenseDescendants", TestCacheRejectsLicenseDescendants);
   run(L"PortableMode", TestPortableMode);
