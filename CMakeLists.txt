@@ -49,6 +49,7 @@ add_library(ibstart_core STATIC
   src/core/connection/connection_string.cpp
   src/core/catalog/catalog.cpp
   src/core/catalog/catalog_metadata_service.cpp
+  src/core/catalog/catalog_session.cpp
   src/core/v8i/v8i_document.cpp
   src/core/v8i/v8i_file_store.cpp
   src/core/launcher/command_builder.cpp

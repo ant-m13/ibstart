@@ -14,7 +14,6 @@
 #include "core/domain/utf.hpp"
 #include "core/launcher/command_builder.hpp"
 #include "core/launcher/process_launcher.hpp"
-#include "core/platform/platform_discovery.hpp"
 #include "core/shell/shortcut.hpp"
 #include "core/update/update_service.hpp"
 
@@ -633,18 +632,16 @@ void MainWindow::LoadCatalog(bool report_error) {
   const bool hasInitialLaunch = initial_launch_id_.has_value();
   try {
     if (settings_.active_ibases.empty()) { if (const auto standard = storage::FindStandardIbases()) settings_.active_ibases = *standard; }
-    auto discoveredPlatforms = platform::Discover(settings_.platform_search_paths);
-    if (settings_.active_ibases.empty() || !std::filesystem::exists(settings_.active_ibases)) {
-      catalog_.emplace();
+    auto session = catalog::LoadSession(settings_.active_ibases, settings_.platform_search_paths);
+    if (!session.loaded) {
+      catalog_ = std::move(session.catalog);
       store_.reset();
-      platforms_ = std::move(discoveredPlatforms);
+      platforms_ = std::move(session.platforms);
       SetStatus(L"Список ibases.v8i не найден — выберите файл или добавьте базу. | " + CatalogStatistics());
     } else {
-      v8i::V8iFileStore loadedStore(settings_.active_ibases);
-      catalog::Catalog loadedCatalog(loadedStore.Read());
-      store_ = std::move(loadedStore);
-      catalog_ = std::move(loadedCatalog);
-      platforms_ = std::move(discoveredPlatforms);
+      store_ = std::move(session.store);
+      catalog_ = std::move(session.catalog);
+      platforms_ = std::move(session.platforms);
       SetStatus(settings_.active_ibases.wstring() + L" | " + CatalogStatistics());
       logger_.Info(L"Загружен список баз: " + settings_.active_ibases.wstring() + L" | " + CatalogStatistics());
     }
@@ -1443,14 +1440,11 @@ void MainWindow::RememberRecentList(storage::Settings& settings, const std::file
   if (settings.recent_ibases.size() > 9) settings.recent_ibases.resize(9);
 }
 bool MainWindow::ActivateCatalog(const std::filesystem::path& path) {
-  std::optional<v8i::V8iFileStore> loadedStore;
-  std::optional<catalog::Catalog> loadedCatalog;
-  std::vector<domain::PlatformInstallation> loadedPlatforms;
   auto loadedSettings = settings_;
+  std::optional<catalog::CatalogSession> loadedSession;
   try {
-    loadedStore.emplace(path);
-    loadedCatalog.emplace(loadedStore->Read());
-    loadedPlatforms = platform::Discover(loadedSettings.platform_search_paths);
+    loadedSession.emplace(catalog::LoadSession(path, loadedSettings.platform_search_paths));
+    if (!loadedSession->loaded) throw std::runtime_error("The selected ibases.v8i file is no longer available.");
     loadedSettings.active_ibases = path;
     loadedSettings.selected_entry.clear();
     RememberRecentList(loadedSettings, path);
@@ -1461,9 +1455,9 @@ bool MainWindow::ActivateCatalog(const std::filesystem::path& path) {
     return false;
   }
 
-  store_ = std::move(loadedStore);
-  catalog_ = std::move(loadedCatalog);
-  platforms_ = std::move(loadedPlatforms);
+  store_ = std::move(loadedSession->store);
+  catalog_ = std::move(loadedSession->catalog);
+  platforms_ = std::move(loadedSession->platforms);
   settings_ = std::move(loadedSettings);
   TreeView_SelectItem(tree_, nullptr);
 
