@@ -72,7 +72,7 @@ constexpr UINT kCacheOperationFinishedMessage = WM_APP + 26;
 constexpr int kMinimumWindowWidth = 940;
 constexpr int kMinimumSimpleWindowWidth = 520;
 constexpr int kMinimumWindowHeight = 460;
-enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddDatabase, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kCheckForUpdates, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kCopyDetailValue, kCopyDetailPair, kEditTags, kConfigureTagColors, kSortAscending, kSortDescending, kToggleFoldersFirstWhenSorting, kMoveToFolder, kOpenStandardList, kShowTagsInList, kNewTagForSelected, kFavorite1 = 200 };
+enum Command : int { kEnterprise = 100, kDesigner, kEdit, kCache, kShortcut, kDelete, kAddDatabase, kAddGroup, kOpenList, kRefresh, kSimpleMode, kToggleFavorite, kFocusSearch, kCheckForUpdates, kAbout, kMoveUp, kMoveDown, kOpenFolder, kClearRecent, kCopyDetailValue, kCopyDetailPair, kEditTags, kConfigureTagColors, kSortAscending, kSortDescending, kToggleFoldersFirstWhenSorting, kMoveToFolder, kOpenStandardList, kShowTagsInList, kNewTagForSelected, kExit, kFavorite1 = 200 };
 constexpr UINT kRecentList1 = 300;
 constexpr UINT kQuickTag1 = 400;
 constexpr UINT kTagsContextMenu = 250;
@@ -1667,7 +1667,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
         }
         case kEdit: EditSelected(); break; case kCache: ClearSelectedCache(); break; case kClearRecent: ClearRecentBases(); break; case kShortcut: CreateShortcut(); break; case kOpenFolder: OpenSelectedFolder(); break; case kDelete: DeleteSelected(); break;
         case kCopyDetailValue: CopySelectedDetail(false); break; case kCopyDetailPair: CopySelectedDetail(true); break; case kEditTags: EditSelectedTags(); break; case kConfigureTagColors: ConfigureTagColors(); break;
-        case kSimpleMode: SetSimpleMode(!settings_.simple_mode); break; case kToggleFavorite: ToggleFavorite(); break; case kShowTagsInList: ToggleTagDisplay(); break; case kFocusSearch: SetFocus(search_); break; case kCheckForUpdates: CheckForUpdates(); break; case kAbout: ShowAbout(); break;
+        case kSimpleMode: SetSimpleMode(!settings_.simple_mode); break; case kToggleFavorite: ToggleFavorite(); break; case kShowTagsInList: ToggleTagDisplay(); break; case kFocusSearch: SetFocus(search_); break; case kCheckForUpdates: CheckForUpdates(); break; case kAbout: ShowAbout(); break; case kExit: SendMessageW(window_, WM_CLOSE, 0, 0); break;
         case kMoveUp: MoveSelected(-1); break; case kMoveDown: MoveSelected(1); break; case kMoveToFolder: MoveSelectedToFolder(); break; case kNewTagForSelected: AddNewTagToSelected(); break;
         case kToggleFoldersFirstWhenSorting: ToggleFoldersFirstWhenSorting(); break;
         default:
@@ -3196,6 +3196,8 @@ void MainWindow::RefreshFileMenu() {
     AppendMenuW(file_menu_, MF_SEPARATOR, 0, nullptr);
     append(true, false, kRefresh, IDI_ACTION_REFRESH, L"Обновить список", L"F5");
   }
+  AppendMenuW(file_menu_, MF_SEPARATOR, 0, nullptr);
+  append(true, false, kExit, IDI_ACTION_EXIT, L"Выход", L"Alt+F4");
 }
 void MainWindow::RefreshMainMenuBar() {
   if (!menu_ || !file_menu_ || !view_menu_ || !help_menu_) return;
