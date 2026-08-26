@@ -2689,6 +2689,7 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
     return;
   }
   if (!catalog_) return; const auto name = SelectedName(); const auto* entry = catalog_->Find(name); if (!entry || !entry->IsDatabase()) { Message(window_, L"Выберите информационную базу."); return; }
+  bool launchSucceeded = false;
   try {
     const auto database = catalog_->DatabaseFor(name);
     const auto webUrl = catalog::Catalog::WebUrl(database.connect);
@@ -2726,9 +2727,10 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
         Message(window_, L"Не удалось открыть веб-базу в браузере.", L"ИБ Старт", MB_OK | MB_ICONERROR);
         return;
       }
+      launchSucceeded = true;
       logger_.Info(L"Открыта веб-база в браузере: " + database.name);
-      rememberLaunch(domain::LaunchMode::web_client);
       SetStatus(L"Открыта база в браузере: " + database.name);
+      rememberLaunch(domain::LaunchMode::web_client);
       return;
     }
     if (options.client_type == domain::ClientType::web) { Message(window_, L"Веб-клиент можно использовать только для веб-базы с адресом http:// или https://.", L"ИБ Старт", MB_OK | MB_ICONWARNING); return; }
@@ -2748,10 +2750,20 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
     const auto command = launcher::BuildCommand(database, *selected, options);
     if (usedNewestThinClient) logger_.Info(L"Требуемая версия " + selectedVersion + L" не найдена; для веб-базы выбран тонкий клиент " + selected->version + L".");
     launcher::Launch(command);
+    launchSucceeded = true;
     logger_.Info(L"Запуск: " + logging::RedactedCommandLine(command));
-    rememberLaunch(mode);
     SetStatus(L"Запущена база: " + database.name);
-  } catch (const std::exception& error) { logger_.Error(L"Ошибка запуска: " + ibstart::utf::FromUtf8(error.what())); Message(window_, L"Не удалось запустить базу. Подробности — в последнем логе.", L"ИБ Старт", MB_OK | MB_ICONERROR); }
+    rememberLaunch(mode);
+  } catch (const std::exception& error) {
+    if (launchSucceeded) {
+      logger_.Error(L"Ошибка после успешного запуска: " + ibstart::utf::FromUtf8(error.what()));
+      SetStatus(L"База запущена, но историю запуска или список обновить не удалось.");
+      Message(window_, L"База запущена, но сохранить историю запуска или обновить список не удалось.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
+    } else {
+      logger_.Error(L"Ошибка запуска: " + ibstart::utf::FromUtf8(error.what()));
+      Message(window_, L"Не удалось запустить базу. Подробности — в последнем логе.", L"ИБ Старт", MB_OK | MB_ICONERROR);
+    }
+  }
 }
 
 std::wstring MainWindow::NextName(std::wstring_view stem) const { for (unsigned number = 1;; ++number) { const auto candidate = std::wstring(stem) + L" " + std::to_wstring(number); if (!catalog_ || !catalog_->Find(candidate)) return candidate; } }
