@@ -46,8 +46,11 @@ Raw `AdditionalParameters` может временно сохранять неи
 Текущий IBStart формирует `ENTERPRISE` или `DESIGNER`, затем базовое подключение
 через `/F`, `/S`, `/WS` или fallback `/IBConnection`, после чего добавляет raw
 аргументы. Выбор платформы учитывает версию, тип клиента, разрядность и наличие
-тонкого клиента. `/AppArch` в `AdditionalParameters` имеет приоритет над полем
-`AppArch`.
+тонкого клиента. Typed-спецификация подключения и реестр зарезервированных
+параметров отклоняют конфликтующие `File`/`Srvr`/`Ref`/`WS`, повторные `/F`,
+`/S`, `/WS`, `/AppArch`, `/Proxy`, `/NoProxy`, а также raw-режимы и альтернативные
+`/URL`/`/IBConnection`; валидный `/AppArch` в `AdditionalParameters` имеет
+приоритет над полем `AppArch`.
 
 Основные места текущей реализации:
 
@@ -58,8 +61,9 @@ Raw `AdditionalParameters` может временно сохранять неи
 - распознавание raw Windows-аргументов —
   [command_builder.cpp](../src/core/launcher/command_builder.cpp:1).
 
-Пока отсутствуют полноценные registry, conflict resolver, capability check,
-version profile и отдельные API для batch/web/mobile/OLE/agent.
+Полный version profile и отдельные API для batch/web/mobile/OLE/agent пока не
+реализованы; неизвестные параметры по-прежнему передаются как raw-текст после
+проверки конфликтов.
 
 ## 3. Общие режимы процесса
 
@@ -184,7 +188,11 @@ OLE и agent mode должны быть разными `LaunchContext`. Их н�
 | `/URL <e1c/http(s) link>` | `TYPED`; resolver существующего или нового клиента |
 
 `/Execute` имеет приоритет над `/URL`. Абсолютный `/URL` может сделать обычное
-подключение из `/F`, `/S`, `/WS` или `/IBConnection` неактуальным.
+подключение из `/F`, `/S`, `/WS` или `/IBConnection` неактуальным. Это правило
+относится к отдельному контексту полной реализации; в текущем обычном запуске
+`/URL` и альтернативные connection-параметры из `AdditionalParameters`
+отклоняются как конфликт с typed-подключением, а `/Execute` допускается только
+в единственном экземпляре и с обязательной командой.
 
 ### 4.9. Прочие параметры клиента
 

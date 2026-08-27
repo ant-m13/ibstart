@@ -296,6 +296,49 @@ void TestCommandBuilderAndSelection() {
   std::filesystem::remove_all(thinDirectory, thinCleanupError);
 }
 
+void TestLaunchParameterConflicts() {
+  ibstart::domain::Database database;
+  database.connect = L"File=\"C:\\base\"";
+  ibstart::domain::LaunchOptions options;
+  options.mode = ibstart::domain::LaunchMode::enterprise;
+
+  const auto fileSpec = ibstart::launcher::ParseConnectionSpec(database.connect);
+  CHECK(fileSpec.kind == ibstart::launcher::ConnectionSpec::Kind::file);
+  CHECK(fileSpec.value == L"C:\\base");
+
+  database.connect = L"File=\"C:\\base\";Srvr=server;Ref=base";
+  CHECK(!ibstart::launcher::ValidateLaunchParameters(database, options).empty());
+  database.connect = L"File=\"C:\\base\"";
+
+  database.additional_parameters = L"/F C:\\\\other";
+  CHECK(!ibstart::launcher::ValidateLaunchParameters(database, options).empty());
+  const ibstart::domain::PlatformInstallation platform{L"C:\\1cv8.exe", L"8.3.27",
+      ibstart::domain::ClientBitness::x64, true};
+  bool rawConnectionOverride = false;
+  try { static_cast<void>(ibstart::launcher::BuildCommand(database, platform, options)); }
+  catch (const std::invalid_argument&) { rawConnectionOverride = true; }
+  CHECK(rawConnectionOverride);
+  database.additional_parameters = L"ENTERPRISE";
+  CHECK(!ibstart::launcher::ValidateLaunchParameters(database, options).empty());
+  database.additional_parameters = L"/Proxy proxy /NoProxy";
+  CHECK(!ibstart::launcher::ValidateLaunchParameters(database, options).empty());
+  database.additional_parameters = L"/AppArch invalid";
+  CHECK(!ibstart::launcher::ValidateLaunchParameters(database, options).empty());
+  database.additional_parameters = L"/AppArch x86 /AppArch x64";
+  CHECK(!ibstart::launcher::ValidateLaunchParameters(database, options).empty());
+  database.additional_parameters = L"/URL https://example.test/base";
+  CHECK(!ibstart::launcher::ValidateLaunchParameters(database, options).empty());
+
+  bool invalidArchitecture = false;
+  try { static_cast<void>(ibstart::launcher::AppArchitectureFromParameters(L"/AppArch invalid")); }
+  catch (const std::invalid_argument&) { invalidArchitecture = true; }
+  CHECK(invalidArchitecture);
+  bool repeatedArchitecture = false;
+  try { static_cast<void>(ibstart::launcher::AppArchitectureFromParameters(L"/AppArch x86 /AppArch x64")); }
+  catch (const std::invalid_argument&) { repeatedArchitecture = true; }
+  CHECK(repeatedArchitecture);
+}
+
 void TestPlatformDiscoveryLargeVersions() {
   const auto root = Temp(L"platform-versions");
   const auto smaller = root / L"8.3.99999999999999999999" / L"bin";
@@ -1378,6 +1421,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"V8iExternalWriterRaceAtCommitBoundary", TestV8iExternalWriterRaceAtCommitBoundary);
   run(L"V8iConcurrentSaveAtCommitBoundary", TestV8iConcurrentSaveAtCommitBoundary);
   run(L"CommandBuilderAndSelection", TestCommandBuilderAndSelection);
+  run(L"LaunchParameterConflicts", TestLaunchParameterConflicts);
   run(L"PlatformDiscoveryLargeVersions", TestPlatformDiscoveryLargeVersions);
   run(L"StandaloneThinClientDiscovery", TestStandaloneThinClientDiscovery);
   run(L"CustomX86PlatformDiscovery", TestCustomX86PlatformDiscovery);
