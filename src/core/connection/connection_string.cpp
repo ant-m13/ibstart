@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <cwctype>
+#include <stdexcept>
 #include <utility>
 
 namespace ibstart::connection {
@@ -21,12 +22,52 @@ bool IsHttpUrl(std::wstring_view value) {
       (value.size() >= kHttps.size() && EqualNoCase(value.substr(0, kHttps.size()), kHttps));
 }
 
-std::wstring UnquoteValue(std::wstring value) {
-  value = Trim(value);
-  if (value.size() >= 2 && value.front() == L'"' && value.back() == L'"') {
-    return value.substr(1, value.size() - 2);
+std::wstring DecodeQuotedValue(std::wstring_view value, std::vector<std::wstring>& diagnostics) {
+  const auto trimmed = Trim(value);
+  if (trimmed.empty() || trimmed.front() != L'"') return trimmed;
+
+  size_t closing = std::wstring_view::npos;
+  for (size_t index = 1; index < trimmed.size(); ++index) {
+    if (trimmed[index] != L'"') continue;
+    if (index + 1 < trimmed.size() && trimmed[index + 1] == L'"') {
+      ++index;
+      continue;
+    }
+    size_t next = index + 1;
+    while (next < trimmed.size() && std::iswspace(trimmed[next])) ++next;
+    if (next == trimmed.size()) {
+      closing = index;
+      break;
+    }
   }
-  return value;
+  if (closing == std::wstring_view::npos) {
+    diagnostics.push_back(L"Значение Connect содержит незакрытую кавычку.");
+    return std::wstring(trimmed);
+  }
+
+  std::wstring result;
+  for (size_t index = 1; index < closing; ++index) {
+    if (trimmed[index] == L'"' && index + 1 < closing && trimmed[index + 1] == L'"') {
+      result.push_back(L'"');
+      ++index;
+    } else if (trimmed[index] == L'\\' && index + 2 < closing &&
+        trimmed[index + 1] == L'"' && trimmed[index + 2] != L'"') {
+      result.push_back(L'"');
+      ++index;
+    } else {
+      result.push_back(trimmed[index]);
+    }
+  }
+  return result;
+}
+
+bool QuoteIsEscapedAtBoundary(std::wstring_view text, size_t index) {
+  size_t next = index + 1;
+  while (next < text.size() && std::iswspace(text[next])) ++next;
+  if (next == text.size() || text[next] == L';') return false;
+  size_t backslashes = 0;
+  for (size_t position = index; position > 0 && text[position - 1] == L'\\'; --position) ++backslashes;
+  return backslashes % 2 != 0;
 }
 
 }  // namespace
@@ -39,26 +80,54 @@ std::wstring Trim(std::wstring_view value) {
   return std::wstring(value.substr(first, last - first));
 }
 
-std::vector<std::wstring> Split(std::wstring_view connect) {
-  std::vector<std::wstring> result;
+ParseResult Parse(std::wstring_view connect) {
+  ParseResult result;
   size_t begin = 0;
   bool quoted = false;
   for (size_t index = 0; index <= connect.size(); ++index) {
-    const wchar_t character = index < connect.size() ? connect[index] : L';';
-    if (character == L'"') quoted = !quoted;
-    if (character != L';' || quoted) continue;
-    auto part = Trim(connect.substr(begin, index - begin));
-    if (!part.empty()) result.push_back(std::move(part));
+    if (index < connect.size() && connect[index] == L'"') {
+      if (quoted && index + 1 < connect.size() && connect[index + 1] == L'"') {
+        ++index;
+        continue;
+      }
+      if (quoted && QuoteIsEscapedAtBoundary(connect, index)) continue;
+      quoted = !quoted;
+    }
+    if (index != connect.size() && (connect[index] != L';' || quoted)) continue;
+
+    const auto raw = std::wstring(connect.substr(begin, index - begin));
+    const auto trimmed = Trim(raw);
+    if (!trimmed.empty()) {
+      Fragment fragment;
+      fragment.raw = raw;
+      const size_t separator = trimmed.find(L'=');
+      if (separator != std::wstring::npos) {
+        fragment.has_equals = true;
+        fragment.key = Trim(std::wstring_view(trimmed).substr(0, separator));
+        fragment.value = DecodeQuotedValue(std::wstring_view(trimmed).substr(separator + 1), result.diagnostics);
+      } else {
+        fragment.value = trimmed;
+      }
+      result.fragments.push_back(std::move(fragment));
+    }
     begin = index + 1;
+  }
+  if (quoted) result.diagnostics.push_back(L"Строка Connect содержит незакрытую кавычку.");
+  return result;
+}
+
+std::vector<std::wstring> Split(std::wstring_view connect) {
+  std::vector<std::wstring> result;
+  for (auto& fragment : Parse(connect).fragments) {
+    result.push_back(Trim(fragment.raw));
   }
   return result;
 }
 
 std::optional<std::wstring> Value(std::wstring_view connect, std::wstring_view key) {
-  for (const auto& part : Split(connect)) {
-    const size_t separator = part.find(L'=');
-    if (separator == std::wstring::npos || !EqualNoCase(Trim(std::wstring_view(part).substr(0, separator)), key)) continue;
-    return UnquoteValue(part.substr(separator + 1));
+  for (const auto& fragment : Parse(connect).fragments) {
+    if (!fragment.has_equals || !EqualNoCase(fragment.key, key)) continue;
+    return fragment.value;
   }
   return std::nullopt;
 }
@@ -68,8 +137,13 @@ std::wstring ValueOrEmpty(std::wstring_view connect, std::wstring_view key) {
 }
 
 std::wstring QuoteValue(std::wstring value) {
-  std::replace(value.begin(), value.end(), L'"', L'\'');
-  return L"\"" + value + L"\"";
+  std::wstring result = L"\"";
+  for (const wchar_t character : value) {
+    if (character == L'"') result += L"\"\"";
+    result.push_back(character);
+  }
+  result.push_back(L'"');
+  return result;
 }
 
 std::optional<std::wstring> WebUrl(std::wstring_view connect) {
