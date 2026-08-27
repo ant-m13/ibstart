@@ -68,7 +68,7 @@ add_library(ibstart_core STATIC
 target_include_directories(ibstart_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/src" "${IBSTART_GENERATED_DIR}")
 target_compile_definitions(ibstart_core PRIVATE UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
 target_compile_options(ibstart_core PRIVATE /W4 /WX /permissive- /EHsc /Zc:__cplusplus /utf-8)
-target_link_libraries(ibstart_core PUBLIC Advapi32 Shell32 Ole32 Winhttp)
+target_link_libraries(ibstart_core PUBLIC Advapi32 Shell32 Ole32 Winhttp Ws2_32)
 
 add_executable(IBStart WIN32
   src/app/main.cpp

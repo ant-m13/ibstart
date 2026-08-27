@@ -159,9 +159,26 @@ void TestConnectionStringParsing() {
   CHECK(ibstart::connection::IsBareWebUrl(L" https://example.test/base "));
   CHECK(!ibstart::connection::IsBareWebUrl(L"https://example.test/base;Custom=keep"));
   CHECK(ibstart::connection::IsValidHttpUrl(L"https://example.test/base"));
-  CHECK(ibstart::connection::IsValidHttpUrl(L"https://[::1]:8443/base"));
+  CHECK(ibstart::connection::IsValidHttpUrl(L"https://[::1]:8443/base;part?x=1"));
+  CHECK(ibstart::connection::IsValidHttpUrl(L"https://[fe80::1%25eth0]/base"));
+  CHECK(!ibstart::connection::IsValidHttpUrl(L"ftp://example.test/base"));
+  CHECK(!ibstart::connection::IsValidHttpUrl(L"https://[2001:db8::1"));
+  CHECK(!ibstart::connection::IsValidHttpUrl(L"https://2001:db8::1/base"));
+  CHECK(!ibstart::connection::IsValidHttpUrl(L"https://[not-an-ip]/base"));
+  CHECK(!ibstart::connection::IsValidHttpUrl(L"https://example.test:abc/base"));
+  CHECK(!ibstart::connection::IsValidHttpUrl(L"https://example.test:65536/base"));
+  CHECK(!ibstart::connection::IsValidHttpUrl(L"https://example.test/base with spaces"));
+  CHECK(!ibstart::connection::IsValidHttpUrl(L"https://example.test/base\"quote"));
+  CHECK(!ibstart::connection::IsValidHttpUrl(L"https://example.test/base\x01"));
   CHECK(!ibstart::connection::IsValidHttpUrl(L"https://"));
   CHECK(!ibstart::connection::IsValidHttpUrl(L"https:///base"));
+  const auto quotedLegacyWeb = ibstart::connection::WebUrl(
+      L"\"https://example.test/base;part?x=1\";Custom=keep");
+  CHECK(quotedLegacyWeb && *quotedLegacyWeb == L"https://example.test/base;part?x=1");
+  CHECK(!ibstart::connection::WebUrl(L"https://example.test/base;part"));
+  CHECK(!ibstart::connection::WebUrl(L"https://example.test/base?x=1;y=2"));
+  CHECK(ibstart::connection::IsBareWebUrl(L"\"https://example.test/base;part?x=1\""));
+  CHECK(!ibstart::connection::IsBareWebUrl(L"\"https://example.test/base;part?x=1\";Custom=keep"));
 
   const auto fileConnection = ibstart::connection::BuildConnection(
       ibstart::connection::ConnectionKind::file,
@@ -178,6 +195,23 @@ void TestConnectionStringParsing() {
       L"https://old.example/base;Custom=keep;Another=fragment",
       L"", L"https://new.example/base", L"", L"");
   CHECK(webConnection == L"WS=\"https://new.example/base\";Custom=keep;Another=fragment");
+  const auto semicolonWebConnection = ibstart::connection::BuildConnection(
+      ibstart::connection::ConnectionKind::web, L"", L"",
+      L"https://new.example/base;part?x=1", L"", L"");
+  CHECK(semicolonWebConnection == L"WS=\"https://new.example/base;part?x=1\"");
+  const auto quotedWebConnection = ibstart::connection::BuildConnection(
+      ibstart::connection::ConnectionKind::file,
+      L"\"https://old.example/base;part?x=1\";Custom=keep",
+      L"C:\\new", L"", L"", L"");
+  CHECK(quotedWebConnection == L"File=\"C:\\new\";Custom=keep");
+  bool invalidWebConnection = false;
+  try {
+    static_cast<void>(ibstart::connection::BuildConnection(
+        ibstart::connection::ConnectionKind::web, L"", L"", L"https://", L"", L""));
+  } catch (const std::invalid_argument&) {
+    invalidWebConnection = true;
+  }
+  CHECK(invalidWebConnection);
   const auto orderedConnection = ibstart::connection::BuildConnection(
       ibstart::connection::ConnectionKind::server,
       L"Before=first;File=\"old\";After=second",
@@ -333,6 +367,18 @@ void TestLaunchParameterConflicts() {
 
   database.connect = L"File=\"C:\\base\";Srvr=server;Ref=base";
   CHECK(!ibstart::launcher::ValidateLaunchParameters(database, options).empty());
+  database.connect = L"\"https://example.test/base;part?x=1\";Custom=keep";
+  const auto quotedWebSpec = ibstart::launcher::ParseConnectionSpec(database.connect);
+  CHECK(quotedWebSpec.kind == ibstart::launcher::ConnectionSpec::Kind::web);
+  CHECK(quotedWebSpec.value == L"https://example.test/base;part?x=1");
+  bool ambiguousLegacyWeb = false;
+  try { static_cast<void>(ibstart::launcher::ParseConnectionSpec(L"https://example.test/base;part")); }
+  catch (const std::invalid_argument&) { ambiguousLegacyWeb = true; }
+  CHECK(ambiguousLegacyWeb);
+  bool invalidBareWeb = false;
+  try { static_cast<void>(ibstart::launcher::ParseConnectionSpec(L"https://")); }
+  catch (const std::invalid_argument&) { invalidBareWeb = true; }
+  CHECK(invalidBareWeb);
   database.connect = L"File=\"C:\\base\"";
 
   database.additional_parameters = L"/F C:\\\\other";
