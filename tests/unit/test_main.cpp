@@ -25,6 +25,7 @@
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <string_view>
 #include <stop_token>
 #include <stdexcept>
 #include <string>
@@ -999,6 +1000,105 @@ void TestV8iConcurrentSavesConflict() {
   std::filesystem::remove_all(directory, error);
 }
 
+void TestCacheContinuesAfterCandidateError() {
+  const auto directory = Temp(L"cache-continues-after-error");
+  const auto local = directory / L"local";
+  const auto protectedDirectory = local / L"1C" / L"1Cv8" / L"licenses" / L"nested";
+  const auto validCache = local / L"1C" / L"1Cv8" / L"valid-cache";
+  std::filesystem::create_directories(protectedDirectory);
+  std::filesystem::create_directories(validCache);
+  WriteBytes(protectedDirectory / L"license.dat", "keep");
+  WriteBytes(validCache / L"cache.dat", "remove");
+
+  const DWORD required = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
+  std::wstring previous(required, L'\0');
+  if (required != 0) {
+    const DWORD copied = GetEnvironmentVariableW(L"LOCALAPPDATA", previous.data(), required);
+    previous.resize(copied);
+  }
+  SetEnvironmentVariableW(L"LOCALAPPDATA", local.c_str());
+  const auto result = ibstart::cache::Clear({{protectedDirectory, 0}, {validCache, 0}});
+  SetEnvironmentVariableW(L"LOCALAPPDATA", required == 0 ? nullptr : previous.c_str());
+
+  CHECK(!result.errors.empty());
+  CHECK(std::filesystem::exists(protectedDirectory / L"license.dat"));
+  CHECK(!std::filesystem::exists(validCache));
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
+std::filesystem::path CurrentExecutable() {
+  std::wstring path(32768, L'\0');
+  const DWORD length = GetModuleFileNameW(nullptr, path.data(), static_cast<DWORD>(path.size()));
+  if (length == 0 || static_cast<size_t>(length) >= path.size()) throw std::runtime_error("Cannot determine test executable path.");
+  path.resize(length);
+  return path;
+}
+
+void TestCacheContinuesWithActiveOneCProcess() {
+  const auto directory = Temp(L"cache-active-process");
+  const auto local = directory / L"local";
+  const auto blockedCache = local / L"1C" / L"1Cv8" / L"blocked-cache";
+  const auto validCache = local / L"1C" / L"1Cv8" / L"valid-cache";
+  std::filesystem::create_directories(blockedCache);
+  std::filesystem::create_directories(validCache);
+  const auto lockedFile = blockedCache / L"locked.dat";
+  WriteBytes(lockedFile, "keep");
+  WriteBytes(validCache / L"cache.dat", "remove");
+
+  const auto helper = directory / L"1cv8.exe";
+  std::filesystem::copy_file(CurrentExecutable(), helper, std::filesystem::copy_options::overwrite_existing);
+  std::wstring commandLine = L"\"" + helper.wstring() + L"\" --cache-process-helper";
+  std::vector<wchar_t> mutableCommandLine(commandLine.begin(), commandLine.end());
+  mutableCommandLine.push_back(L'\0');
+  STARTUPINFOW startup{};
+  startup.cb = sizeof(startup);
+  PROCESS_INFORMATION process{};
+  const BOOL started = CreateProcessW(helper.c_str(), mutableCommandLine.data(), nullptr, nullptr, FALSE,
+      CREATE_NO_WINDOW, nullptr, directory.c_str(), &startup, &process);
+  CHECK(started != FALSE);
+  if (!started) {
+    std::error_code error;
+    std::filesystem::remove_all(directory, error);
+    return;
+  }
+
+  bool detected = false;
+  for (int attempt = 0; attempt < 500; ++attempt) {
+    if (ibstart::cache::HasActiveOneCProcess()) {
+      detected = true;
+      break;
+    }
+    Sleep(10);
+  }
+  CHECK(detected);
+
+  const DWORD required = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
+  std::wstring previous(required, L'\0');
+  if (required != 0) {
+    const DWORD copied = GetEnvironmentVariableW(L"LOCALAPPDATA", previous.data(), required);
+    previous.resize(copied);
+  }
+  SetEnvironmentVariableW(L"LOCALAPPDATA", local.c_str());
+  HANDLE lock = CreateFileW(lockedFile.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
+  CHECK(lock != INVALID_HANDLE_VALUE);
+  const auto result = ibstart::cache::Clear({{blockedCache, 0}, {validCache, 0}});
+  if (lock != INVALID_HANDLE_VALUE) CloseHandle(lock);
+  SetEnvironmentVariableW(L"LOCALAPPDATA", required == 0 ? nullptr : previous.c_str());
+
+  CHECK(result.active_one_c_process);
+  CHECK(!result.errors.empty());
+  CHECK(std::filesystem::exists(blockedCache));
+  CHECK(!std::filesystem::exists(validCache));
+
+  TerminateProcess(process.hProcess, 0);
+  WaitForSingleObject(process.hProcess, 5000);
+  CloseHandle(process.hThread);
+  CloseHandle(process.hProcess);
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
 void TestV8iExternalWriterRaceAtCommitBoundary() {
   const auto directory = Temp(L"store-commit-race");
   const auto file = directory / L"ibases.v8i";
@@ -1148,7 +1248,12 @@ void TestStorageRejectsUnreadableDataPath() {
 }
 }
 
-int wmain() {
+int wmain(int argc, wchar_t* argv[]) {
+  if (argc == 2 && std::wstring_view(argv[1]) == L"--cache-process-helper") {
+    Sleep(30000);
+    return 0;
+  }
+
   const auto run = [](const wchar_t* name, const auto& test) {
     std::wcout << L"Running " << name << L"..." << std::endl;
     try { test(); }
@@ -1187,6 +1292,8 @@ int wmain() {
   run(L"LogPruning", TestLogPruning);
   run(L"CacheSizeFormatting", TestCacheSizeFormatting);
   run(L"CacheRejectsLicenseDescendants", TestCacheRejectsLicenseDescendants);
+  run(L"CacheContinuesAfterCandidateError", TestCacheContinuesAfterCandidateError);
+  run(L"CacheContinuesWithActiveOneCProcess", TestCacheContinuesWithActiveOneCProcess);
   run(L"CacheIdentifiersDoNotCollide", TestCacheIdentifiersDoNotCollide);
   run(L"PortableMode", TestPortableMode);
   run(L"CatalogStateRepository", TestCatalogStateRepository);
