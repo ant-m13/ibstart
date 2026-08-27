@@ -1,11 +1,14 @@
 #include "core/launcher/command_builder.hpp"
 
 #include "core/connection/connection_string.hpp"
+#include "core/domain/utf.hpp"
 #include "core/platform/platform_version.hpp"
 
 #include <algorithm>
 #include <cwchar>
 #include <cwctype>
+#include <iterator>
+#include <map>
 #include <stdexcept>
 
 namespace ibstart::domain {
@@ -25,6 +28,16 @@ namespace {
 bool EqualNoCase(std::wstring_view left, std::wstring_view right) {
   return left.size() == right.size() && _wcsnicmp(left.data(), right.data(), left.size()) == 0;
 }
+
+struct CaseInsensitiveLess {
+  using is_transparent = void;
+  bool operator()(std::wstring_view left, std::wstring_view right) const noexcept {
+    if (left.empty() || right.empty()) return left.size() < right.size();
+    const size_t common = std::min(left.size(), right.size());
+    const int comparison = _wcsnicmp(left.data(), right.data(), common);
+    return comparison == 0 ? left.size() < right.size() : comparison < 0;
+  }
+};
 
 std::wstring Trim(std::wstring_view value) {
   size_t first = 0;
@@ -46,6 +59,88 @@ bool VersionMatches(std::wstring_view installed, std::wstring_view requested) {
 
 bool IsThinOnlyPlatform(const domain::PlatformInstallation& platform) {
   return EqualNoCase(platform.executable.filename().wstring(), L"1cv8c.exe");
+}
+
+bool IsHttpUrl(std::wstring_view value) {
+  constexpr std::wstring_view prefixes[] = {L"http://", L"https://"};
+  return std::any_of(std::begin(prefixes), std::end(prefixes), [&](const auto prefix) {
+    return value.size() >= prefix.size() && EqualNoCase(value.substr(0, prefix.size()), prefix);
+  });
+}
+
+std::wstring SwitchName(std::wstring_view argument) {
+  if (argument.empty() || (argument.front() != L'/' && argument.front() != L'-')) return {};
+  size_t start = 1;
+  if (start < argument.size() && argument[start] == L'-') ++start;
+  const size_t end = argument.find(L'=', start);
+  return std::wstring(argument.substr(start, end == std::wstring_view::npos ? std::wstring_view::npos : end - start));
+}
+
+[[noreturn]] void ThrowValidation(std::wstring_view message) {
+  throw std::invalid_argument(utf::ToUtf8(message));
+}
+
+void AddParameterConflict(std::vector<std::wstring>& errors, std::wstring message) {
+  if (std::find(errors.begin(), errors.end(), message) == errors.end()) errors.push_back(std::move(message));
+}
+
+void ValidateParameterText(std::wstring_view text, std::map<std::wstring, size_t, CaseInsensitiveLess>& occurrences,
+    std::vector<std::wstring>& errors) {
+  const auto arguments = SplitCommandArguments(text);
+  for (size_t index = 0; index < arguments.size(); ++index) {
+    const auto& argument = arguments[index];
+    if (EqualNoCase(argument, L"ENTERPRISE") || EqualNoCase(argument, L"DESIGNER") ||
+        EqualNoCase(argument, L"CREATEINFOBASE")) {
+      AddParameterConflict(errors, L"Дополнительные параметры не должны задавать режим ENTERPRISE, DESIGNER или CREATEINFOBASE.");
+      continue;
+    }
+
+    const auto name = SwitchName(argument);
+    if (name.empty()) continue;
+    constexpr std::wstring_view connection_names[] = {
+        L"F", L"S", L"WS", L"IBConnection", L"IBConnectionString", L"URL"};
+    const bool connection_parameter = std::any_of(std::begin(connection_names), std::end(connection_names),
+        [&](const auto value) { return EqualNoCase(name, value); });
+    const bool tracked_parameter = connection_parameter ||
+        EqualNoCase(name, L"AppArch") || EqualNoCase(name, L"Proxy") ||
+        EqualNoCase(name, L"NoProxy") || EqualNoCase(name, L"Execute") ||
+        EqualNoCase(name, L"ExecuteAfter");
+    if (!tracked_parameter) continue;
+
+    const bool inserted = occurrences.emplace(name, index).second;
+    if (!inserted) {
+      AddParameterConflict(errors, L"Параметр /" + name + L" указан более одного раза в параметрах запуска.");
+    }
+    if (connection_parameter) {
+      AddParameterConflict(errors, L"Дополнительные параметры не должны переопределять подключение (/" + name + L").");
+    } else if (EqualNoCase(name, L"Proxy") && occurrences.contains(std::wstring_view(L"NoProxy"))) {
+      AddParameterConflict(errors, L"Параметры /Proxy и /NoProxy взаимоисключающие.");
+    } else if (EqualNoCase(name, L"NoProxy") && occurrences.contains(std::wstring_view(L"Proxy"))) {
+      AddParameterConflict(errors, L"Параметры /Proxy и /NoProxy взаимоисключающие.");
+    }
+
+    if (EqualNoCase(name, L"AppArch")) {
+      std::wstring value;
+      constexpr std::wstring_view prefix = L"/AppArch=";
+      if (argument.size() >= prefix.size() && _wcsnicmp(argument.c_str(), prefix.data(), prefix.size()) == 0) {
+        value = argument.substr(prefix.size());
+      } else if (index + 1 < arguments.size() && !SwitchName(arguments[index + 1]).empty()) {
+        AddParameterConflict(errors, L"У параметра /AppArch отсутствует значение.");
+      } else if (index + 1 < arguments.size()) {
+        value = arguments[++index];
+      } else {
+        AddParameterConflict(errors, L"У параметра /AppArch отсутствует значение.");
+      }
+      if (value.empty()) {
+        AddParameterConflict(errors, L"У параметра /AppArch отсутствует допустимое значение.");
+      } else if (!ParseAppArchitecture(value)) {
+        AddParameterConflict(errors, L"Недопустимое значение /AppArch: " + value + L".");
+      }
+    } else if (EqualNoCase(name, L"Execute") &&
+        (index + 1 >= arguments.size() || !SwitchName(arguments[index + 1]).empty())) {
+      AddParameterConflict(errors, L"У параметра /Execute отсутствует команда.");
+    }
+  }
 }
 
 }  // namespace
@@ -112,15 +207,95 @@ std::optional<domain::ClientArchitecture> ParseAppArchitecture(std::wstring_view
 
 std::optional<domain::ClientArchitecture> AppArchitectureFromParameters(std::wstring_view text) {
   const auto arguments = SplitCommandArguments(text);
+  std::optional<domain::ClientArchitecture> result;
   for (size_t index = 0; index < arguments.size(); ++index) {
     const auto& argument = arguments[index];
-    if (EqualNoCase(argument, L"/AppArch") && index + 1 < arguments.size()) return ParseAppArchitecture(arguments[index + 1]);
+    if (EqualNoCase(argument, L"/AppArch")) {
+      if (index + 1 >= arguments.size() || !SwitchName(arguments[index + 1]).empty()) {
+        throw std::invalid_argument("AppArch parameter has no value.");
+      }
+      if (result) throw std::invalid_argument("AppArch parameter is specified more than once.");
+      result = ParseAppArchitecture(arguments[++index]);
+      if (!result) throw std::invalid_argument("AppArch parameter has an invalid value.");
+      continue;
+    }
     constexpr std::wstring_view prefix = L"/AppArch=";
-    if (argument.size() > prefix.size() && _wcsnicmp(argument.c_str(), prefix.data(), prefix.size()) == 0) {
-      return ParseAppArchitecture(std::wstring_view(argument).substr(prefix.size()));
+    if (argument.size() >= prefix.size() && _wcsnicmp(argument.c_str(), prefix.data(), prefix.size()) == 0) {
+      if (result) throw std::invalid_argument("AppArch parameter is specified more than once.");
+      result = ParseAppArchitecture(std::wstring_view(argument).substr(prefix.size()));
+      if (!result) throw std::invalid_argument("AppArch parameter has an invalid value.");
     }
   }
-  return std::nullopt;
+  return result;
+}
+
+ConnectionSpec ParseConnectionSpec(std::wstring_view connect) {
+  const auto parsed = connection::Parse(connect);
+  if (!parsed.diagnostics.empty()) ThrowValidation(parsed.diagnostics.front());
+
+  std::optional<std::wstring> file;
+  std::optional<std::wstring> server;
+  std::optional<std::wstring> reference;
+  std::optional<std::wstring> web;
+  bool direct_web = false;
+  if (!parsed.fragments.empty() && !parsed.fragments.front().has_equals &&
+      IsHttpUrl(parsed.fragments.front().value)) {
+    direct_web = true;
+    web = parsed.fragments.front().value;
+  }
+  for (const auto& fragment : parsed.fragments) {
+    if (!fragment.has_equals) continue;
+    std::optional<std::wstring>* destination = nullptr;
+    if (EqualNoCase(fragment.key, L"File")) destination = &file;
+    else if (EqualNoCase(fragment.key, L"Srvr")) destination = &server;
+    else if (EqualNoCase(fragment.key, L"Ref")) destination = &reference;
+    else if (EqualNoCase(fragment.key, L"WS")) destination = &web;
+    if (!destination) continue;
+    if (*destination) ThrowValidation(L"Строка подключения содержит повторяющийся ключ: " + fragment.key + L".");
+    *destination = fragment.value;
+  }
+
+  const bool has_file = file.has_value();
+  const bool has_server = server.has_value() || reference.has_value();
+  const bool has_web = web.has_value() || direct_web;
+  const int variants = static_cast<int>(has_file) + static_cast<int>(has_server) + static_cast<int>(has_web);
+  if (variants > 1) ThrowValidation(L"Строка подключения одновременно задаёт File, Srvr/Ref и веб-подключение.");
+  if (has_file) {
+    if (file->empty()) ThrowValidation(L"Ключ File в строке подключения не может быть пустым.");
+    return {ConnectionSpec::Kind::file, *file, {}, {}};
+  }
+  if (has_server) {
+    if (!server || server->empty() || !reference || reference->empty()) {
+      ThrowValidation(L"Для серверного подключения нужны непустые ключи Srvr и Ref.");
+    }
+    return {ConnectionSpec::Kind::server, {}, *server, *reference};
+  }
+  if (has_web) {
+    if (!web || web->empty() || !IsHttpUrl(*web)) ThrowValidation(L"Ключ WS должен содержать URL http:// или https://.");
+    return {ConnectionSpec::Kind::web, *web, {}, {}};
+  }
+  return {ConnectionSpec::Kind::fallback, {}, {}, {}};
+}
+
+std::vector<std::wstring> ValidateLaunchParameters(const domain::Database& database,
+    const domain::LaunchOptions& options) {
+  std::vector<std::wstring> errors;
+  try {
+    if (database.connect.empty()) errors.push_back(L"У базы отсутствует строка подключения Connect.");
+    else static_cast<void>(ParseConnectionSpec(database.connect));
+  } catch (const std::exception& error) {
+    errors.push_back(utf::FromUtf8(error.what()));
+  }
+
+  std::map<std::wstring, size_t, CaseInsensitiveLess> occurrences;
+  try {
+    ValidateParameterText(options.common_parameters, occurrences, errors);
+    ValidateParameterText(options.individual_parameters.empty() ? database.additional_parameters :
+        options.individual_parameters, occurrences, errors);
+  } catch (const std::exception& error) {
+    AddParameterConflict(errors, utf::FromUtf8(error.what()));
+  }
+  return errors;
 }
 
 std::optional<domain::PlatformInstallation> SelectPlatform(
@@ -158,7 +333,9 @@ std::optional<domain::PlatformInstallation> SelectPlatform(
 
 domain::LaunchCommand BuildCommand(const domain::Database& database,
     const domain::PlatformInstallation& platform, const domain::LaunchOptions& options) {
-  if (database.connect.empty()) throw std::invalid_argument("Database has no Connect field.");
+  const auto validation = ValidateLaunchParameters(database, options);
+  if (!validation.empty()) ThrowValidation(validation.front());
+  const auto connection_spec = ParseConnectionSpec(database.connect);
   const bool thinOnlyPlatform = IsThinOnlyPlatform(platform);
   if (thinOnlyPlatform && (options.mode == domain::LaunchMode::designer ||
       options.client_type == domain::ClientType::thick)) {
@@ -175,22 +352,18 @@ domain::LaunchCommand BuildCommand(const domain::Database& database,
   if (options.mode == domain::LaunchMode::designer) command.arguments.push_back(L"DESIGNER");
   else if (options.mode == domain::LaunchMode::enterprise) command.arguments.push_back(L"ENTERPRISE");
 
-  const auto web = connection::WebUrl(database.connect);
-  const auto file = connection::ValueOrEmpty(database.connect, L"File");
-  const auto server = connection::ValueOrEmpty(database.connect, L"Srvr");
-  const auto reference = connection::ValueOrEmpty(database.connect, L"Ref");
-  if (web) {
+  if (connection_spec.kind == ConnectionSpec::Kind::web) {
     if (options.mode != domain::LaunchMode::enterprise) {
       throw std::invalid_argument("A web database can only be launched in enterprise mode.");
     }
     if (options.client_type != domain::ClientType::thin) {
       throw std::invalid_argument("A web database requires the thin client.");
     }
-    command.arguments.insert(command.arguments.end(), {L"/WS", *web});
-  } else if (!file.empty()) {
-    command.arguments.insert(command.arguments.end(), {L"/F", file});
-  } else if (!server.empty() && !reference.empty()) {
-    command.arguments.insert(command.arguments.end(), {L"/S", server + L"\\" + reference});
+    command.arguments.insert(command.arguments.end(), {L"/WS", connection_spec.value});
+  } else if (connection_spec.kind == ConnectionSpec::Kind::file) {
+    command.arguments.insert(command.arguments.end(), {L"/F", connection_spec.value});
+  } else if (connection_spec.kind == ConnectionSpec::Kind::server) {
+    command.arguments.insert(command.arguments.end(), {L"/S", connection_spec.server + L"\\" + connection_spec.reference});
   } else {
     command.arguments.insert(command.arguments.end(), {L"/IBConnection", database.connect});
   }

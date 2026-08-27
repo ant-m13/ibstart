@@ -1249,6 +1249,17 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
     logger_.Info(L"Запуск: " + logging::RedactedCommandLine(command));
     SetStatus(L"Запущена база: " + database.name);
     rememberLaunch(mode);
+  } catch (const std::invalid_argument& error) {
+    if (launchSucceeded) {
+      logger_.Error(L"Ошибка после успешного запуска: " + ibstart::utf::FromUtf8(error.what()));
+      SetStatus(L"База запущена, но история запуска или список обновить не удалось.");
+      Message(window_, L"База запущена, но сохранить историю запуска или обновить список не удалось.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
+    } else {
+      const auto detail = ibstart::utf::FromUtf8(error.what());
+      logger_.Error(L"Проверка параметров запуска: " + detail);
+      Message(window_, L"Параметры запуска противоречат друг другу:\n\n" + detail,
+          L"Проверка запуска", MB_OK | MB_ICONWARNING);
+    }
   } catch (const std::exception& error) {
     if (launchSucceeded) {
       logger_.Error(L"Ошибка после успешного запуска: " + ibstart::utf::FromUtf8(error.what()));
