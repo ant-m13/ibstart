@@ -29,6 +29,7 @@
 #include <stop_token>
 #include <stdexcept>
 #include <string>
+#include <utility>
 #include <thread>
 #include <vector>
 
@@ -1000,6 +1001,30 @@ void TestV8iConcurrentSavesConflict() {
   std::filesystem::remove_all(directory, error);
 }
 
+void TestV8iLineEndingRoundTrips() {
+  const std::vector<std::pair<std::string_view, std::wstring>> cases = {
+      {"lf", L"[Base]\nConnect=x\n"},
+      {"lf-no-trailing", L"[Base]\nConnect=x"},
+      {"crlf", L"[Base]\r\nConnect=x\r\n"},
+      {"crlf-no-trailing", L"[Base]\r\nConnect=x"},
+      {"cr", L"[Base]\rConnect=x\r"},
+      {"cr-no-trailing", L"[Base]\rConnect=x"},
+      {"mixed", L"[Base]\r\nConnect=x\n[Other]\rConnect=y"},
+  };
+  for (const auto& [name, expected] : cases) {
+    const auto document = ibstart::v8i::V8iDocument::ParseUtf8(ibstart::utf::ToUtf8(expected));
+    CHECK(document.SerializeUtf8() == ibstart::utf::ToUtf8(expected));
+    CHECK(document.sections.size() == 2 || name != "mixed");
+  }
+
+  const auto mixed = ibstart::v8i::V8iDocument::ParseUtf8(
+      "[Base]\r\nConnect=x\n[Other]\rConnect=y");
+  CHECK(mixed.line_endings == std::vector<std::wstring>{L"\r\n", L"\n", L"\r"});
+  CHECK(mixed.diagnostics.size() == 1);
+  CHECK(!mixed.trailing_newline);
+  CHECK(mixed.SerializeUtf8() == "[Base]\r\nConnect=x\n[Other]\rConnect=y");
+}
+
 void TestCacheContinuesAfterCandidateError() {
   const auto directory = Temp(L"cache-continues-after-error");
   const auto local = directory / L"local";
@@ -1272,6 +1297,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"TreeFilters", TestTreeFilters);
   run(L"RecentDatabaseNames", TestRecentDatabaseNames);
   run(L"NoBomAndCatalog", TestNoBomAndCatalog);
+  run(L"V8iLineEndingRoundTrips", TestV8iLineEndingRoundTrips);
   run(L"SafeStore", TestSafeStore);
   run(L"ConfirmedV8iOverwrite", TestConfirmedV8iOverwrite);
   run(L"V8iSaveRejectsActiveWriter", TestV8iSaveRejectsActiveWriter);

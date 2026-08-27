@@ -13,18 +13,33 @@ bool EqualNoCase(std::wstring_view left, std::wstring_view right) {
   return left.size() == right.size() && _wcsnicmp(left.data(), right.data(), left.size()) == 0;
 }
 
-std::vector<std::wstring> SplitLines(std::wstring_view text) {
+struct SplitLinesResult {
   std::vector<std::wstring> lines;
+  std::vector<std::wstring> endings;
+};
+
+SplitLinesResult SplitLines(std::wstring_view text) {
+  SplitLinesResult result;
   size_t start = 0;
-  while (start < text.size()) {
-    const size_t end = text.find(L'\n', start);
-    std::wstring line(text.substr(start, end == std::wstring_view::npos ? text.size() - start : end - start));
-    if (!line.empty() && line.back() == L'\r') line.pop_back();
-    lines.push_back(std::move(line));
-    if (end == std::wstring_view::npos) break;
-    start = end + 1;
+  for (size_t index = 0; index < text.size();) {
+    const wchar_t character = text[index];
+    if (character != L'\r' && character != L'\n') {
+      ++index;
+      continue;
+    }
+
+    result.lines.emplace_back(text.substr(start, index - start));
+    if (character == L'\r' && index + 1 < text.size() && text[index + 1] == L'\n') {
+      result.endings.emplace_back(L"\r\n");
+      index += 2;
+    } else {
+      result.endings.emplace_back(1, character);
+      ++index;
+    }
+    start = index;
   }
-  return lines;
+  if (start < text.size()) result.lines.emplace_back(text.substr(start));
+  return result;
 }
 
 bool IsSectionHeader(std::wstring_view line) {
@@ -42,10 +57,20 @@ V8iDocument V8iDocument::ParseUtf8(std::string_view bytes) {
   } else {
     document.encoding = Utf8Encoding::utf8;
   }
-  document.trailing_newline = bytes.ends_with("\n");
-  if (bytes.find("\r\n") == std::string_view::npos) document.newline = L"\n";
+  const auto split = SplitLines(utf::FromUtf8(bytes));
+  document.line_endings = split.endings;
+  document.trailing_newline = !split.endings.empty() &&
+      (split.lines.size() == split.endings.size());
+  if (!split.endings.empty()) {
+    document.newline = split.endings.front();
+    if (std::any_of(split.endings.begin() + 1, split.endings.end(), [&](const auto& ending) {
+          return ending != document.newline;
+        })) {
+      document.diagnostics.push_back(L"Файл содержит смешанные переводы строк; исходная последовательность сохранена.");
+    }
+  }
 
-  const auto lines = SplitLines(utf::FromUtf8(bytes));
+  const auto& lines = split.lines;
   Section* current = nullptr;
   std::vector<std::wstring> pending;
   for (const auto& line : lines) {
@@ -72,13 +97,8 @@ V8iDocument V8iDocument::ParseUtf8(std::string_view bytes) {
 }
 
 std::string V8iDocument::SerializeUtf8() const {
-  std::wstring output;
-  bool hasLine = false;
-  const auto append_line = [&](std::wstring_view line) {
-    if (hasLine) output.append(newline);
-    output.append(line);
-    hasLine = true;
-  };
+  std::vector<std::wstring> lines;
+  const auto append_line = [&](std::wstring_view line) { lines.emplace_back(line); };
   for (const auto& line : preamble) append_line(line);
   for (const auto& section : sections) {
     for (const auto& line : section.leading_lines) append_line(line);
@@ -102,7 +122,14 @@ std::string V8iDocument::SerializeUtf8() const {
       for (const auto& line : section.opaque_lines) append_line(line);
     }
   }
-  if (hasLine && trailing_newline) output.append(newline);
+  std::wstring output;
+  const size_t ending_count = trailing_newline ? lines.size() : (lines.empty() ? 0 : lines.size() - 1);
+  for (size_t index = 0; index < lines.size(); ++index) {
+    output.append(lines[index]);
+    if (index < ending_count) {
+      output.append(index < line_endings.size() ? line_endings[index] : newline);
+    }
+  }
   std::string bytes = utf::ToUtf8(output);
   if (encoding == Utf8Encoding::utf8_bom) bytes.insert(0, "\xEF\xBB\xBF");
   return bytes;
