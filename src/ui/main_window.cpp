@@ -1185,8 +1185,9 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
   bool launchSucceeded = false;
   try {
     const auto database = catalog_->DatabaseFor(name);
-    const auto webUrl = catalog::Catalog::WebUrl(database.connect);
-    if (webUrl && mode == domain::LaunchMode::designer) {
+    const auto connection_spec = launcher::ParseConnectionSpec(database.connect);
+    const bool webConnection = connection_spec.kind == launcher::ConnectionSpec::Kind::web;
+    if (webConnection && mode == domain::LaunchMode::designer) {
       Message(window_, L"Конфигуратор недоступен для веб-базы. Запустите её в режиме Предприятие тонким клиентом или в браузере.", L"ИБ Старт", MB_OK | MB_ICONINFORMATION);
       return;
     }
@@ -1202,7 +1203,7 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
       // App/DefaultApp describe the Enterprise launch and must not redirect F4
       // to a standalone thin client.
       options.client_type = domain::ClientType::thick;
-    } else if (webUrl) {
+    } else if (webConnection) {
       options.client_type = domain::ClientType::thin;
     } else {
       options.client_type = ClientTypeFromApplication(database.app);
@@ -1215,15 +1216,15 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
     if (options.client_type == domain::ClientType::web) { Message(window_, L"Веб-клиент можно использовать только для веб-базы с адресом http:// или https://.", L"ИБ Старт", MB_OK | MB_ICONWARNING); return; }
     auto selected = launcher::SelectPlatform(platforms_, options);
     bool usedNewestThinClient = false;
-    if (!selected && webUrl && !selectedVersion.empty() && selectedVersion != L"Авто") {
+    if (!selected && webConnection && !selectedVersion.empty() && selectedVersion != L"Авто") {
       auto newestThinOptions = options;
       newestThinOptions.version = L"Авто";
       selected = launcher::SelectPlatform(platforms_, newestThinOptions);
       usedNewestThinClient = selected.has_value();
     }
     if (!selected) {
-      if (webUrl) {
-        const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", webUrl->c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+      if (const auto browser_url = launcher::BrowserFallbackUrl(database, options)) {
+        const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", browser_url->c_str(), nullptr, nullptr, SW_SHOWNORMAL));
         if (result <= 32) {
           logger_.Error(L"Не удалось открыть веб-базу в браузере: " + database.name);
           Message(window_, L"Не удалось открыть веб-базу в браузере.", L"ИБ Старт", MB_OK | MB_ICONERROR);

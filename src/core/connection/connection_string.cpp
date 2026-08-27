@@ -15,11 +15,36 @@ bool EqualNoCase(std::wstring_view left, std::wstring_view right) {
       CompareStringOrdinal(left.data(), static_cast<int>(left.size()), right.data(), static_cast<int>(right.size()), TRUE) == CSTR_EQUAL;
 }
 
+bool HasValidHttpAuthority(std::wstring_view authority) {
+  if (authority.empty() || std::any_of(authority.begin(), authority.end(), [](wchar_t character) {
+        return character < L' ' || character == L'\"' || character == L'<' || character == L'>' || character == L'\\';
+      })) return false;
+  const auto user_separator = authority.rfind(L'@');
+  const auto host = authority.substr(user_separator == std::wstring_view::npos ? 0 : user_separator + 1);
+  if (host.empty()) return false;
+  if (host.front() == L'[') {
+    const auto closing = host.find(L']');
+    if (closing <= 1) return false;
+    if (closing + 1 == host.size()) return true;
+    return host[closing + 1] == L':' && closing + 2 < host.size();
+  }
+  const auto port_separator = host.find(L':');
+  if (port_separator == 0) return false;
+  return port_separator == std::wstring_view::npos || port_separator + 1 < host.size();
+}
+
+bool HasHttpScheme(std::wstring_view value, std::wstring_view scheme) {
+  return value.size() >= scheme.size() && EqualNoCase(value.substr(0, scheme.size()), scheme);
+}
+
 bool IsHttpUrl(std::wstring_view value) {
   constexpr std::wstring_view kHttp = L"http://";
   constexpr std::wstring_view kHttps = L"https://";
-  return (value.size() >= kHttp.size() && EqualNoCase(value.substr(0, kHttp.size()), kHttp)) ||
-      (value.size() >= kHttps.size() && EqualNoCase(value.substr(0, kHttps.size()), kHttps));
+  const auto scheme = HasHttpScheme(value, kHttp) ? kHttp : HasHttpScheme(value, kHttps) ? kHttps : std::wstring_view();
+  if (scheme.empty()) return false;
+  const auto remainder = value.substr(scheme.size());
+  const auto authority_end = remainder.find_first_of(L"/?#");
+  return HasValidHttpAuthority(remainder.substr(0, authority_end));
 }
 
 std::wstring DecodeQuotedValue(std::wstring_view value, std::vector<std::wstring>& diagnostics) {
@@ -196,6 +221,8 @@ std::wstring BuildConnection(ConnectionKind kind, std::wstring_view original,
   }
   return result;
 }
+
+bool IsValidHttpUrl(std::wstring_view value) { return IsHttpUrl(Trim(value)); }
 
 std::optional<std::wstring> WebUrl(std::wstring_view connect) {
   auto direct = Trim(connect);

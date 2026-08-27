@@ -33,6 +33,7 @@ enum class ConnectionKind { file, web, server };
 [[nodiscard]] std::wstring BuildConnection(ConnectionKind kind, std::wstring_view original,
     std::wstring_view file, std::wstring_view web, std::wstring_view server,
     std::wstring_view reference);
+[[nodiscard]] bool IsValidHttpUrl(std::wstring_view value);
 
 [[nodiscard]] std::optional<std::wstring> WebUrl(std::wstring_view connect);
 [[nodiscard]] bool IsBareWebUrl(std::wstring_view connect);
