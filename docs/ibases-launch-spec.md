@@ -41,7 +41,7 @@ HTML, CSS, изображений или исходного кода 1С.
 | Клиент | Учитываются тип, версия, разрядность и наличие тонкого клиента. | Разделить version profile, capability и режим процесса. |
 | Поля запуска | `AppArch` применяется; `WA` и `ClientConnectionSpeed` пока только сохраняются. | Реализовать связь с `/WA`, `/WSA`, `/O`, proxy и сертификатами. |
 | Raw-параметры | Windows-аргументы передаются почти без фильтрации; `/AppArch` распознаётся отдельно. | Ввести grammar, конфликт resolver, version check и redaction. |
-| Безопасность | Известные секреты маскируются, перед запуском есть предупреждение. | Перенести redaction на единый registry и не сохранять секреты в preview/fixtures. |
+| Безопасность | Известные секреты маскируются в логах и перед запуском показывается предупреждение; значения в `ibases.v8i`, UI и явном копировании доступны пользователю. | Расширить registry и тесты так, чтобы секреты не попадали в открытом виде в логи и автоматически создаваемые diagnostics/report; fixtures должны быть синтетическими или замаскированными. |
 
 Фактическое mapping полей в коде находится в
 [catalog.cpp](../src/core/catalog/catalog.cpp:209), выбор launch options — в
@@ -57,7 +57,7 @@ HTML, CSS, изображений или исходного кода 1С.
         -> validated CatalogEntry + typed V8iFieldSet
         -> LaunchRequest
         -> ParameterRegistry / conflict resolver
-        -> LaunchPlan (executable + argv + redacted preview + warnings)
+        -> LaunchPlan (executable + argv + redacted diagnostics + warnings)
         -> CreateProcessW / ShellExecuteW / browser / explicit operation
 
 UI не должен самостоятельно разбирать `ibases.v8i` или склеивать командную
@@ -115,8 +115,10 @@ UI не должен самостоятельно разбирать `ibases.v8i
    `/UnregServer` и очистка saved auth требуют отдельного контекста и
    подтверждения.
 8. `/P`, `/WSP`, `-pwd`, `PPasswd`, `AccessToken`, `UC`, `SPwd`, `DBPwd` и
-   аналогичные значения не попадают в обычный preview, log, shortcut, clipboard,
-   fixture или report.
+   аналогичные значения можно хранить в `ibases.v8i`, показывать в UI и
+   копировать явным действием пользователя. В открытом виде они не попадают в
+   log и автоматически создаваемые diagnostics/report; перед запуском остаётся
+   предупреждение.
 
 ## 5. Version profiles и обратная совместимость
 
@@ -190,7 +192,8 @@ UI не должен самостоятельно разбирать `ibases.v8i
 - attached, separate и nested options;
 - conflict resolver, precedence и `LaunchPlan::Warnings`;
 - redaction по metadata registry;
-- redacted command preview без копирования raw secrets.
+- redacted command preview и diagnostics; пользовательский просмотр и явное
+  копирование исходного значения остаются отдельными разрешёнными действиями.
 
 ### Этап 4 — применение полей
 
@@ -227,7 +230,9 @@ exit-code handling, output-file policy и tests. Нельзя добавить �
   connection/mode arguments;
 - unknown fields и unknown additional parameters не теряются;
 - UI показывает, что будет передано клиенту и что не поддерживается;
-- секреты не попадают в log, shortcut, clipboard, fixture или report;
+- секреты не попадают в открытом виде в log и автоматически создаваемый report;
+  fixtures используют синтетические или замаскированные значения, а ввод,
+  отображение и явное копирование пользователем разрешены;
 - version matrix подтверждена на целевых версиях;
 - в release package нет MHT, HTML или скопированных фрагментов документации 1С.
 
