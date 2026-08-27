@@ -3,6 +3,7 @@
 #include "core/domain/utf.hpp"
 
 #include <algorithm>
+#include <optional>
 #include <utility>
 
 namespace ibstart::catalog {
@@ -10,6 +11,89 @@ namespace {
 
 bool EqualNoCase(std::wstring_view left, std::wstring_view right) {
   return left.size() == right.size() && utf::FindNoCaseOrdinal(left, right) == 0;
+}
+
+void RemoveDuplicateFavorites(std::vector<std::wstring>& favorites) {
+  std::vector<std::wstring> unique;
+  unique.reserve(favorites.size());
+  for (auto& favorite : favorites) {
+    if (std::any_of(unique.begin(), unique.end(), [&](const auto& existing) {
+          return EqualNoCase(existing, favorite);
+        })) {
+      continue;
+    }
+    unique.push_back(std::move(favorite));
+  }
+  favorites = std::move(unique);
+}
+
+void MergeTagAssignments(storage::DatabaseTags& tags, std::wstring_view previous_id,
+    std::wstring_view updated_id) {
+  if (previous_id.empty() || updated_id.empty() || previous_id == updated_id) return;
+  const auto previous = tags.find(std::wstring(previous_id));
+  if (previous == tags.end()) return;
+
+  const auto updated = tags.find(std::wstring(updated_id));
+  if (updated == tags.end()) {
+    auto values = std::move(previous->second);
+    tags.erase(previous);
+    tags.emplace(std::wstring(updated_id), std::move(values));
+    return;
+  }
+
+  for (const auto& value : previous->second) {
+    if (std::none_of(updated->second.begin(), updated->second.end(), [&](const auto& existing) {
+          return EqualNoCase(existing, value);
+        })) {
+      updated->second.push_back(value);
+    }
+  }
+  tags.erase(previous);
+}
+
+void MergeHistory(storage::CatalogState& state, std::wstring_view previous_id,
+    std::wstring_view updated_id) {
+  if (previous_id.empty() || updated_id.empty() || previous_id == updated_id) return;
+
+  std::optional<std::size_t> first_match;
+  std::optional<domain::HistoryItem> latest;
+  for (std::size_t index = 0; index < state.history.size(); ++index) {
+    const auto& item = state.history[index];
+    if (item.database_id != previous_id && item.database_id != updated_id) continue;
+    if (!first_match) first_match = index;
+
+    auto candidate = item;
+    candidate.database_id = updated_id;
+    if (!latest || candidate.timestamp > latest->timestamp) latest = std::move(candidate);
+  }
+  if (first_match && latest) {
+    std::vector<domain::HistoryItem> merged;
+    merged.reserve(state.history.size());
+    for (std::size_t index = 0; index < state.history.size(); ++index) {
+      const auto& item = state.history[index];
+      if (item.database_id != previous_id && item.database_id != updated_id) {
+        merged.push_back(item);
+      } else if (index == *first_match) {
+        merged.push_back(*latest);
+      }
+    }
+    state.history = std::move(merged);
+  }
+}
+
+void MergeLastLaunch(storage::LastLaunchTimes& last_launches, std::wstring_view previous_id,
+    std::wstring_view updated_id) {
+  if (previous_id.empty() || updated_id.empty() || previous_id == updated_id) return;
+  const auto previous = last_launches.find(std::wstring(previous_id));
+  if (previous == last_launches.end()) return;
+
+  const auto updated = last_launches.find(std::wstring(updated_id));
+  if (updated == last_launches.end()) {
+    last_launches.emplace(std::wstring(updated_id), previous->second);
+  } else if (updated->second < previous->second) {
+    updated->second = previous->second;
+  }
+  last_launches.erase(previous);
 }
 
 }  // namespace
@@ -52,14 +136,19 @@ void CatalogMetadataService::RenameDatabaseMetadata(std::wstring previous_name, 
       for (auto& favorite : state.favorites) {
         if (EqualNoCase(favorite, previous_name) || EqualNoCase(favorite, previous_tag_id)) favorite = updated_tag_id;
       }
+      RemoveDuplicateFavorites(state.favorites);
+      if (state.favorites.size() > kMaxFavorites) state.favorites.resize(kMaxFavorites);
     }
     if (previous_tag_id != updated_tag_id) {
-      const auto existing = state.tags.find(previous_tag_id);
-      if (existing != state.tags.end()) {
-        auto tags = std::move(existing->second);
-        state.tags.erase(existing);
-        state.tags[updated_tag_id] = std::move(tags);
-      }
+      MergeTagAssignments(state.tags, previous_tag_id, updated_tag_id);
+    }
+    // A database without an explicit ID uses its name as the metadata key. A
+    // name change therefore changes the key, while an explicit ID remains
+    // stable. Do not migrate history for an explicit ID change: the user guide
+    // documents that manual ID changes require deliberate metadata handling.
+    if (previous_name != updated_name && previous_tag_id == previous_name) {
+      MergeHistory(state, previous_tag_id, updated_tag_id);
+      MergeLastLaunch(state.last_launches, previous_tag_id, updated_tag_id);
     }
   });
 }

@@ -1043,6 +1043,73 @@ void TestCatalogMetadataService() {
   std::filesystem::remove_all(directory, error);
 }
 
+void TestCatalogMetadataRenamePreservesFallbackHistory() {
+  const auto directory = Temp(L"catalog-metadata-rename-history");
+  const ibstart::storage::StorageLayout layout{directory, true};
+  ibstart::storage::EnsureWritable(layout);
+  ibstart::catalog::CatalogMetadataService service(layout);
+
+  const std::wstring previous_name = L"База до переименования";
+  const std::wstring updated_name = L"База после переименования";
+  const auto previous_timestamp = std::chrono::system_clock::from_time_t(223456789);
+  const auto updated_timestamp = std::chrono::system_clock::from_time_t(123456789);
+
+  service.SetTags(previous_name, {L"Общий", L"Старый"});
+  service.SetTags(updated_name, {L"Общий", L"Новый"});
+  CHECK(service.ToggleFavorite(previous_name));
+  CHECK(service.ToggleFavorite(updated_name));
+  service.RecordLaunch({previous_name, previous_timestamp, ibstart::domain::LaunchMode::enterprise});
+  service.RecordLaunch({updated_name, updated_timestamp, ibstart::domain::LaunchMode::designer});
+
+  service.RenameDatabaseMetadata(previous_name, updated_name, previous_name, updated_name);
+
+  const auto& state = service.Read();
+  CHECK(state.favorites == std::vector<std::wstring>{updated_name});
+  CHECK(!state.tags.contains(previous_name));
+  const auto updated_tags = state.tags.find(updated_name);
+  CHECK(updated_tags != state.tags.end());
+  if (updated_tags != state.tags.end()) {
+    CHECK(updated_tags->second == std::vector<std::wstring>{L"Общий", L"Новый", L"Старый"});
+  }
+  CHECK(state.history.size() == 1 && state.history.front().database_id == updated_name &&
+      state.history.front().timestamp == previous_timestamp &&
+      state.history.front().mode == ibstart::domain::LaunchMode::enterprise);
+  CHECK(!state.last_launches.contains(previous_name));
+  CHECK(state.last_launches.contains(updated_name));
+  CHECK(state.last_launches.at(updated_name) == previous_timestamp);
+
+  const auto persisted = ibstart::storage::LoadCatalogState(layout);
+  CHECK(persisted.favorites == state.favorites);
+  CHECK(persisted.tags == state.tags);
+  CHECK(persisted.history.size() == 1 && persisted.history.front().database_id == updated_name &&
+      persisted.history.front().timestamp == previous_timestamp &&
+      persisted.history.front().mode == ibstart::domain::LaunchMode::enterprise);
+  CHECK(persisted.last_launches == state.last_launches);
+
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
+void TestCatalogMetadataExplicitIdChangeKeepsHistoryKey() {
+  const auto directory = Temp(L"catalog-metadata-explicit-id");
+  const ibstart::storage::StorageLayout layout{directory, true};
+  ibstart::storage::EnsureWritable(layout);
+  ibstart::catalog::CatalogMetadataService service(layout);
+
+  const auto timestamp = std::chrono::system_clock::from_time_t(123456789);
+  service.RecordLaunch({L"explicit-id-old", timestamp, ibstart::domain::LaunchMode::enterprise});
+  service.RenameDatabaseMetadata(L"База", L"База", L"explicit-id-old", L"explicit-id-new");
+
+  const auto& state = service.Read();
+  CHECK(state.history.size() == 1);
+  CHECK(state.history.front().database_id == L"explicit-id-old");
+  CHECK(state.last_launches.contains(L"explicit-id-old"));
+  CHECK(!state.last_launches.contains(L"explicit-id-new"));
+
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
 void TestV8iSaveRejectsActiveWriter() {
   const auto directory = Temp(L"store-lock");
   const auto file = directory / L"ibases.v8i";
@@ -1442,6 +1509,8 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"PortableMode", TestPortableMode);
   run(L"CatalogStateRepository", TestCatalogStateRepository);
   run(L"CatalogMetadataService", TestCatalogMetadataService);
+  run(L"CatalogMetadataRenamePreservesFallbackHistory", TestCatalogMetadataRenamePreservesFallbackHistory);
+  run(L"CatalogMetadataExplicitIdChangeKeepsHistoryKey", TestCatalogMetadataExplicitIdChangeKeepsHistoryKey);
   run(L"StorageSkipsMalformedRecords", TestStorageSkipsMalformedRecords);
   run(L"StorageRejectsUnreadableDataPath", TestStorageRejectsUnreadableDataPath);
   if (failures) { std::wcerr << failures << L" test(s) failed\n"; return 1; }
