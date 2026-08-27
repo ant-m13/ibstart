@@ -333,6 +333,7 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
               DrawTextW(draw->nmcd.hdc, segment.text.data(), static_cast<int>(segment.text.size()), &text_rect,
                   DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
               if (previous) SelectObject(draw->nmcd.hdc, previous);
+              text_x += segment.width;
             }
           }
           x += width + 4;
