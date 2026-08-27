@@ -14,6 +14,7 @@
 #include <optional>
 #include <set>
 #include <stdexcept>
+#include <string>
 #include <utility>
 
 namespace ibstart::domain {
@@ -51,15 +52,6 @@ namespace {
 bool EqualNoCase(std::wstring_view left, std::wstring_view right) {
   return left.size() == right.size() && _wcsnicmp(left.data(), right.data(), left.size()) == 0;
 }
-struct ParentKeyLess {
-  using is_transparent = void;
-  bool operator()(std::wstring_view left, std::wstring_view right) const noexcept {
-    if (left.empty() || right.empty()) return left.size() < right.size();
-    const size_t common = std::min(left.size(), right.size());
-    const int comparison = _wcsnicmp(left.data(), right.data(), common);
-    return comparison == 0 ? left.size() < right.size() : comparison < 0;
-  }
-};
 bool StartsWithNoCase(std::wstring_view value, std::wstring_view prefix) {
   return value.size() >= prefix.size() && _wcsnicmp(value.data(), prefix.data(), prefix.size()) == 0;
 }
@@ -140,6 +132,20 @@ bool ValidParent(const v8i::V8iDocument& document, std::wstring_view parent) {
   const auto* section = document.Find(parent);
   return section != nullptr && section->entry.IsGroup();
 }
+
+std::wstring NormalizedFolder(std::wstring_view folder) {
+  std::wstring result(folder);
+  while (result.size() > 1 && result.back() == L'/') result.pop_back();
+  if (result.empty()) return L"/";
+  if (result.front() != L'/') result.insert(result.begin(), L'/');
+  return result;
+}
+
+std::wstring SectionPath(const domain::Entry& entry) {
+  const auto folder = NormalizedFolder(entry.ValueOr(L"Folder"));
+  return folder == L"/" ? L"/" + entry.name : folder + L"/" + entry.name;
+}
+
 }  // namespace
 
 bool Catalog::CaseInsensitiveLess::operator()(std::wstring_view left,
@@ -165,14 +171,93 @@ void Catalog::EnsureLookup() const {
   if (lookup_) return;
 
   LookupIndex index;
+  index.parent_indices.resize(document_.sections.size());
+  index.cycle_sections.resize(document_.sections.size(), false);
   index.by_name.clear();
   index.by_id.clear();
+  const auto add_diagnostic = [&](size_t section_index, std::wstring message) {
+    index.diagnostics.push_back({section_index, std::move(message)});
+  };
   for (size_t position = 0; position < document_.sections.size(); ++position) {
     const auto& entry = document_.sections[position].entry;
-    index.by_name.emplace(entry.name, position);
-    if (entry.IsDatabase()) index.by_id.emplace(entry.ValueOr(L"ID", entry.name), position);
+    if (IsBlankName(entry.name)) add_diagnostic(position, L"Пустое имя секции.");
+    const auto [name_it, name_inserted] = index.by_name.emplace(entry.name, position);
+    if (!name_inserted) {
+      index.ambiguous_names.insert(entry.name);
+      index.by_name.erase(name_it);
+      add_diagnostic(position, L"Повторяющееся имя секции: " + entry.name);
+    }
+
+    std::set<std::wstring, CaseInsensitiveLess> keys;
+    for (const auto& field : entry.fields) {
+      if (!keys.insert(field.key).second) {
+        add_diagnostic(position, L"Повторяющийся ключ в секции " + entry.name + L": " + field.key);
+      }
+    }
+
+    if (entry.IsDatabase()) {
+      const auto id = entry.ValueOr(L"ID");
+      if (!id.empty()) {
+        const auto [id_it, id_inserted] = index.by_id.emplace(id, position);
+        if (!id_inserted) {
+          index.ambiguous_ids.insert(id);
+          index.by_id.erase(id_it);
+          add_diagnostic(position, L"Повторяющийся ID базы: " + id);
+        }
+      }
+    }
+  }
+
+  std::map<std::wstring, std::vector<size_t>, CaseInsensitiveLess> entries_by_path;
+  for (size_t position = 0; position < document_.sections.size(); ++position) {
+    entries_by_path[SectionPath(document_.sections[position].entry)].push_back(position);
+  }
+  for (size_t position = 0; position < document_.sections.size(); ++position) {
+    const auto folder = NormalizedFolder(document_.sections[position].entry.ValueOr(L"Folder"));
+    if (folder == L"/") continue;
+    const auto found = entries_by_path.find(folder);
+    if (found == entries_by_path.end()) {
+      add_diagnostic(position, L"Не найдена родительская группа для пути: " + folder);
+    } else if (found->second.size() != 1) {
+      add_diagnostic(position, L"Неоднозначный родительский путь: " + folder);
+    } else if (document_.sections[found->second.front()].entry.IsDatabase()) {
+      add_diagnostic(position, L"Родительский путь указывает на базу, а не на группу: " + folder);
+    } else {
+      index.parent_indices[position] = found->second.front();
+    }
+  }
+
+  std::vector<unsigned char> state(document_.sections.size(), 0);
+  const auto visit = [&](const auto& self, size_t section_index) -> void {
+    if (state[section_index] == 2) return;
+    if (state[section_index] == 1) {
+      index.cycle_sections[section_index] = true;
+      add_diagnostic(section_index, L"Обнаружен цикл в иерархии групп.");
+      return;
+    }
+    state[section_index] = 1;
+    if (index.parent_indices[section_index]) {
+      const auto parent = *index.parent_indices[section_index];
+      self(self, parent);
+      if (index.cycle_sections[parent]) index.cycle_sections[section_index] = true;
+    }
+    state[section_index] = 2;
+  };
+  for (size_t position = 0; position < document_.sections.size(); ++position) visit(visit, position);
+  for (size_t position = 0; position < index.cycle_sections.size(); ++position) {
+    if (index.cycle_sections[position] && state[position] == 2) {
+      const bool already_reported = std::any_of(index.diagnostics.begin(), index.diagnostics.end(), [&](const auto& diagnostic) {
+        return diagnostic.section_index == position && diagnostic.message == L"Обнаружен цикл в иерархии групп.";
+      });
+      if (!already_reported) add_diagnostic(position, L"Секция относится к циклической иерархии групп.");
+    }
   }
   lookup_ = std::move(index);
+}
+
+const std::vector<ValidationDiagnostic>& Catalog::diagnostics() const {
+  EnsureLookup();
+  return lookup_->diagnostics;
 }
 
 std::vector<const domain::Entry*> Catalog::Databases() const {
@@ -191,12 +276,22 @@ domain::Entry* Catalog::Find(std::wstring_view name) {
 
 const domain::Entry* Catalog::Find(std::wstring_view name) const {
   EnsureLookup();
+  if (lookup_->ambiguous_names.contains(name)) return nullptr;
   const auto found = lookup_->by_name.find(name);
   return found == lookup_->by_name.end() ? nullptr : &document_.sections[found->second].entry;
 }
 
+domain::Entry* Catalog::FindBySectionIndex(size_t index) {
+  return const_cast<domain::Entry*>(std::as_const(*this).FindBySectionIndex(index));
+}
+
+const domain::Entry* Catalog::FindBySectionIndex(size_t index) const {
+  return index < document_.sections.size() ? &document_.sections[index].entry : nullptr;
+}
+
 const domain::Entry* Catalog::FindById(std::wstring_view id) const {
   EnsureLookup();
+  if (lookup_->ambiguous_ids.contains(id)) return nullptr;
   const auto found = lookup_->by_id.find(id);
   return found == lookup_->by_id.end() ? nullptr : &document_.sections[found->second].entry;
 }
@@ -244,30 +339,40 @@ std::vector<const domain::Entry*> Catalog::ChildrenOf(std::wstring_view parent) 
 }
 
 std::vector<TreeItem> Catalog::Tree() const {
+  EnsureLookup();
   // Index children once instead of scanning every document section for every
   // visited group.  Large ibases.v8i files commonly contain many groups, so
   // the old recursive ChildrenOf() calls multiplied the same linear scan.
-  std::map<std::wstring, std::vector<const domain::Entry*>, ParentKeyLess> children_by_parent;
-  for (const auto& section : document_.sections) {
-    children_by_parent[ParentName(section.entry.ValueOr(L"Folder"))].push_back(&section.entry);
+  constexpr size_t kRoot = std::numeric_limits<size_t>::max();
+  std::map<size_t, std::vector<size_t>> children_by_parent;
+  for (size_t position = 0; position < document_.sections.size(); ++position) {
+    const auto parent = lookup_->parent_indices[position];
+    const size_t parent_index = parent && !lookup_->cycle_sections[position] ? *parent : kRoot;
+    children_by_parent[parent_index].push_back(position);
   }
-  for (auto& [_, children] : children_by_parent) std::sort(children.begin(), children.end(), LessEntry);
+  for (auto& [_, children] : children_by_parent) {
+    std::sort(children.begin(), children.end(), [&](size_t left, size_t right) {
+      return LessEntry(&document_.sections[left].entry, &document_.sections[right].entry);
+    });
+  }
 
-  std::vector<std::wstring> ancestors;
-  const auto build = [&](auto&& self, std::wstring_view parent) -> std::vector<TreeItem> {
+  std::set<size_t> ancestors;
+  const auto build = [&](auto&& self, size_t parent) -> std::vector<TreeItem> {
     std::vector<TreeItem> result;
     const auto found = children_by_parent.find(parent);
     if (found == children_by_parent.end()) return result;
     result.reserve(found->second.size());
-    for (const auto* entry : found->second) {
-      TreeItem item{entry->name, entry->IsDatabase(), std::wstring(parent), {}};
-      const bool cycle = std::any_of(ancestors.begin(), ancestors.end(), [&](const auto& ancestor) { return EqualNoCase(ancestor, entry->name); });
-      if (entry->IsGroup() && !cycle) { ancestors.push_back(entry->name); item.children = self(self, entry->name); ancestors.pop_back(); }
+    for (const auto section_index : found->second) {
+      const auto& entry = document_.sections[section_index].entry;
+      const std::wstring parent_name = parent == kRoot ? std::wstring() : document_.sections[parent].entry.name;
+      TreeItem item{entry.name, entry.IsDatabase(), parent_name, {}, section_index};
+      const bool cycle = !ancestors.insert(section_index).second;
+      if (entry.IsGroup() && !cycle) { item.children = self(self, section_index); ancestors.erase(section_index); }
       result.push_back(std::move(item));
     }
     return result;
   };
-  return build(build, L"");
+  return build(build, kRoot);
 }
 
 bool Catalog::AddGroup(std::wstring name, std::wstring parent) {
@@ -334,6 +439,15 @@ bool Catalog::RenameGroup(std::wstring_view name, std::wstring new_name) {
 bool Catalog::Remove(std::wstring_view name) {
   const auto* entry = Find(name);
   if (entry == nullptr) return false;
+  const auto found = std::find_if(document_.sections.begin(), document_.sections.end(),
+      [&](const v8i::Section& section) { return &section.entry == entry; });
+  if (found == document_.sections.end()) return false;
+  return Remove(static_cast<size_t>(std::distance(document_.sections.begin(), found)));
+}
+
+bool Catalog::Remove(size_t section_index) {
+  auto* entry = FindBySectionIndex(section_index);
+  if (entry == nullptr) return false;
   const std::wstring parent = ParentName(entry->ValueOr(L"Folder"));
   if (entry->IsGroup()) {
     const std::wstring replacement_folder = FolderForParent(document_, parent);
@@ -344,11 +458,12 @@ bool Catalog::Remove(std::wstring_view name) {
         const std::wstring new_path = AppendFolder(replacement_folder, child->name);
         RewriteFolderPrefix(document_, old_path, new_path);
       }
-      Find(child->name)->Set(L"Folder", replacement_folder);
+      const_cast<domain::Entry*>(child)->Set(L"Folder", replacement_folder);
     }
   }
-  const bool removed = document_.Remove(name);
+  const bool removed = document_.RemoveAt(section_index);
   if (removed) Renumber(parent);
+  lookup_.reset();
   return removed;
 }
 

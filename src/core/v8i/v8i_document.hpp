@@ -30,6 +30,7 @@ class V8iDocument {
   [[nodiscard]] const Section* Find(std::wstring_view name) const;
   Section& Add(std::wstring name);
   bool Remove(std::wstring_view name);
+  bool RemoveAt(size_t index);
 
   Utf8Encoding encoding{Utf8Encoding::utf8_bom};
   std::wstring newline{L"\r\n"};

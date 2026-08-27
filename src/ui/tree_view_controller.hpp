@@ -8,6 +8,7 @@
 #include <Windows.h>
 
 #include <map>
+#include <optional>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -43,6 +44,8 @@ class TreeViewController final {
   [[nodiscard]] bool IsVirtualBranch(HTREEITEM item) const;
   [[nodiscard]] LPARAM BranchData(HTREEITEM item) const;
   [[nodiscard]] std::wstring SelectedName() const;
+  [[nodiscard]] std::optional<size_t> SectionIndex(HTREEITEM item) const;
+  [[nodiscard]] std::optional<size_t> SelectedSectionIndex() const;
   [[nodiscard]] bool SelectedItemIsRecentRoot() const;
   [[nodiscard]] bool SelectItem(std::wstring_view name) const;
   [[nodiscard]] bool SelectCatalogRoot() const;

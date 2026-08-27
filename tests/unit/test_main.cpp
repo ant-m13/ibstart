@@ -408,6 +408,42 @@ void TestCatalogOrderingAndCycles() {
   CHECK(!ibstart::catalog::IsBareWebConnection(L"WS=\"https://example.test/base\""));
 }
 
+void TestCatalogValidationAndStableSectionIndices() {
+  auto document = ibstart::v8i::V8iDocument::ParseUtf8(
+      "[Duplicate]\nConnect=File=\"C:\\\\first\"\nID=shared\nCustom=one\nCustom=two\n"
+      "[duplicate]\nConnect=File=\"C:\\\\second\"\nID=shared\n"
+      "[Orphan]\nConnect=File=\"C:\\\\orphan\"\nFolder=/Missing\n"
+      "[Parent]\nFolder=/\n"
+      "[Child]\nConnect=File=\"C:\\\\child\"\nFolder=/Parent\n");
+  ibstart::catalog::Catalog catalog(std::move(document));
+
+  CHECK(!catalog.IsValid());
+  CHECK(catalog.Find(L"Duplicate") == nullptr);
+  CHECK(catalog.FindBySectionIndex(0) != nullptr);
+  CHECK(catalog.FindBySectionIndex(1) != nullptr);
+  CHECK(std::any_of(catalog.diagnostics().begin(), catalog.diagnostics().end(), [](const auto& diagnostic) {
+    return diagnostic.message.find(L"Повторяющееся имя секции") != std::wstring::npos;
+  }));
+  CHECK(std::any_of(catalog.diagnostics().begin(), catalog.diagnostics().end(), [](const auto& diagnostic) {
+    return diagnostic.message.find(L"Повторяющийся ключ") != std::wstring::npos;
+  }));
+  CHECK(std::any_of(catalog.diagnostics().begin(), catalog.diagnostics().end(), [](const auto& diagnostic) {
+    return diagnostic.message.find(L"Повторяющийся ID") != std::wstring::npos;
+  }));
+  CHECK(std::any_of(catalog.diagnostics().begin(), catalog.diagnostics().end(), [](const auto& diagnostic) {
+    return diagnostic.message.find(L"Не найдена родительская группа") != std::wstring::npos;
+  }));
+
+  const auto tree = catalog.Tree();
+  const auto child = std::find_if(tree.begin(), tree.end(), [](const auto& item) { return item.name == L"Parent"; });
+  CHECK(child != tree.end());
+  CHECK(child != tree.end() && child->children.size() == 1 && child->children.front().name == L"Child");
+  CHECK(child != tree.end() && child->children.front().section_index == 4);
+  CHECK(catalog.Remove(1));
+  CHECK(catalog.FindBySectionIndex(1) != nullptr);
+  CHECK(catalog.FindBySectionIndex(3) != nullptr);
+}
+
 void TestCatalogSetChildOrder() {
   auto document = ibstart::v8i::V8iDocument::ParseUtf8(
       "[Zulu database]\nConnect=File=\"C:\\\\zulu\"\nOrderInList=1\nOrderInTree=1\n"
@@ -1321,6 +1357,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"CustomX86PlatformDiscovery", TestCustomX86PlatformDiscovery);
   run(L"WindowsArgumentQuoting", TestWindowsArgumentQuoting);
   run(L"CatalogOrderingAndCycles", TestCatalogOrderingAndCycles);
+  run(L"CatalogValidationAndStableSectionIndices", TestCatalogValidationAndStableSectionIndices);
   run(L"CatalogSetChildOrder", TestCatalogSetChildOrder);
   run(L"CatalogSortChildrenByName", TestCatalogSortChildrenByName);
   run(L"StandardFolderPaths", TestStandardFolderPaths);
