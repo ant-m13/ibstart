@@ -158,6 +158,27 @@ void TestConnectionStringParsing() {
   CHECK(legacyWeb && *legacyWeb == L"https://example.test/base");
   CHECK(ibstart::connection::IsBareWebUrl(L" https://example.test/base "));
   CHECK(!ibstart::connection::IsBareWebUrl(L"https://example.test/base;Custom=keep"));
+
+  const auto fileConnection = ibstart::connection::BuildConnection(
+      ibstart::connection::ConnectionKind::file,
+      L"https://old.example/base;Custom=keep;Another=fragment",
+      L"C:\\new", L"", L"", L"");
+  CHECK(fileConnection == L"File=\"C:\\new\";Custom=keep;Another=fragment");
+  const auto serverConnection = ibstart::connection::BuildConnection(
+      ibstart::connection::ConnectionKind::server,
+      L"https://old.example/base;Custom=keep;Another=fragment",
+      L"", L"", L"cluster", L"database");
+  CHECK(serverConnection == L"Srvr=\"cluster\";Ref=\"database\";Custom=keep;Another=fragment");
+  const auto webConnection = ibstart::connection::BuildConnection(
+      ibstart::connection::ConnectionKind::web,
+      L"https://old.example/base;Custom=keep;Another=fragment",
+      L"", L"https://new.example/base", L"", L"");
+  CHECK(webConnection == L"WS=\"https://new.example/base\";Custom=keep;Another=fragment");
+  const auto orderedConnection = ibstart::connection::BuildConnection(
+      ibstart::connection::ConnectionKind::server,
+      L"Before=first;File=\"old\";After=second",
+      L"", L"", L"cluster", L"database");
+  CHECK(orderedConnection == L"Before=first;Srvr=\"cluster\";Ref=\"database\";After=second");
 }
 
 void TestNoBomAndCatalog() {
