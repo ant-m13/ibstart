@@ -77,7 +77,7 @@ Lossless-слой должен хранить исходное представ�
 | `PSrv` | web | Адрес proxy. | `TARGET` |
 | `PPort` | web | Порт proxy. | `TARGET` |
 | `PUser` | web | Пользователь proxy. | `TARGET` |
-| `PPasswd` | web | Пароль proxy; не расшифровывать и не логировать. | `TARGET` |
+| `PPasswd` | web | Пароль proxy; не расшифровывать и не записывать в логи в открытом виде. | `TARGET` |
 | `ClientConnectionSpeed` | thin/web | Скорость соединения `Normal` или `Low`; целевой параметр `/O`. | `PARTIAL` |
 | `App` | база | `Auto`, `ThinClient`, `ThickClient`, `WebClient`. | `PARTIAL` |
 | `AppArch` | база | `x86`, `x86_64`, `x86_prt`, `x86_64_prt`. | `APPLY` |

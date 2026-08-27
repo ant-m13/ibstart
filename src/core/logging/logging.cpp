@@ -27,7 +27,10 @@ bool StartsWithNoCase(std::wstring_view value, std::wstring_view prefix) {
 }
 
 bool IsSeparateSecretSwitch(std::wstring_view argument) {
-  constexpr std::wstring_view switches[] = {L"/P", L"/Password", L"--password", L"-password", L"--token", L"-token"};
+  constexpr std::wstring_view switches[] = {
+      L"/P", L"/Password", L"/WSP", L"/ModifyPassword", L"/AccessToken", L"/UC", L"/SPwd", L"/DBPwd",
+      L"/PPasswd", L"WSP", L"PPasswd", L"AccessToken", L"UC", L"SPwd", L"DBPwd",
+      L"--password", L"-password", L"--token", L"-token", L"--secret", L"-secret", L"--pwd", L"-pwd", L"-PPwd"};
   return std::any_of(std::begin(switches), std::end(switches), [&](auto value) { return EqualNoCase(argument, value); });
 }
 
@@ -42,8 +45,10 @@ bool IsKnownNonSecretPSwitch(std::wstring_view argument) {
 
 std::optional<size_t> ExplicitInlineSecretPrefixLength(std::wstring_view argument) {
   constexpr std::wstring_view prefixes[] = {
-      L"/Password=", L"--password=", L"-password=", L"--token=", L"-token=",
-      L"password=", L"pwd=", L"token=", L"secret=", L"/P="};
+      L"/Password=", L"/WSP=", L"/ModifyPassword=", L"/AccessToken=", L"/UC=", L"/SPwd=", L"/DBPwd=", L"/PPasswd=",
+      L"--password=", L"-password=", L"--token=", L"-token=", L"--secret=", L"-secret=", L"--pwd=", L"-pwd=", L"-PPwd=",
+      L"password=", L"pwd=", L"token=", L"secret=", L"WSP=", L"PPasswd=", L"AccessToken=", L"UC=", L"SPwd=", L"DBPwd=",
+      L"ModifyPassword=", L"/P="};
   for (const auto prefix : prefixes) if (StartsWithNoCase(argument, prefix)) return prefix.size();
   return std::nullopt;
 }
@@ -62,7 +67,9 @@ bool IsIdentifierCharacter(wchar_t value) {
 }
 
 bool ContainsSecretAssignment(std::wstring_view argument) {
-  constexpr std::wstring_view keys[] = {L"password", L"pwd", L"token", L"secret"};
+  constexpr std::wstring_view keys[] = {
+      L"access_token", L"access-token", L"accesstoken", L"modify_password", L"modify-password", L"modifypassword",
+      L"ppasswd", L"password", L"secret", L"token", L"pwd", L"wsp", L"spwd", L"dbpwd", L"uc", L"jwt"};
   for (const auto key : keys) {
     for (size_t position = utf::FindNoCaseOrdinal(argument, key); position != std::wstring_view::npos;
          position = utf::FindNoCaseOrdinal(argument, key, position + 1)) {
@@ -91,7 +98,9 @@ std::wstring MaskSecrets(std::wstring_view arguments) {
   // Keep the expression portable: the MSVC ECMAScript implementation does
   // not support the negative lookahead that would otherwise exclude /Path,
   // /Port and /Profile.  Those switches are filtered while applying matches.
-  const std::wregex paired(LR"mask(((?:/(?:Password|P)|--(?:password|token)|-(?:password|token))\s*(?:=\s*)?)("(?:[^"]*)"|[^\s]+))mask", std::regex_constants::icase);
+  const std::wregex paired(
+      LR"mask(((?:(?:/(?:Password|P|WSP|ModifyPassword|AccessToken|UC|SPwd|DBPwd|PPasswd))|(?:--|-)(?:password|token|secret|pwd|accesstoken|access_token|modify-password|modify_password|ppwd)|(?:WSP|PPasswd|AccessToken|UC|SPwd|DBPwd|ModifyPassword|password|pwd|token|secret))\s*(?:=\s*)?)("(?:[^"]*)"|[^\s]+))mask",
+      std::regex_constants::icase);
   std::wstring masked;
   masked.reserve(result.size());
   size_t copied = 0;
@@ -112,7 +121,9 @@ std::wstring MaskSecrets(std::wstring_view arguments) {
   result.swap(masked);
   // Pwd is the password key used inside 1C connection strings, including the
   // fallback /IBConnection form that is written to the launch log.
-  const std::wregex assignment(LR"(((?:password|pwd|token|secret)\s*=\s*)(\"(?:[^\"]*)\"|[^\s]+))", std::regex_constants::icase);
+  const std::wregex assignment(
+      LR"(((?:access[_-]?token|modify[_-]?password|ppasswd|password|secret|token|pwd|wsp|spwd|dbpwd|uc|jwt)\s*=\s*)(\"(?:[^\"]*)\"|[^\s;,]+))",
+      std::regex_constants::icase);
   return std::regex_replace(result, assignment, L"$1***");
 }
 
@@ -131,7 +142,7 @@ std::wstring RedactedCommandLine(const domain::LaunchCommand& command) {
       redactNext = true;
       continue;
     }
-    if (EqualNoCase(argument, L"/IBConnection")) {
+    if (EqualNoCase(argument, L"/IBConnection") || EqualNoCase(argument, L"/IBConnectionString")) {
       redacted.push_back(argument);
       // A fallback connection string may contain Pwd and other server details.
       // Hiding the complete following argument avoids implementing a second,
@@ -143,7 +154,7 @@ std::wstring RedactedCommandLine(const domain::LaunchCommand& command) {
       redacted.push_back(argument.substr(0, *prefix) + L"***");
       continue;
     }
-    redacted.push_back(argument);
+    redacted.push_back(MaskSecrets(argument));
   }
 
   std::wstring result = launcher::QuoteWindowsArgument(command.executable.wstring());
@@ -151,24 +162,31 @@ std::wstring RedactedCommandLine(const domain::LaunchCommand& command) {
     result.push_back(L' ');
     result += launcher::QuoteWindowsArgument(argument);
   }
-  return result;
+  return MaskSecrets(result);
 }
 
 bool ContainsSecretArguments(const domain::LaunchCommand& command) {
   for (size_t index = 0; index < command.arguments.size(); ++index) {
     const auto& argument = command.arguments[index];
-    if (EqualNoCase(argument, L"/F") || EqualNoCase(argument, L"/S") || EqualNoCase(argument, L"/WS")) {
+    if (EqualNoCase(argument, L"/F") || EqualNoCase(argument, L"/S")) {
       if (index + 1 < command.arguments.size()) ++index;
       continue;
     }
-    if (EqualNoCase(argument, L"/IBConnection")) {
+    if (EqualNoCase(argument, L"/WS")) {
       if (index + 1 < command.arguments.size()) {
         if (ContainsSecretAssignment(command.arguments[index + 1])) return true;
         ++index;
       }
       continue;
     }
-    if (IsSeparateSecretSwitch(argument) || ExplicitInlineSecretPrefixLength(argument)) return true;
+    if (EqualNoCase(argument, L"/IBConnection") || EqualNoCase(argument, L"/IBConnectionString")) {
+      if (index + 1 < command.arguments.size()) {
+        if (ContainsSecretAssignment(command.arguments[index + 1])) return true;
+        ++index;
+      }
+      continue;
+    }
+    if (IsSeparateSecretSwitch(argument) || ExplicitInlineSecretPrefixLength(argument) || ContainsSecretAssignment(argument)) return true;
   }
   return false;
 }

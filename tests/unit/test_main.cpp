@@ -674,6 +674,13 @@ void TestSecretMasking() {
   const auto masked = ibstart::logging::MaskSecrets(
       L"/N admin /P \"s3cret\" --token=abc password=xyz /Password hunter2 Pwd=db-secret");
   CHECK(masked.find(L"s3cret") == std::wstring::npos); CHECK(masked.find(L"abc") == std::wstring::npos); CHECK(masked.find(L"xyz") == std::wstring::npos); CHECK(masked.find(L"hunter2") == std::wstring::npos); CHECK(masked.find(L"db-secret") == std::wstring::npos); CHECK(masked.find(L"admin") != std::wstring::npos);
+  const auto masked1cSecrets = ibstart::logging::MaskSecrets(
+      L"/WSP web-secret /AccessToken access-token UC=uc-secret PPasswd=proxy-secret SPwd=server-secret "
+      L"DBPwd=db-secret ModifyPassword=new-secret https://example.test/?AccessToken=url-token&UC=url-code");
+  for (const auto secret : {L"web-secret", L"access-token", L"uc-secret", L"proxy-secret", L"server-secret",
+                            L"db-secret", L"new-secret", L"url-token", L"url-code"}) {
+    CHECK(masked1cSecrets.find(secret) == std::wstring::npos);
+  }
   const auto maskedSafeSwitches = ibstart::logging::MaskSecrets(L"/Path C:\\db /Port 1545 /Profile default");
   CHECK(maskedSafeSwitches.find(L"/Path C:\\db") != std::wstring::npos);
   CHECK(maskedSafeSwitches.find(L"/Port 1545") != std::wstring::npos);
@@ -696,6 +703,8 @@ void TestSecretMasking() {
   const ibstart::domain::LaunchCommand safeParameters{L"1cv8.exe", {L"ENTERPRISE", L"/Path", L"/Port", L"/Profile"}};
   const ibstart::domain::LaunchCommand namedPassword{L"1cv8.exe", {L"ENTERPRISE", L"--password=alpha"}};
   const ibstart::domain::LaunchCommand separateToken{L"1cv8.exe", {L"ENTERPRISE", L"--token", L"alpha"}};
+  const ibstart::domain::LaunchCommand webSecrets{
+      L"1cv8.exe", {L"ENTERPRISE", L"/WS", L"https://example.test/?AccessToken=url-token&UC=url-code"}};
   const ibstart::domain::LaunchCommand connectionSecret{
       L"1cv8.exe", {L"ENTERPRISE", L"/IBConnection", L"DBSrvr=\"srv\";Pwd = \"alpha\""}};
   const ibstart::domain::LaunchCommand connectionWithoutSecret{
@@ -707,6 +716,11 @@ void TestSecretMasking() {
   CHECK(redactedSafeParameters.find(L"/Profile") != std::wstring::npos);
   CHECK(ibstart::logging::ContainsSecretArguments(namedPassword));
   CHECK(ibstart::logging::ContainsSecretArguments(separateToken));
+  CHECK(ibstart::logging::ContainsSecretArguments(webSecrets));
+  const auto redactedWeb = ibstart::logging::RedactedCommandLine(webSecrets);
+  CHECK(redactedWeb.find(L"url-token") == std::wstring::npos);
+  CHECK(redactedWeb.find(L"url-code") == std::wstring::npos);
+  CHECK(redactedWeb.find(L"AccessToken=***") != std::wstring::npos);
   CHECK(ibstart::logging::ContainsSecretArguments(connectionSecret));
   CHECK(!ibstart::logging::ContainsSecretArguments(connectionWithoutSecret));
 }
@@ -717,7 +731,10 @@ void TestLogPruning() {
     WriteBytes(directory / (L"ibstart_20260101_0000" + std::to_wstring(index) + L".log"), "old");
   }
   ibstart::logging::Logger logger(directory);
-  logger.Info(L"new log entry");
+  logger.Info(L"new log entry /WS https://example.test/?AccessToken=log-token");
+  const auto log = ReadBytes(logger.path());
+  CHECK(log.find("log-token") == std::string::npos);
+  CHECK(log.find("AccessToken=***") != std::string::npos);
   size_t logs = 0;
   for (const auto& item : std::filesystem::directory_iterator(directory)) {
     if (item.is_regular_file() && item.path().extension() == L".log") ++logs;

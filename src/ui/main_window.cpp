@@ -1196,7 +1196,8 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
     }
     const auto command = launcher::BuildCommand(database, *selected, options);
     if (logging::ContainsSecretArguments(command) &&
-        MessageBoxW(window_, L"В параметрах запуска обнаружен пароль или токен. Секрет может храниться в открытом виде в ibases.v8i. Продолжить?",
+        MessageBoxW(window_, L"В параметрах запуска обнаружен пароль или токен. Значение будет видно в ibases.v8i и интерфейсе, "
+                             L"а в журналах и автоматически создаваемых диагностических сообщениях будет замаскировано. Продолжить?",
             L"Предупреждение", MB_YESNO | MB_ICONWARNING) != IDYES) return;
     if (usedNewestThinClient) logger_.Info(L"Требуемая версия " + selectedVersion + L" не найдена; для веб-базы выбран тонкий клиент " + selected->version + L".");
     launcher::Launch(command);
