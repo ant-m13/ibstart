@@ -4,6 +4,7 @@
 
 #include <filesystem>
 #include <cstdint>
+#include <functional>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -23,7 +24,10 @@ class V8iFileStore {
   [[nodiscard]] const std::filesystem::path& path() const noexcept { return path_; }
   [[nodiscard]] V8iDocument Read();
   void AcceptCurrentContentsForOverwrite();
-  void Save(const V8iDocument& document);
+  // The optional callback is invoked after the pre-commit fingerprint checks
+  // and before the final revalidation/atomic replacement. It is used to
+  // exercise the commit boundary in concurrency tests.
+  void Save(const V8iDocument& document, const std::function<void()>& before_commit = {});
   [[nodiscard]] std::vector<std::filesystem::path> Backups() const;
   [[nodiscard]] const std::vector<std::string>& maintenance_warnings() const noexcept { return maintenance_warnings_; }
 

@@ -118,29 +118,6 @@ class SaveMutex final {
   bool acquired_{false};
 };
 
-class SaveLock final {
- public:
-  explicit SaveLock(const std::filesystem::path& path) {
-    // Do not share write or delete access: a concurrent atomic replacement
-    // needs delete access to the target and is rejected during the save.
-    handle_ = CreateFileW(path.c_str(), GENERIC_READ, FILE_SHARE_READ, nullptr, OPEN_EXISTING, FILE_ATTRIBUTE_NORMAL, nullptr);
-    if (handle_ == INVALID_HANDLE_VALUE) {
-      const DWORD error = GetLastError();
-      handle_ = nullptr;
-      throw std::runtime_error("Cannot lock ibases.v8i for saving: " + PathText(path) + ": " +
-          utf::ToUtf8(utf::LastErrorMessage(error)));
-    }
-  }
-
-  ~SaveLock() { if (handle_) CloseHandle(handle_); }
-
-  SaveLock(const SaveLock&) = delete;
-  SaveLock& operator=(const SaveLock&) = delete;
-
- private:
-  HANDLE handle_{};
-};
-
 }  // namespace
 
 V8iFileStore::V8iFileStore(std::filesystem::path path) : path_(std::move(path)) {}
@@ -255,7 +232,7 @@ void V8iFileStore::PruneBackups() {
   }
 }
 
-void V8iFileStore::Save(const V8iDocument& document) {
+void V8iFileStore::Save(const V8iDocument& document, const std::function<void()>& before_commit) {
   maintenance_warnings_.clear();
   SaveMutex saveMutex(path_);
   if (!fingerprint_known_) {
@@ -279,16 +256,10 @@ void V8iFileStore::Save(const V8iDocument& document) {
       if (!output) throw std::runtime_error("Cannot write temporary ibases.v8i file.");
     }
     if (loaded_fingerprint_) {
-      {
-        SaveLock lock(path_);
-        if (FingerprintOf(path_) != loaded_fingerprint_) {
-          throw ExternalModificationError("ibases.v8i was changed by another program. Reload it before saving.");
-        }
-        CreateBackup();
-        if (FingerprintOf(path_) != loaded_fingerprint_) {
-          throw ExternalModificationError("ibases.v8i was changed by another program. Reload it before saving.");
-        }
-      }  // MoveFileExW requires the target handle to be closed before replacement.
+      if (FingerprintOf(path_) != loaded_fingerprint_) {
+        throw ExternalModificationError("ibases.v8i was changed by another program. Reload it before saving.");
+      }
+      CreateBackup();
       if (FingerprintOf(path_) != loaded_fingerprint_) {
         throw ExternalModificationError("ibases.v8i was changed by another program. Reload it before saving.");
       }
@@ -300,6 +271,16 @@ void V8iFileStore::Save(const V8iDocument& document) {
       if (FingerprintOf(path_) != loaded_fingerprint_) {
         throw ExternalModificationError("ibases.v8i was changed by another program. Reload it before saving.");
       }
+    }
+    // SaveMutex is held from the first fingerprint check through this commit
+    // point. It serializes IBStart instances using the same protocol; Windows
+    // cannot make an arbitrary external writer participate in this lock.
+    if (before_commit) before_commit();
+    // Keep a second comparison after the test seam as well: it makes the
+    // check-to-commit boundary observable and rejects a writer that changed
+    // the path before the replacement call begins.
+    if (FingerprintOf(path_) != loaded_fingerprint_) {
+      throw ExternalModificationError("ibases.v8i was changed by another program. Reload it before saving.");
     }
     const DWORD replace_flags = MOVEFILE_WRITE_THROUGH | (loaded_fingerprint_ ? MOVEFILE_REPLACE_EXISTING : 0);
     if (!MoveFileExW(temporary.c_str(), path_.c_str(), replace_flags)) {
