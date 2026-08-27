@@ -1209,8 +1209,12 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
       options.client_type = ClientTypeFromApplication(database.app);
       if (options.client_type == domain::ClientType::automatic) options.client_type = ClientTypeFromApplication(database.default_app);
     }
-    if (const auto fromParameters = launcher::AppArchitectureFromParameters(database.additional_parameters)) options.architecture = *fromParameters;
-    else if (const auto fromDatabase = launcher::ParseAppArchitecture(database.app_arch)) options.architecture = *fromDatabase;
+    const auto validation = launcher::ValidateLaunchParameters(database, options);
+    if (!validation.empty()) throw std::invalid_argument(utf::ToUtf8(validation.front()));
+    const auto fromParameters = launcher::AppArchitectureFromParameters(database.additional_parameters);
+    const auto fromDatabase = launcher::ParseAppArchitecture(database.app_arch);
+    if (fromParameters) options.architecture = *fromParameters;
+    else if (fromDatabase) options.architecture = *fromDatabase;
     const auto& selectedVersion = database.version.empty() ? database.default_version : database.version;
     if (selectedVersion != L"" && selectedVersion != L"Авто") options.version = selectedVersion;
     if (options.client_type == domain::ClientType::web) { Message(window_, L"Веб-клиент можно использовать только для веб-базы с адресом http:// или https://.", L"ИБ Старт", MB_OK | MB_ICONWARNING); return; }

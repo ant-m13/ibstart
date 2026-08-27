@@ -353,11 +353,42 @@ void TestLaunchParameterConflicts() {
   CHECK(!ibstart::launcher::ValidateLaunchParameters(database, options).empty());
   database.additional_parameters = L"/URL https://example.test/base";
   CHECK(!ibstart::launcher::ValidateLaunchParameters(database, options).empty());
+  database.additional_parameters.clear();
+  database.app_arch = L"x64";
+  const auto invalidDatabaseArchitecture = ibstart::launcher::ValidateLaunchParameters(database, options);
+  CHECK(!invalidDatabaseArchitecture.empty());
+  CHECK(invalidDatabaseArchitecture.front().find(L"x64") != std::wstring::npos);
+  CHECK(database.app_arch == L"x64");
+  bool invalidDatabaseArchitectureCommand = false;
+  try { static_cast<void>(ibstart::launcher::BuildCommand(database, platform, options)); }
+  catch (const std::invalid_argument&) { invalidDatabaseArchitectureCommand = true; }
+  CHECK(invalidDatabaseArchitectureCommand);
+  database.app_arch = L"  x86_64  ";
+  CHECK(ibstart::launcher::ValidateLaunchParameters(database, options).empty());
+  database.app_arch = L"x86";
+  CHECK(ibstart::launcher::ValidateLaunchParameters(database, options).empty());
+  database.app_arch = L"x86_prt";
+  CHECK(ibstart::launcher::ValidateLaunchParameters(database, options).empty());
+  database.app_arch = L"x86_64_prt";
+  CHECK(ibstart::launcher::ValidateLaunchParameters(database, options).empty());
+  database.app_arch = L"win64";
+  database.additional_parameters = L"/AppArch x86";
+  CHECK(!ibstart::launcher::ValidateLaunchParameters(database, options).empty());
+  database.app_arch = L"x86_64";
+  CHECK(ibstart::launcher::ValidateLaunchParameters(database, options).empty());
+  database.app_arch.clear();
+  database.additional_parameters.clear();
 
   ibstart::domain::Database webDatabase;
   webDatabase.connect = L"https://example.test/base;Custom=keep";
   const auto browserUrl = ibstart::launcher::BrowserFallbackUrl(webDatabase, options);
   CHECK(browserUrl && *browserUrl == L"https://example.test/base");
+  webDatabase.app_arch = L"win64";
+  bool invalidBrowserAppArchitecture = false;
+  try { static_cast<void>(ibstart::launcher::BrowserFallbackUrl(webDatabase, options)); }
+  catch (const std::invalid_argument&) { invalidBrowserAppArchitecture = true; }
+  CHECK(invalidBrowserAppArchitecture);
+  webDatabase.app_arch.clear();
   webDatabase.connect = L"https://example.test/base;File=other";
   bool invalidMixedBrowserConnection = false;
   try { static_cast<void>(ibstart::launcher::BrowserFallbackUrl(webDatabase, options)); }
