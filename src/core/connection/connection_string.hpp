@@ -8,9 +8,22 @@
 namespace ibstart::connection {
 
 // A 1C Connect value is a semicolon-delimited list of key/value fragments.
-// Quoted values may contain semicolons; callers can preserve unknown fragments
-// when they rebuild a connection string for an editor.
+// The raw fragment is retained alongside its decoded key/value view so editors
+// can preserve unknown fragments when they rebuild a connection string.
+struct Fragment {
+  std::wstring raw;
+  std::wstring key;
+  std::wstring value;
+  bool has_equals{false};
+};
+
+struct ParseResult {
+  std::vector<Fragment> fragments;
+  std::vector<std::wstring> diagnostics;
+};
+
 [[nodiscard]] std::wstring Trim(std::wstring_view value);
+[[nodiscard]] ParseResult Parse(std::wstring_view connect);
 [[nodiscard]] std::vector<std::wstring> Split(std::wstring_view connect);
 [[nodiscard]] std::optional<std::wstring> Value(std::wstring_view connect, std::wstring_view key);
 [[nodiscard]] std::wstring ValueOrEmpty(std::wstring_view connect, std::wstring_view key);

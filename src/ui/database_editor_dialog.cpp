@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cwctype>
+#include <stdexcept>
 #include <utility>
 
 namespace ibstart::ui::dialog {
@@ -52,6 +53,9 @@ DatabaseConnectionKind DetectConnectionKind(std::wstring_view connect) {
 
 std::wstring BuildConnection(DatabaseConnectionKind kind, std::wstring_view original, std::wstring_view file,
     std::wstring_view web, std::wstring_view server, std::wstring_view reference) {
+  const auto parsed = connection::Parse(original);
+  if (!parsed.diagnostics.empty()) throw std::invalid_argument("Connect contains an unsafe quote sequence.");
+
   std::wstring result;
   const auto append = [&result](std::wstring_view value) {
     if (value.empty()) return;
@@ -65,7 +69,8 @@ std::wstring BuildConnection(DatabaseConnectionKind kind, std::wstring_view orig
     append(L"Ref=" + connection::QuoteValue(std::wstring(reference)));
   }
   bool first_fragment = true;
-  for (const auto& part : connection::Split(original)) {
+  for (const auto& fragment : parsed.fragments) {
+    const auto& part = fragment.raw;
     // A legacy direct URL becomes WS="..." above. It has no key, so it must
     // not be copied as an unknown fragment. Preserve every later fragment.
     if (kind == DatabaseConnectionKind::web && first_fragment && catalog::IsBareWebConnection(part)) {
@@ -73,10 +78,8 @@ std::wstring BuildConnection(DatabaseConnectionKind kind, std::wstring_view orig
       continue;
     }
     first_fragment = false;
-    const size_t separator = part.find(L'=');
-    const auto key = separator == std::wstring::npos ? std::wstring_view{} : std::wstring_view(part).substr(0, separator);
-    if (EqualNoCase(connection::Trim(key), L"File") || EqualNoCase(connection::Trim(key), L"WS") ||
-        EqualNoCase(connection::Trim(key), L"Srvr") || EqualNoCase(connection::Trim(key), L"Ref")) continue;
+    if (EqualNoCase(fragment.key, L"File") || EqualNoCase(fragment.key, L"WS") ||
+        EqualNoCase(fragment.key, L"Srvr") || EqualNoCase(fragment.key, L"Ref")) continue;
     append(part);
   }
   return result;
@@ -253,7 +256,11 @@ std::optional<std::wstring> CollectDatabaseEditorResult(DatabaseEditorState& sta
   if (state.kind == DatabaseConnectionKind::server && (server.empty() || reference.empty())) {
     return L"Укажите кластер серверов и имя информационной базы.";
   }
-  result.connect = BuildConnection(state.kind, state.initial.connect, file, web, server, reference);
+  try {
+    result.connect = BuildConnection(state.kind, state.initial.connect, file, web, server, reference);
+  } catch (const std::invalid_argument&) {
+    return L"Строку подключения нельзя безопасно разобрать из-за незакрытой или неоднозначной кавычки.";
+  }
   result.version = TrimText(ReadControlText(state.version));
   if (EqualNoCase(result.version, L"Авто")) result.version.clear();
   result.app = ApplicationValue(ReadControlText(state.app));

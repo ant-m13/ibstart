@@ -139,7 +139,18 @@ void TestConnectionStringParsing() {
   CHECK(ibstart::connection::ValueOrEmpty(connect, L"file") == L"C:\\Базы;Основная");
   CHECK(ibstart::connection::ValueOrEmpty(connect, L"SRVR") == L"ignored");
   CHECK(ibstart::connection::ValueOrEmpty(connect, L"missing").empty());
-  CHECK(ibstart::connection::QuoteValue(L"A\"B") == L"\"A'B\"");
+  CHECK(ibstart::connection::QuoteValue(L"A\"B") == L"\"A\"\"B\"");
+
+  const auto quoted = ibstart::connection::Parse(
+      L"Key=\"a;b\";Key=\"a\\\"b\";Double=\"a\"\"b\";Custom = keep");
+  CHECK(quoted.diagnostics.empty());
+  CHECK(quoted.fragments.size() == 4);
+  CHECK(quoted.fragments.size() > 1 && quoted.fragments[1].value == L"a\"b");
+  CHECK(quoted.fragments.size() > 2 && quoted.fragments[2].value == L"a\"b");
+  CHECK(quoted.fragments.size() > 3 && quoted.fragments[3].raw == L"Custom = keep");
+  CHECK(ibstart::connection::ValueOrEmpty(L"Key=first;Key=second", L"Key") == L"first");
+  const auto malformed = ibstart::connection::Parse(L"File=\"C:\\broken;Ref=base");
+  CHECK(!malformed.diagnostics.empty());
 
   const auto keyedWeb = ibstart::connection::WebUrl(L"WS = \"https://example.test/base;part\" ; WA=1");
   CHECK(keyedWeb && *keyedWeb == L"https://example.test/base;part");
