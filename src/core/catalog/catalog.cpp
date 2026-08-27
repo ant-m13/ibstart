@@ -167,6 +167,11 @@ bool MatchesSearchText(const domain::Entry& entry, std::wstring_view query) {
 
 Catalog::Catalog(v8i::V8iDocument document) : document_(std::move(document)) {}
 
+std::wstring StableDatabaseId(const domain::Entry& entry) {
+  const auto id = entry.ValueOr(L"ID");
+  return id.empty() ? entry.name : id;
+}
+
 void Catalog::EnsureLookup() const {
   if (lookup_) return;
 
@@ -177,6 +182,9 @@ void Catalog::EnsureLookup() const {
   index.by_id.clear();
   const auto add_diagnostic = [&](size_t section_index, std::wstring message) {
     index.diagnostics.push_back({section_index, std::move(message)});
+  };
+  const auto add_warning = [&](size_t section_index, std::wstring message) {
+    index.diagnostics.push_back({section_index, std::move(message), false});
   };
   for (size_t position = 0; position < document_.sections.size(); ++position) {
     const auto& entry = document_.sections[position].entry;
@@ -196,14 +204,15 @@ void Catalog::EnsureLookup() const {
     }
 
     if (entry.IsDatabase()) {
-      const auto id = entry.ValueOr(L"ID");
-      if (!id.empty()) {
-        const auto [id_it, id_inserted] = index.by_id.emplace(id, position);
-        if (!id_inserted) {
-          index.ambiguous_ids.insert(id);
-          index.by_id.erase(id_it);
-          add_diagnostic(position, L"Повторяющийся ID базы: " + id);
-        }
+      if (const auto* id_field = entry.Find(L"ID"); id_field && id_field->value.empty()) {
+        add_warning(position, L"Пустой ID базы; для внутренних связей используется имя: " + entry.name);
+      }
+      const auto id = StableDatabaseId(entry);
+      const auto [id_it, id_inserted] = index.by_id.emplace(id, position);
+      if (!id_inserted) {
+        index.ambiguous_ids.insert(id);
+        index.by_id.erase(id_it);
+        add_diagnostic(position, L"Повторяющийся идентификатор базы: " + id);
       }
     }
   }
@@ -306,7 +315,7 @@ domain::Database Catalog::DatabaseFor(std::wstring_view name) const {
   if (entry == nullptr || !entry->IsDatabase()) throw std::invalid_argument("The requested catalog entry is not a database.");
   domain::Database result;
   result.name = entry->name;
-  result.id = entry->ValueOr(L"ID", entry->name);
+  result.id = StableDatabaseId(*entry);
   result.connect = entry->ValueOr(L"Connect");
   result.folder = entry->ValueOr(L"Folder");
   result.order_in_list = entry->ValueOr(L"OrderInList");

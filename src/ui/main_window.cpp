@@ -687,9 +687,10 @@ void MainWindow::LoadCatalog(bool report_error) {
     if (catalog_) {
       const auto& diagnostics = catalog_->diagnostics();
       for (const auto& diagnostic : diagnostics) {
-        logger_.Error(L"Проверка списка баз: " + diagnostic.message);
+        if (diagnostic.blocking) logger_.Error(L"Проверка списка баз: " + diagnostic.message);
+        else logger_.Info(L"Проверка списка баз: " + diagnostic.message);
       }
-      if (report_error && !diagnostics.empty()) {
+      if (report_error && !catalog_->IsValid()) {
         Message(window_, L"В файле ibases.v8i найдены неоднозначные или повреждённые записи. "
                          L"Операции изменения, перемещения, удаления и сохранения заблокированы до исправления файла.",
             L"Проверка списка баз", MB_OK | MB_ICONWARNING);
@@ -706,15 +707,20 @@ void MainWindow::LoadCatalog(bool report_error) {
 
 bool MainWindow::EnsureCatalogValid(const catalog::Catalog& value, std::wstring_view operation) const {
   const auto& diagnostics = value.diagnostics();
-  if (diagnostics.empty()) return true;
+  if (value.IsValid()) return true;
   std::wstring message = L"Нельзя выполнить операцию «" + std::wstring(operation) +
       L"» — сначала исправьте неоднозначные записи в ibases.v8i.\n\n";
-  const size_t shown = std::min<size_t>(diagnostics.size(), 5);
-  for (size_t index = 0; index < shown; ++index) {
-    if (index != 0) message += L"\n";
-    message += L"• " + diagnostics[index].message;
+  size_t shown = 0;
+  size_t blocking_count = 0;
+  for (const auto& diagnostic : diagnostics) {
+    if (!diagnostic.blocking) continue;
+    ++blocking_count;
+    if (shown == 5) continue;
+    if (shown != 0) message += L"\n";
+    message += L"• " + diagnostic.message;
+    ++shown;
   }
-  if (diagnostics.size() > shown) message += L"\n• И других ошибок: " + std::to_wstring(diagnostics.size() - shown);
+  if (blocking_count > shown) message += L"\n• И других ошибок: " + std::to_wstring(blocking_count - shown);
   Message(window_, message, L"Проверка списка баз", MB_OK | MB_ICONWARNING);
   return false;
 }
@@ -1127,7 +1133,9 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   const bool sortTarget = catalogRoot || group;
   const std::wstring sortParent = catalogRoot ? std::wstring() : group ? entry->name : std::wstring();
   const auto& favorites = catalog_state_.Read().favorites;
-  const bool favorite = std::find(favorites.begin(), favorites.end(), name) != favorites.end();
+  const auto favorite_id = database ? TagId(*entry) : std::wstring();
+  const bool favorite = database && (std::find(favorites.begin(), favorites.end(), favorite_id) != favorites.end() ||
+      std::find_if(favorites.begin(), favorites.end(), [&](const auto& value) { return EqualNoCase(value, name); }) != favorites.end());
   std::vector<std::wstring> quick_tags;
   if (database && !settings_.simple_mode) {
     const auto& assigned = TagsFor(catalog_state_.Read().tags, *entry);
@@ -1661,7 +1669,7 @@ void MainWindow::ToggleFavorite() {
   }
 
   try {
-    const bool added = catalog_state_.ToggleFavorite(name);
+    const bool added = catalog_state_.ToggleFavorite(TagId(*entry), name);
     SetStatus((added ? L"Добавлено в избранное: " : L"Удалено из избранного: ") + name);
     RefreshTagFilter();
     PopulateTree();
@@ -1677,7 +1685,9 @@ void MainWindow::LaunchFavorite(size_t slot) {
     Message(window_, L"Этот слот избранного пока не назначен.");
     return;
   }
-  const auto name = favorites[slot];
+  const auto* catalog_entry = catalog_ ? catalog_->FindById(favorites[slot]) : nullptr;
+  if (!catalog_entry && catalog_) catalog_entry = catalog_->Find(favorites[slot]);
+  const auto name = catalog_entry ? catalog_entry->name : favorites[slot];
   SetWindowTextW(search_, L"");
   PopulateTree();
   if (tree_view_.SelectItem(name)) LaunchSelected(domain::LaunchMode::enterprise);

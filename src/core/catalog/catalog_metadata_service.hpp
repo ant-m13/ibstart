@@ -20,7 +20,7 @@ class CatalogMetadataService {
 
   [[nodiscard]] const storage::CatalogState& Read() const;
   [[nodiscard]] const storage::CatalogState& Reload();
-  [[nodiscard]] bool ToggleFavorite(std::wstring database_name);
+  [[nodiscard]] bool ToggleFavorite(std::wstring database_id, std::wstring legacy_database_name = {});
   void RenameDatabaseMetadata(std::wstring previous_name, std::wstring updated_name,
       std::wstring previous_tag_id, std::wstring updated_tag_id);
   void SetTags(std::wstring database_id, std::vector<std::wstring> tags);

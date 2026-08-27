@@ -428,7 +428,7 @@ void TestCatalogValidationAndStableSectionIndices() {
     return diagnostic.message.find(L"Повторяющийся ключ") != std::wstring::npos;
   }));
   CHECK(std::any_of(catalog.diagnostics().begin(), catalog.diagnostics().end(), [](const auto& diagnostic) {
-    return diagnostic.message.find(L"Повторяющийся ID") != std::wstring::npos;
+    return diagnostic.message.find(L"Повторяющийся идентификатор") != std::wstring::npos;
   }));
   CHECK(std::any_of(catalog.diagnostics().begin(), catalog.diagnostics().end(), [](const auto& diagnostic) {
     return diagnostic.message.find(L"Не найдена родительская группа") != std::wstring::npos;
@@ -623,6 +623,31 @@ void TestRecentDatabaseNames() {
   };
   CHECK(ibstart::ui::presentation::CollectRecentDatabaseNames(catalog, history) ==
       std::vector<std::wstring>{L"Beta", L"Alpha", L"Fallback"});
+}
+
+void TestStableDatabaseId() {
+  auto document = ibstart::v8i::V8iDocument::ParseUtf8(
+      "[EmptyId]\nConnect=File=\"C:\\\\empty-id\"\nID=\n"
+      "[NoId]\nConnect=File=\"C:\\\\no-id\"\n");
+  ibstart::catalog::Catalog catalog(std::move(document));
+  const auto* entry = catalog.Find(L"EmptyId");
+  CHECK(entry != nullptr);
+  if (!entry) return;
+
+  CHECK(ibstart::catalog::StableDatabaseId(*entry) == L"EmptyId");
+  CHECK(catalog.DatabaseFor(L"EmptyId").id == L"EmptyId");
+  CHECK(catalog.FindById(L"EmptyId") == entry);
+  CHECK(ibstart::ui::presentation::TagId(*entry) == L"EmptyId");
+  const ibstart::storage::DatabaseTags tags = {{L"EmptyId", {L"Fallback"}}};
+  CHECK(ibstart::ui::presentation::TagsFor(tags, *entry).size() == 1);
+  const std::vector<ibstart::domain::HistoryItem> history = {
+      {L"EmptyId", {}, ibstart::domain::LaunchMode::enterprise}};
+  CHECK(ibstart::ui::presentation::CollectRecentDatabaseNames(catalog, history) ==
+      std::vector<std::wstring>{L"EmptyId"});
+  CHECK(catalog.IsValid());
+  CHECK(std::any_of(catalog.diagnostics().begin(), catalog.diagnostics().end(), [](const auto& diagnostic) {
+    return !diagnostic.blocking && diagnostic.message.find(L"Пустой ID базы") != std::wstring::npos;
+  }));
 }
 
 void TestStandardFolderPaths() {
@@ -1343,6 +1368,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"CatalogSearch", TestCatalogSearch);
   run(L"TreeFilters", TestTreeFilters);
   run(L"RecentDatabaseNames", TestRecentDatabaseNames);
+  run(L"StableDatabaseId", TestStableDatabaseId);
   run(L"NoBomAndCatalog", TestNoBomAndCatalog);
   run(L"V8iLineEndingRoundTrips", TestV8iLineEndingRoundTrips);
   run(L"SafeStore", TestSafeStore);

@@ -3,6 +3,7 @@
 #include "core/domain/model.hpp"
 #include "core/v8i/v8i_document.hpp"
 
+#include <algorithm>
 #include <functional>
 #include <limits>
 #include <map>
@@ -27,6 +28,7 @@ struct TreeItem {
 struct ValidationDiagnostic {
   size_t section_index{kInvalidSectionIndex};
   std::wstring message;
+  bool blocking{true};
 };
 
 enum class SortDirection { ascending, descending };
@@ -44,7 +46,10 @@ class Catalog {
   [[nodiscard]] const v8i::V8iDocument& document() const noexcept { return document_; }
   [[nodiscard]] v8i::V8iDocument& document() noexcept { lookup_.reset(); return document_; }
   [[nodiscard]] const std::vector<ValidationDiagnostic>& diagnostics() const;
-  [[nodiscard]] bool IsValid() const { return diagnostics().empty(); }
+  [[nodiscard]] bool IsValid() const {
+    return std::none_of(diagnostics().begin(), diagnostics().end(),
+        [](const auto& diagnostic) { return diagnostic.blocking; });
+  }
   [[nodiscard]] std::vector<TreeItem> Tree() const;
   [[nodiscard]] std::vector<const domain::Entry*> Databases() const;
   [[nodiscard]] domain::Entry* Find(std::wstring_view name);
@@ -99,5 +104,7 @@ class Catalog {
   v8i::V8iDocument document_;
   mutable std::optional<LookupIndex> lookup_;
 };
+
+[[nodiscard]] std::wstring StableDatabaseId(const domain::Entry& entry);
 
 }  // namespace ibstart::catalog
