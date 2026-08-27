@@ -33,7 +33,11 @@ class V8iDocument {
 
   Utf8Encoding encoding{Utf8Encoding::utf8_bom};
   std::wstring newline{L"\r\n"};
+  // One entry per physical line ending in the source, preserving mixed files.
+  // New lines created by an editor use newline when this sequence is exhausted.
+  std::vector<std::wstring> line_endings;
   bool trailing_newline{true};
+  std::vector<std::wstring> diagnostics;
   std::vector<std::wstring> preamble;
   std::vector<Section> sections;
 };
