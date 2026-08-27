@@ -999,6 +999,72 @@ void TestV8iConcurrentSavesConflict() {
   std::filesystem::remove_all(directory, error);
 }
 
+void TestV8iExternalWriterRaceAtCommitBoundary() {
+  const auto directory = Temp(L"store-commit-race");
+  const auto file = directory / L"ibases.v8i";
+  const std::string original = "[Base]\r\nConnect=File=\"C:\\\\base\"\r\n";
+  const std::string external = "[External]\r\nConnect=File=\"C:\\\\external\"\r\n";
+  WriteBytes(file, original);
+  ibstart::v8i::V8iFileStore store(file);
+  auto document = store.Read();
+  document.Find(L"Base")->entry.Set(L"Locale", L"first");
+
+  bool caught = false;
+  try {
+    store.Save(document, [&] {
+      std::thread externalWriter([&] { WriteBytes(file, external); });
+      externalWriter.join();
+    });
+  } catch (const ibstart::v8i::ExternalModificationError&) {
+    caught = true;
+  }
+
+  CHECK(caught);
+  CHECK(ReadBytes(file) == external);
+  CHECK(store.Backups().size() == 1);
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
+void TestV8iConcurrentSaveAtCommitBoundary() {
+  const auto directory = Temp(L"store-commit-race-cooperating");
+  const auto file = directory / L"ibases.v8i";
+  WriteBytes(file, "[Base]\r\nConnect=File=\"C:\\\\base\"\r\n");
+  ibstart::v8i::V8iFileStore first(file);
+  ibstart::v8i::V8iFileStore second(file);
+  auto firstDocument = first.Read();
+  auto secondDocument = second.Read();
+  firstDocument.Find(L"Base")->entry.Set(L"Locale", L"first");
+  secondDocument.Find(L"Base")->entry.Set(L"Locale", L"second");
+
+  std::atomic_bool competitorStarted{false};
+  std::atomic_int competitorConflicts{0};
+  std::atomic_int competitorErrors{0};
+  std::thread competitor;
+  first.Save(firstDocument, [&] {
+    competitor = std::thread([&] {
+      competitorStarted = true;
+      try {
+        second.Save(secondDocument);
+      } catch (const ibstart::v8i::ExternalModificationError&) {
+        ++competitorConflicts;
+      } catch (...) {
+        ++competitorErrors;
+      }
+    });
+    while (!competitorStarted.load()) std::this_thread::yield();
+  });
+  competitor.join();
+
+  CHECK(competitorConflicts == 1);
+  CHECK(competitorErrors == 0);
+  const auto persisted = ReadBytes(file);
+  CHECK(persisted.find("Locale=first") != std::string::npos);
+  CHECK(persisted.find("Locale=second") == std::string::npos);
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
 void TestStorageSkipsMalformedRecords() {
   const auto directory = Temp(L"malformed-storage");
   const ibstart::storage::StorageLayout layout{directory, true};
@@ -1105,6 +1171,8 @@ int wmain() {
   run(L"ConfirmedV8iOverwrite", TestConfirmedV8iOverwrite);
   run(L"V8iSaveRejectsActiveWriter", TestV8iSaveRejectsActiveWriter);
   run(L"V8iConcurrentSavesConflict", TestV8iConcurrentSavesConflict);
+  run(L"V8iExternalWriterRaceAtCommitBoundary", TestV8iExternalWriterRaceAtCommitBoundary);
+  run(L"V8iConcurrentSaveAtCommitBoundary", TestV8iConcurrentSaveAtCommitBoundary);
   run(L"CommandBuilderAndSelection", TestCommandBuilderAndSelection);
   run(L"PlatformDiscoveryLargeVersions", TestPlatformDiscoveryLargeVersions);
   run(L"StandaloneThinClientDiscovery", TestStandaloneThinClientDiscovery);
