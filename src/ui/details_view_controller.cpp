@@ -112,8 +112,10 @@ void DetailsViewController::Attach(Controls controls, HFONT key_font) noexcept {
 
 void DetailsViewController::Display(const catalog::Catalog* database_catalog,
     const catalog::CatalogMetadataService* catalog_metadata, std::wstring_view selected_name,
-    bool catalog_root_selected, bool simple_mode, bool cache_operation_active) const {
-  const auto* entry = database_catalog ? database_catalog->Find(selected_name) : nullptr;
+    std::optional<size_t> selected_section_index, bool catalog_root_selected, bool simple_mode,
+    bool cache_operation_active) const {
+  const auto* entry = database_catalog ? (selected_section_index ?
+      database_catalog->FindBySectionIndex(*selected_section_index) : database_catalog->Find(selected_name)) : nullptr;
   if (!controls_.details) {
     UpdateConnection(entry);
     return;

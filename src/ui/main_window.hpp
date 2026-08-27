@@ -45,6 +45,7 @@ class MainWindow {
   void Layout(int width, int height);
   void LoadCatalog(bool report_error = true);
   bool SaveCatalog(catalog::Catalog candidate);
+  [[nodiscard]] bool EnsureCatalogValid(const catalog::Catalog& catalog, std::wstring_view operation) const;
   void PopulateTree();
   void PopulateTreeWithoutFlicker(std::wstring_view selected = {}, bool select_catalog_root = false);
   void RefreshRecentTreeBranch(std::wstring_view selected_recent = {});

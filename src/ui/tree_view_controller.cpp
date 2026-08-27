@@ -17,12 +17,22 @@ bool EqualNoCase(std::wstring_view left, std::wstring_view right) {
       CompareStringOrdinal(left.data(), static_cast<int>(left.size()), right.data(),
           static_cast<int>(right.size()), TRUE) == CSTR_EQUAL;
 }
-struct CaseInsensitiveLess {
-  bool operator()(const std::wstring& left, const std::wstring& right) const {
-    return CompareStringOrdinal(left.c_str(), static_cast<int>(left.size()), right.c_str(),
-        static_cast<int>(right.size()), TRUE) == CSTR_LESS_THAN;
+LPARAM CatalogItemData(size_t section_index) {
+  if (section_index == catalog::kInvalidSectionIndex) return 0;
+  return static_cast<LPARAM>(catalog::kCatalogItemDataBase + section_index);
+}
+
+bool IsCatalogItemData(LPARAM data) {
+  return data >= static_cast<LPARAM>(catalog::kCatalogItemDataBase);
+}
+
+std::optional<size_t> CatalogSectionIndex(const catalog::Catalog& database_catalog, const domain::Entry* entry) {
+  if (!entry) return std::nullopt;
+  for (size_t index = 0; index < database_catalog.document().sections.size(); ++index) {
+    if (&database_catalog.document().sections[index].entry == entry) return index;
   }
-};
+  return std::nullopt;
+}
 
 HICON LoadResourceIcon(HINSTANCE instance, int resource, int size) {
   return static_cast<HICON>(
@@ -245,7 +255,17 @@ LPARAM TreeViewController::BranchData(HTREEITEM item) const {
 std::wstring TreeViewController::SelectedName() const {
   if (!tree_) return {};
   const HTREEITEM selected = TreeView_GetSelection(tree_);
-  return ItemData(selected) == 0 ? ItemName(selected) : L"";
+  return IsCatalogItemData(ItemData(selected)) ? ItemName(selected) : L"";
+}
+
+std::optional<size_t> TreeViewController::SectionIndex(HTREEITEM item) const {
+  const LPARAM data = ItemData(item);
+  if (!IsCatalogItemData(data)) return std::nullopt;
+  return static_cast<size_t>(data - static_cast<LPARAM>(catalog::kCatalogItemDataBase));
+}
+
+std::optional<size_t> TreeViewController::SelectedSectionIndex() const {
+  return SectionIndex(tree_ ? TreeView_GetSelection(tree_) : nullptr);
 }
 
 bool TreeViewController::SelectedItemIsRecentRoot() const {
@@ -314,7 +334,7 @@ TreeViewController::ViewState TreeViewController::CaptureViewState() const {
   const HTREEITEM first_visible = TreeView_GetNextItem(tree_, nullptr, TVGN_FIRSTVISIBLE);
   result.first_visible_data = ItemData(first_visible);
   result.first_visible_branch_data = BranchData(first_visible);
-  if (result.first_visible_data == 0) result.first_visible_name = ItemName(first_visible);
+  if (IsCatalogItemData(result.first_visible_data)) result.first_visible_name = ItemName(first_visible);
   return result;
 }
 
@@ -357,10 +377,11 @@ void TreeViewController::UpdateTreeItem(HTREEITEM handle, const catalog::Catalog
     const catalog::TreeItem& item) const {
   if (!tree_ || !handle) return;
   TVITEMW row{};
-  row.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE;
+  row.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE | TVIF_PARAM;
   row.hItem = handle;
   row.pszText = const_cast<wchar_t*>(item.name.c_str());
-  const auto* entry = database_catalog.Find(item.name);
+  const auto* entry = database_catalog.FindBySectionIndex(item.section_index);
+  row.lParam = CatalogItemData(item.section_index);
   row.iImage = row.iSelectedImage = item.database ? DatabaseImage(entry) : kFolderImage;
   TreeView_SetItem(tree_, &row);
 }
@@ -395,9 +416,10 @@ void TreeViewController::AddItems(const catalog::Catalog& database_catalog,
     TVINSERTSTRUCTW row{};
     row.hParent = parent;
     row.hInsertAfter = TVI_LAST;
-    row.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE;
+    row.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE | TVIF_PARAM;
     row.item.pszText = const_cast<wchar_t*>(item.name.c_str());
-    const auto* entry = database_catalog.Find(item.name);
+    const auto* entry = database_catalog.FindBySectionIndex(item.section_index);
+    row.item.lParam = CatalogItemData(item.section_index);
     row.item.iImage = row.item.iSelectedImage = item.database ? DatabaseImage(entry) : kFolderImage;
     const HTREEITEM handle = TreeView_InsertItem(tree_, &row);
     if (handle && !item.database) {
@@ -420,9 +442,11 @@ void TreeViewController::ReconcileChildren(const catalog::Catalog& database_cata
       child = TreeView_GetNextSibling(tree_, child)) {
     existing.push_back(child);
   }
-  std::map<std::wstring, size_t, CaseInsensitiveLess> existing_by_name;
+  std::map<size_t, size_t> existing_by_index;
   for (size_t index = 0; index < existing.size(); ++index) {
-    existing_by_name.emplace(ItemName(existing[index]), index);
+    if (const auto section_index = SectionIndex(existing[index])) {
+      existing_by_index.emplace(*section_index, index);
+    }
   }
 
   // TreeView has no move operation.  If an existing row changed relative
@@ -431,7 +455,7 @@ void TreeViewController::ReconcileChildren(const catalog::Catalog& database_cata
   std::vector<size_t> existing_positions;
   existing_positions.reserve(visible.size());
   for (const auto* item : visible) {
-    if (const auto found = existing_by_name.find(item->name); found != existing_by_name.end()) {
+    if (const auto found = existing_by_index.find(item->section_index); found != existing_by_index.end()) {
       existing_positions.push_back(found->second);
     }
   }
@@ -447,7 +471,7 @@ void TreeViewController::ReconcileChildren(const catalog::Catalog& database_cata
     HTREEITEM handle = nullptr;
     bool inserted = false;
     size_t existing_position = existing.size();
-    if (const auto found = existing_by_name.find(item->name); found != existing_by_name.end() &&
+    if (const auto found = existing_by_index.find(item->section_index); found != existing_by_index.end() &&
         !used[found->second]) {
       existing_position = found->second;
       handle = existing[existing_position];
@@ -456,9 +480,10 @@ void TreeViewController::ReconcileChildren(const catalog::Catalog& database_cata
       TVINSERTSTRUCTW row{};
       row.hParent = parent;
       row.hInsertAfter = previous ? previous : TVI_FIRST;
-      row.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE;
+      row.item.mask = TVIF_TEXT | TVIF_IMAGE | TVIF_SELECTEDIMAGE | TVIF_PARAM;
       row.item.pszText = const_cast<wchar_t*>(item->name.c_str());
-      const auto* entry = database_catalog.Find(item->name);
+      const auto* entry = database_catalog.FindBySectionIndex(item->section_index);
+      row.item.lParam = CatalogItemData(item->section_index);
       row.item.iImage = row.item.iSelectedImage = item->database ? DatabaseImage(entry) : kFolderImage;
       handle = TreeView_InsertItem(tree_, &row);
       if (!handle) continue;
@@ -491,7 +516,9 @@ void TreeViewController::ReconcileSpecialRoot(const catalog::Catalog& database_c
   for (const auto& name : names) {
     const auto* entry = database_catalog.Find(name);
     if (!entry || !entry->IsDatabase()) continue;
-    raw_items.push_back({entry->name, true, {}, {}});
+    const auto section_index = CatalogSectionIndex(database_catalog, entry);
+    if (!section_index) continue;
+    raw_items.push_back({entry->name, true, {}, {}, *section_index});
   }
   const auto items = presentation::FilterTreeItems(database_catalog, raw_items, search_filter, tag_filter,
       catalog_state.tags, filter_favorites);
@@ -545,7 +572,7 @@ HTREEITEM TreeViewController::FindItemInBranch(std::wstring_view name, LPARAM br
 
 HTREEITEM TreeViewController::FindItemByName(HTREEITEM item, std::wstring_view name) const {
   for (auto current = item; current; current = TreeView_GetNextSibling(tree_, current)) {
-    if (ItemData(current) == 0 && EqualNoCase(ItemName(current), name)) return current;
+    if (IsCatalogItemData(ItemData(current)) && EqualNoCase(ItemName(current), name)) return current;
     if (const auto child = FindItemByName(TreeView_GetChild(tree_, current), name)) return child;
   }
   return nullptr;

@@ -32,6 +32,18 @@ LPARAM TreeItemData(HWND tree, HTREEITEM item) {
   return TreeView_GetItem(tree, &data) ? data.lParam : 0;
 }
 
+const domain::Entry* EntryForItem(const catalog::Catalog& catalog, const catalog::TreeItem& item) {
+  return item.section_index == catalog::kInvalidSectionIndex ? catalog.Find(item.name) :
+      catalog.FindBySectionIndex(item.section_index);
+}
+
+const domain::Entry* EntryForTreeRow(const catalog::Catalog& catalog, LPARAM item_data, std::wstring_view name) {
+  if (item_data >= static_cast<LPARAM>(catalog::kCatalogItemDataBase)) {
+    return catalog.FindBySectionIndex(static_cast<size_t>(item_data - static_cast<LPARAM>(catalog::kCatalogItemDataBase)));
+  }
+  return catalog.Find(name);
+}
+
 }  // namespace
 
 std::vector<std::wstring> ParseTags(std::wstring_view text) {
@@ -123,7 +135,7 @@ std::vector<catalog::TreeItem> FilterTreeItems(const catalog::Catalog& catalog,
     if (const auto found = search_cache.find(&item); found != search_cache.end()) return found->second;
     bool result = search_filter.empty();
     if (!result) {
-      if (const auto* entry = catalog.Find(item.name)) {
+      if (const auto* entry = EntryForItem(catalog, item)) {
         result = catalog::MatchesSearchText(*entry, search_filter);
         if (!result && entry->IsDatabase()) {
           const auto& entry_tags = TagsFor(tags, *entry);
@@ -145,7 +157,7 @@ std::vector<catalog::TreeItem> FilterTreeItems(const catalog::Catalog& catalog,
     if (const auto found = tag_cache.find(&item); found != tag_cache.end()) return found->second;
     bool result = filter.kind == TreeTagFilterKind::all;
     if (!result) {
-      if (const auto* entry = catalog.Find(item.name); entry && entry->IsDatabase()) {
+      if (const auto* entry = EntryForItem(catalog, item); entry && entry->IsDatabase()) {
         if (filter.kind == TreeTagFilterKind::favorites) result = ContainsTag(favorites, entry->name);
         else result = ContainsTag(TagsFor(tags, *entry), filter.tag);
       }
@@ -175,7 +187,7 @@ std::vector<catalog::TreeItem> FilterTreeItems(const catalog::Catalog& catalog,
 bool MatchesSearchFilter(const catalog::Catalog& catalog, const catalog::TreeItem& item, std::wstring_view search_filter,
     const storage::DatabaseTags& tags) {
   if (search_filter.empty()) return true;
-  if (const auto* entry = catalog.Find(item.name)) {
+  if (const auto* entry = EntryForItem(catalog, item)) {
     if (catalog::MatchesSearchText(*entry, search_filter)) return true;
     if (entry->IsDatabase()) {
       const auto& entry_tags = TagsFor(tags, *entry);
@@ -192,7 +204,7 @@ bool MatchesSearchFilter(const catalog::Catalog& catalog, const catalog::TreeIte
 bool MatchesTagFilter(const catalog::Catalog& catalog, const catalog::TreeItem& item, const TreeTagFilter& filter,
     const storage::DatabaseTags& tags, const std::vector<std::wstring>& favorites) {
   if (filter.kind == TreeTagFilterKind::all) return true;
-  if (const auto* entry = catalog.Find(item.name); entry && entry->IsDatabase()) {
+  if (const auto* entry = EntryForItem(catalog, item); entry && entry->IsDatabase()) {
     if (filter.kind == TreeTagFilterKind::favorites) return ContainsTag(favorites, entry->name);
     return ContainsTag(TagsFor(tags, *entry), filter.tag);
   }
@@ -223,8 +235,8 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
 
   RECT label_rect{};
   if (!TreeView_GetItemRect(tree, item, &label_rect, TRUE)) return CDRF_DODEFAULT;
-  if (catalog && TreeItemData(tree, item) == 0) {
-    if (const auto* entry = catalog->Find(label); entry && entry->IsDatabase()) {
+  if (catalog) {
+    if (const auto* entry = EntryForTreeRow(*catalog, TreeItemData(tree, item), label); entry && entry->IsDatabase()) {
       const auto& tags = TagsFor(tags_by_database, *entry);
       const bool tag_matches_search = !search_filter.empty() && std::any_of(tags.begin(), tags.end(), [&](const auto& tag) {
         return utf::FindNoCaseOrdinal(tag, search_filter) != std::wstring_view::npos;

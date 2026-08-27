@@ -4,18 +4,29 @@
 #include "core/v8i/v8i_document.hpp"
 
 #include <functional>
+#include <limits>
 #include <map>
 #include <optional>
+#include <set>
 #include <string>
 #include <vector>
 
 namespace ibstart::catalog {
+
+inline constexpr size_t kInvalidSectionIndex = std::numeric_limits<size_t>::max();
+inline constexpr size_t kCatalogItemDataBase = 4;
 
 struct TreeItem {
   std::wstring name;
   bool database{false};
   std::wstring parent;
   std::vector<TreeItem> children;
+  size_t section_index{kInvalidSectionIndex};
+};
+
+struct ValidationDiagnostic {
+  size_t section_index{kInvalidSectionIndex};
+  std::wstring message;
 };
 
 enum class SortDirection { ascending, descending };
@@ -32,10 +43,14 @@ class Catalog {
 
   [[nodiscard]] const v8i::V8iDocument& document() const noexcept { return document_; }
   [[nodiscard]] v8i::V8iDocument& document() noexcept { lookup_.reset(); return document_; }
+  [[nodiscard]] const std::vector<ValidationDiagnostic>& diagnostics() const;
+  [[nodiscard]] bool IsValid() const { return diagnostics().empty(); }
   [[nodiscard]] std::vector<TreeItem> Tree() const;
   [[nodiscard]] std::vector<const domain::Entry*> Databases() const;
   [[nodiscard]] domain::Entry* Find(std::wstring_view name);
   [[nodiscard]] const domain::Entry* Find(std::wstring_view name) const;
+  [[nodiscard]] domain::Entry* FindBySectionIndex(size_t index);
+  [[nodiscard]] const domain::Entry* FindBySectionIndex(size_t index) const;
   [[nodiscard]] const domain::Entry* FindById(std::wstring_view id) const;
   [[nodiscard]] std::wstring ParentOf(std::wstring_view name) const;
   [[nodiscard]] domain::Database DatabaseFor(std::wstring_view name) const;
@@ -46,6 +61,7 @@ class Catalog {
   bool RenameDatabase(std::wstring_view name, std::wstring new_name);
   bool RenameGroup(std::wstring_view name, std::wstring new_name);
   bool Remove(std::wstring_view name);
+  bool Remove(size_t section_index);
   bool Move(std::wstring_view name, std::wstring parent, size_t position);
   bool MoveBy(std::wstring_view name, int offset);
   // Sorts direct children of parent and records the resulting portable order
@@ -67,7 +83,12 @@ class Catalog {
   };
   struct LookupIndex {
     std::map<std::wstring, size_t, CaseInsensitiveLess> by_name;
-    std::map<std::wstring, size_t, std::less<>> by_id;
+    std::map<std::wstring, size_t, CaseInsensitiveLess> by_id;
+    std::set<std::wstring, CaseInsensitiveLess> ambiguous_names;
+    std::set<std::wstring, CaseInsensitiveLess> ambiguous_ids;
+    std::vector<std::optional<size_t>> parent_indices;
+    std::vector<bool> cycle_sections;
+    std::vector<ValidationDiagnostic> diagnostics;
   };
 
   void EnsureLookup() const;

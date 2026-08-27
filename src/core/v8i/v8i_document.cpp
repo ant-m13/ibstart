@@ -152,9 +152,18 @@ Section& V8iDocument::Add(std::wstring name) {
 }
 
 bool V8iDocument::Remove(std::wstring_view name) {
-  const auto initial = sections.size();
-  std::erase_if(sections, [&](const Section& section) { return EqualNoCase(section.entry.name, name); });
-  return sections.size() != initial;
+  const auto found = std::find_if(sections.begin(), sections.end(), [&](const Section& section) {
+    return EqualNoCase(section.entry.name, name);
+  });
+  if (found == sections.end()) return false;
+  sections.erase(found);
+  return true;
+}
+
+bool V8iDocument::RemoveAt(size_t index) {
+  if (index >= sections.size()) return false;
+  sections.erase(sections.begin() + static_cast<std::ptrdiff_t>(index));
+  return true;
 }
 
 }  // namespace ibstart::v8i
