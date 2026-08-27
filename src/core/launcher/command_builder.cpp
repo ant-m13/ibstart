@@ -61,13 +61,6 @@ bool IsThinOnlyPlatform(const domain::PlatformInstallation& platform) {
   return EqualNoCase(platform.executable.filename().wstring(), L"1cv8c.exe");
 }
 
-bool IsHttpUrl(std::wstring_view value) {
-  constexpr std::wstring_view prefixes[] = {L"http://", L"https://"};
-  return std::any_of(std::begin(prefixes), std::end(prefixes), [&](const auto prefix) {
-    return value.size() >= prefix.size() && EqualNoCase(value.substr(0, prefix.size()), prefix);
-  });
-}
-
 std::wstring SwitchName(std::wstring_view argument) {
   if (argument.empty() || (argument.front() != L'/' && argument.front() != L'-')) return {};
   size_t start = 1;
@@ -239,7 +232,7 @@ ConnectionSpec ParseConnectionSpec(std::wstring_view connect) {
   std::optional<std::wstring> web;
   bool direct_web = false;
   if (!parsed.fragments.empty() && !parsed.fragments.front().has_equals &&
-      IsHttpUrl(parsed.fragments.front().value)) {
+      connection::IsValidHttpUrl(parsed.fragments.front().value)) {
     direct_web = true;
     web = parsed.fragments.front().value;
   }
@@ -271,7 +264,7 @@ ConnectionSpec ParseConnectionSpec(std::wstring_view connect) {
     return {ConnectionSpec::Kind::server, {}, *server, *reference};
   }
   if (has_web) {
-    if (!web || web->empty() || !IsHttpUrl(*web)) ThrowValidation(L"Ключ WS должен содержать URL http:// или https://.");
+    if (!web || web->empty() || !connection::IsValidHttpUrl(*web)) ThrowValidation(L"Ключ WS должен содержать URL http:// или https://.");
     return {ConnectionSpec::Kind::web, *web, {}, {}};
   }
   return {ConnectionSpec::Kind::fallback, {}, {}, {}};
@@ -296,6 +289,15 @@ std::vector<std::wstring> ValidateLaunchParameters(const domain::Database& datab
     AddParameterConflict(errors, utf::FromUtf8(error.what()));
   }
   return errors;
+}
+
+std::optional<std::wstring> BrowserFallbackUrl(const domain::Database& database,
+    const domain::LaunchOptions& options) {
+  const auto connection_spec = ParseConnectionSpec(database.connect);
+  if (connection_spec.kind != ConnectionSpec::Kind::web) return std::nullopt;
+  const auto validation = ValidateLaunchParameters(database, options);
+  if (!validation.empty()) ThrowValidation(validation.front());
+  return connection_spec.value;
 }
 
 std::optional<domain::PlatformInstallation> SelectPlatform(

@@ -158,6 +158,10 @@ void TestConnectionStringParsing() {
   CHECK(legacyWeb && *legacyWeb == L"https://example.test/base");
   CHECK(ibstart::connection::IsBareWebUrl(L" https://example.test/base "));
   CHECK(!ibstart::connection::IsBareWebUrl(L"https://example.test/base;Custom=keep"));
+  CHECK(ibstart::connection::IsValidHttpUrl(L"https://example.test/base"));
+  CHECK(ibstart::connection::IsValidHttpUrl(L"https://[::1]:8443/base"));
+  CHECK(!ibstart::connection::IsValidHttpUrl(L"https://"));
+  CHECK(!ibstart::connection::IsValidHttpUrl(L"https:///base"));
 
   const auto fileConnection = ibstart::connection::BuildConnection(
       ibstart::connection::ConnectionKind::file,
@@ -349,6 +353,34 @@ void TestLaunchParameterConflicts() {
   CHECK(!ibstart::launcher::ValidateLaunchParameters(database, options).empty());
   database.additional_parameters = L"/URL https://example.test/base";
   CHECK(!ibstart::launcher::ValidateLaunchParameters(database, options).empty());
+
+  ibstart::domain::Database webDatabase;
+  webDatabase.connect = L"https://example.test/base;Custom=keep";
+  const auto browserUrl = ibstart::launcher::BrowserFallbackUrl(webDatabase, options);
+  CHECK(browserUrl && *browserUrl == L"https://example.test/base");
+  webDatabase.connect = L"https://example.test/base;File=other";
+  bool invalidMixedBrowserConnection = false;
+  try { static_cast<void>(ibstart::launcher::BrowserFallbackUrl(webDatabase, options)); }
+  catch (const std::invalid_argument&) { invalidMixedBrowserConnection = true; }
+  CHECK(invalidMixedBrowserConnection);
+  webDatabase.connect = L"WS=\"https://example.test/base\";Srvr=other;Ref=database";
+  bool invalidTypedBrowserConnection = false;
+  try { static_cast<void>(ibstart::launcher::BrowserFallbackUrl(webDatabase, options)); }
+  catch (const std::invalid_argument&) { invalidTypedBrowserConnection = true; }
+  CHECK(invalidTypedBrowserConnection);
+  webDatabase.connect = L"WS=\"https://example.test/base";
+  bool invalidSyntaxBrowserConnection = false;
+  try { static_cast<void>(ibstart::launcher::BrowserFallbackUrl(webDatabase, options)); }
+  catch (const std::invalid_argument&) { invalidSyntaxBrowserConnection = true; }
+  CHECK(invalidSyntaxBrowserConnection);
+  webDatabase.connect = L"WS=https://";
+  bool invalidUrlBrowserConnection = false;
+  try { static_cast<void>(ibstart::launcher::BrowserFallbackUrl(webDatabase, options)); }
+  catch (const std::invalid_argument&) { invalidUrlBrowserConnection = true; }
+  CHECK(invalidUrlBrowserConnection);
+  database.additional_parameters.clear();
+  const auto fileBrowserUrl = ibstart::launcher::BrowserFallbackUrl(database, options);
+  CHECK(!fileBrowserUrl);
 
   bool invalidArchitecture = false;
   try { static_cast<void>(ibstart::launcher::AppArchitectureFromParameters(L"/AppArch invalid")); }
