@@ -51,40 +51,6 @@ DatabaseConnectionKind DetectConnectionKind(std::wstring_view connect) {
   return DatabaseConnectionKind::server;
 }
 
-std::wstring BuildConnection(DatabaseConnectionKind kind, std::wstring_view original, std::wstring_view file,
-    std::wstring_view web, std::wstring_view server, std::wstring_view reference) {
-  const auto parsed = connection::Parse(original);
-  if (!parsed.diagnostics.empty()) throw std::invalid_argument("Connect contains an unsafe quote sequence.");
-
-  std::wstring result;
-  const auto append = [&result](std::wstring_view value) {
-    if (value.empty()) return;
-    if (!result.empty()) result.push_back(L';');
-    result += value;
-  };
-  if (kind == DatabaseConnectionKind::file) append(L"File=" + connection::QuoteValue(std::wstring(file)));
-  else if (kind == DatabaseConnectionKind::web) append(L"WS=" + connection::QuoteValue(std::wstring(web)));
-  else {
-    append(L"Srvr=" + connection::QuoteValue(std::wstring(server)));
-    append(L"Ref=" + connection::QuoteValue(std::wstring(reference)));
-  }
-  bool first_fragment = true;
-  for (const auto& fragment : parsed.fragments) {
-    const auto& part = fragment.raw;
-    // A legacy direct URL becomes WS="..." above. It has no key, so it must
-    // not be copied as an unknown fragment. Preserve every later fragment.
-    if (kind == DatabaseConnectionKind::web && first_fragment && catalog::IsBareWebConnection(part)) {
-      first_fragment = false;
-      continue;
-    }
-    first_fragment = false;
-    if (EqualNoCase(fragment.key, L"File") || EqualNoCase(fragment.key, L"WS") ||
-        EqualNoCase(fragment.key, L"Srvr") || EqualNoCase(fragment.key, L"Ref")) continue;
-    append(part);
-  }
-  return result;
-}
-
 enum DatabaseEditorControl : int {
   kDatabaseName = 1000,
   kConnectionFile,
@@ -257,7 +223,9 @@ std::optional<std::wstring> CollectDatabaseEditorResult(DatabaseEditorState& sta
     return L"Укажите кластер серверов и имя информационной базы.";
   }
   try {
-    result.connect = BuildConnection(state.kind, state.initial.connect, file, web, server, reference);
+    const auto connection_kind = state.kind == DatabaseConnectionKind::file ? connection::ConnectionKind::file :
+        state.kind == DatabaseConnectionKind::web ? connection::ConnectionKind::web : connection::ConnectionKind::server;
+    result.connect = connection::BuildConnection(connection_kind, state.initial.connect, file, web, server, reference);
   } catch (const std::invalid_argument&) {
     return L"Строку подключения нельзя безопасно разобрать из-за незакрытой или неоднозначной кавычки.";
   }

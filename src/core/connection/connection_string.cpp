@@ -146,6 +146,57 @@ std::wstring QuoteValue(std::wstring value) {
   return result;
 }
 
+std::wstring BuildConnection(ConnectionKind kind, std::wstring_view original,
+    std::wstring_view file, std::wstring_view web, std::wstring_view server,
+    std::wstring_view reference) {
+  const auto parsed = Parse(original);
+  if (!parsed.diagnostics.empty()) throw std::invalid_argument("Connect contains an unsafe quote sequence.");
+
+  std::vector<std::wstring> replacement;
+  if (kind == ConnectionKind::file) {
+    replacement.push_back(L"File=" + QuoteValue(std::wstring(file)));
+  } else if (kind == ConnectionKind::web) {
+    replacement.push_back(L"WS=" + QuoteValue(std::wstring(web)));
+  } else {
+    replacement.push_back(L"Srvr=" + QuoteValue(std::wstring(server)));
+    replacement.push_back(L"Ref=" + QuoteValue(std::wstring(reference)));
+  }
+
+  const auto is_connection_key = [](std::wstring_view key) {
+    return EqualNoCase(key, L"File") || EqualNoCase(key, L"WS") ||
+        EqualNoCase(key, L"Srvr") || EqualNoCase(key, L"Ref");
+  };
+  std::vector<std::wstring> preserved;
+  preserved.reserve(parsed.fragments.size());
+  std::optional<std::size_t> replacement_position;
+  for (std::size_t index = 0; index < parsed.fragments.size(); ++index) {
+    const auto& fragment = parsed.fragments[index];
+    // A legacy direct URL is the first connection fragment. Replace it for
+    // every target kind, not only when the target remains a web connection.
+    const bool legacy_url = index == 0 && IsBareWebUrl(fragment.raw);
+    if (legacy_url || is_connection_key(fragment.key)) {
+      if (!replacement_position) replacement_position = preserved.size();
+      continue;
+    }
+    preserved.push_back(fragment.raw);
+  }
+
+  const std::size_t insertion_position = replacement_position.value_or(0);
+  std::wstring result;
+  const auto append = [&result](std::wstring_view value) {
+    if (value.empty()) return;
+    if (!result.empty()) result.push_back(L';');
+    result += value;
+  };
+  for (std::size_t index = 0; index <= preserved.size(); ++index) {
+    if (index == insertion_position) {
+      for (const auto& part : replacement) append(part);
+    }
+    if (index < preserved.size()) append(preserved[index]);
+  }
+  return result;
+}
+
 std::optional<std::wstring> WebUrl(std::wstring_view connect) {
   auto direct = Trim(connect);
   if (const size_t separator = direct.find(L';'); separator != std::wstring::npos) {
