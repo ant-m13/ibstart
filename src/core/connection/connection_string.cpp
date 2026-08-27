@@ -1,5 +1,7 @@
 #include "core/connection/connection_string.hpp"
 
+#include <winsock2.h>
+#include <ws2tcpip.h>
 #include <Windows.h>
 
 #include <algorithm>
@@ -15,22 +17,91 @@ bool EqualNoCase(std::wstring_view left, std::wstring_view right) {
       CompareStringOrdinal(left.data(), static_cast<int>(left.size()), right.data(), static_cast<int>(right.size()), TRUE) == CSTR_EQUAL;
 }
 
-bool HasValidHttpAuthority(std::wstring_view authority) {
-  if (authority.empty() || std::any_of(authority.begin(), authority.end(), [](wchar_t character) {
-        return character < L' ' || character == L'\"' || character == L'<' || character == L'>' || character == L'\\';
-      })) return false;
-  const auto user_separator = authority.rfind(L'@');
-  const auto host = authority.substr(user_separator == std::wstring_view::npos ? 0 : user_separator + 1);
-  if (host.empty()) return false;
-  if (host.front() == L'[') {
-    const auto closing = host.find(L']');
-    if (closing <= 1) return false;
-    if (closing + 1 == host.size()) return true;
-    return host[closing + 1] == L':' && closing + 2 < host.size();
+bool IsHexDigit(wchar_t character) {
+  return (character >= L'0' && character <= L'9') ||
+      (character >= L'a' && character <= L'f') || (character >= L'A' && character <= L'F');
+}
+
+bool IsUnreserved(wchar_t character) {
+  return (character >= L'0' && character <= L'9') || (character >= L'a' && character <= L'z') ||
+      (character >= L'A' && character <= L'Z') || character == L'-' || character == L'.' ||
+      character == L'_' || character == L'~';
+}
+
+bool IsForbiddenUrlCharacter(wchar_t character) {
+  return character <= 0x1F || character == 0x7F || std::iswspace(character) != 0 ||
+      character == L'\"' || character == L'<' || character == L'>' || character == L'\\';
+}
+
+bool HasForbiddenUrlCharacter(std::wstring_view value) {
+  return std::any_of(value.begin(), value.end(), IsForbiddenUrlCharacter);
+}
+
+bool HasValidPercentEncoding(std::wstring_view value) {
+  for (size_t index = 0; index < value.size(); ++index) {
+    if (value[index] != L'%') continue;
+    if (index + 2 >= value.size() || !IsHexDigit(value[index + 1]) || !IsHexDigit(value[index + 2])) return false;
+    index += 2;
   }
-  const auto port_separator = host.find(L':');
-  if (port_separator == 0) return false;
-  return port_separator == std::wstring_view::npos || port_separator + 1 < host.size();
+  return true;
+}
+
+bool HasValidPort(std::wstring_view value) {
+  if (value.empty()) return false;
+  unsigned int port = 0;
+  for (const wchar_t character : value) {
+    if (character < L'0' || character > L'9') return false;
+    port = port * 10U + static_cast<unsigned int>(character - L'0');
+    if (port > 65535U) return false;
+  }
+  return true;
+}
+
+bool HasValidIpv6Literal(std::wstring_view value) {
+  if (value.empty()) return false;
+  std::wstring address(value);
+  const size_t zone_separator = address.find(L"%25");
+  if (zone_separator != std::wstring::npos) {
+    const std::wstring_view zone(address.data() + zone_separator + 3,
+        address.size() - zone_separator - 3);
+    if (zone.empty() || std::any_of(zone.begin(), zone.end(), [](wchar_t character) {
+          return !IsUnreserved(character);
+        })) return false;
+    address.resize(zone_separator);
+  } else if (address.find(L'%') != std::wstring::npos) {
+    return false;
+  }
+  if (address.empty()) return false;
+  IN6_ADDR parsed{};
+  return InetPtonW(AF_INET6, address.c_str(), &parsed) == 1;
+}
+
+bool HasValidHttpAuthority(std::wstring_view authority) {
+  if (authority.empty() || HasForbiddenUrlCharacter(authority) ||
+      !HasValidPercentEncoding(authority) || authority.find(L';') != std::wstring_view::npos) return false;
+  const auto user_separator = authority.find(L'@');
+  std::wstring_view host_port = authority;
+  if (user_separator != std::wstring_view::npos) {
+    if (user_separator == 0 || authority.find(L'@', user_separator + 1) != std::wstring_view::npos) return false;
+    const auto user_info = authority.substr(0, user_separator);
+    if (user_info.find_first_of(L"[]") != std::wstring_view::npos) return false;
+    host_port = authority.substr(user_separator + 1);
+  }
+  if (host_port.empty()) return false;
+  if (host_port.front() == L'[') {
+    const size_t closing = host_port.find(L']');
+    if (closing <= 1 || !HasValidIpv6Literal(host_port.substr(1, closing - 1))) return false;
+    if (closing + 1 == host_port.size()) return true;
+    return host_port[closing + 1] == L':' && HasValidPort(host_port.substr(closing + 2));
+  }
+  if (host_port.find_first_of(L"[]") != std::wstring_view::npos) return false;
+  const size_t port_separator = host_port.find(L':');
+  if (port_separator != std::wstring_view::npos) {
+    if (port_separator == 0 || host_port.find(L':', port_separator + 1) != std::wstring_view::npos ||
+        !HasValidPort(host_port.substr(port_separator + 1))) return false;
+    host_port = host_port.substr(0, port_separator);
+  }
+  return !host_port.empty() && host_port.find(L'@') == std::wstring_view::npos;
 }
 
 bool HasHttpScheme(std::wstring_view value, std::wstring_view scheme) {
@@ -40,11 +111,27 @@ bool HasHttpScheme(std::wstring_view value, std::wstring_view scheme) {
 bool IsHttpUrl(std::wstring_view value) {
   constexpr std::wstring_view kHttp = L"http://";
   constexpr std::wstring_view kHttps = L"https://";
+  if (value.empty() || HasForbiddenUrlCharacter(value) || !HasValidPercentEncoding(value)) return false;
   const auto scheme = HasHttpScheme(value, kHttp) ? kHttp : HasHttpScheme(value, kHttps) ? kHttps : std::wstring_view();
   if (scheme.empty()) return false;
   const auto remainder = value.substr(scheme.size());
   const auto authority_end = remainder.find_first_of(L"/?#");
   return HasValidHttpAuthority(remainder.substr(0, authority_end));
+}
+
+bool IsQuotedFragment(std::wstring_view raw) {
+  const auto trimmed = Trim(raw);
+  return trimmed.size() >= 2 && trimmed.front() == L'"' && trimmed.back() == L'"';
+}
+
+bool IsAmbiguousLegacyWeb(const ParseResult& parsed) {
+  if (parsed.fragments.size() < 2 || parsed.fragments.front().has_equals ||
+      !IsHttpUrl(parsed.fragments.front().value) || IsQuotedFragment(parsed.fragments.front().raw)) return false;
+  const auto first = Trim(parsed.fragments.front().raw);
+  if (first.find_first_of(L"?#") != std::wstring::npos) return true;
+  return std::any_of(parsed.fragments.begin() + 1, parsed.fragments.end(), [](const auto& fragment) {
+    return !fragment.has_equals;
+  });
 }
 
 std::wstring DecodeQuotedValue(std::wstring_view value, std::vector<std::wstring>& diagnostics) {
@@ -176,6 +263,9 @@ std::wstring BuildConnection(ConnectionKind kind, std::wstring_view original,
     std::wstring_view reference) {
   const auto parsed = Parse(original);
   if (!parsed.diagnostics.empty()) throw std::invalid_argument("Connect contains an unsafe quote sequence.");
+  if (kind == ConnectionKind::web && !IsValidHttpUrl(web)) {
+    throw std::invalid_argument("Connect contains an invalid web URL.");
+  }
 
   std::vector<std::wstring> replacement;
   if (kind == ConnectionKind::file) {
@@ -225,20 +315,22 @@ std::wstring BuildConnection(ConnectionKind kind, std::wstring_view original,
 bool IsValidHttpUrl(std::wstring_view value) { return IsHttpUrl(Trim(value)); }
 
 std::optional<std::wstring> WebUrl(std::wstring_view connect) {
-  auto direct = Trim(connect);
-  if (const size_t separator = direct.find(L';'); separator != std::wstring::npos) {
-    direct = Trim(std::wstring_view(direct).substr(0, separator));
+  const auto parsed = Parse(connect);
+  if (!parsed.diagnostics.empty() || parsed.fragments.empty()) return std::nullopt;
+  if (IsAmbiguousLegacyWeb(parsed)) return std::nullopt;
+  if (!parsed.fragments.front().has_equals && IsHttpUrl(parsed.fragments.front().value)) {
+    return parsed.fragments.front().value;
   }
-  if (IsHttpUrl(direct)) return direct;
-
-  const auto web = Value(connect, L"WS");
-  if (web && IsHttpUrl(*web)) return web;
+  for (const auto& fragment : parsed.fragments) {
+    if (fragment.has_equals && EqualNoCase(fragment.key, L"WS") && IsHttpUrl(fragment.value)) return fragment.value;
+  }
   return std::nullopt;
 }
 
 bool IsBareWebUrl(std::wstring_view connect) {
-  const auto url = WebUrl(connect);
-  return url.has_value() && EqualNoCase(Trim(connect), *url);
+  const auto parsed = Parse(connect);
+  return parsed.diagnostics.empty() && parsed.fragments.size() == 1 &&
+      !parsed.fragments.front().has_equals && IsHttpUrl(parsed.fragments.front().value);
 }
 
 }  // namespace ibstart::connection

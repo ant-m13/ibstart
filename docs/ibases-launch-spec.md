@@ -36,7 +36,7 @@ HTML, CSS, изображений или исходного кода 1С.
 | Файл | UTF-8 с BOM/без BOM, порядок строк и неизвестные строки сохраняются. | Сохранить lossless-контракт и добавить диагностику. |
 | Секции | Наличие `Connect` определяет базу; без него секция считается группой. | Добавить диагностику пустого подключения, дубликатов имён и `ID`. |
 | Поля | Typed-модель содержит базовый набор; остальные поля сохраняются как unknown. | Полный реестр находится в [ibases-format.md](ibases-format.md). |
-| `Connect` | Распознаются `File`, `Srvr/Ref`, `WS` и прямой HTTP(S)-URL. | Добавить escaped quotes, quoted semicolon, IPv6, cluster list и round-trip fragments. |
+| `Connect` | Распознаются `File`, `Srvr/Ref`, `WS` и прямой HTTP(S)-URL; URL проверяется по схеме, authority, хосту, порту, IPv6 и безопасным символам. В legacy-строке `;` внутри URL сохраняется только в quoted value. | Расширить typed-представление списков кластеров и round-trip fragments. |
 | Запуск | Формируются `ENTERPRISE`/`DESIGNER`, `/F`, `/S`, `/WS`, `/IBConnection` и raw-аргументы; typed connection и reserved-параметры проверяются до построения команды. | Ввести typed `LaunchRequest`, version profile и `LaunchPlan`. |
 | Клиент | Учитываются тип, версия, разрядность и наличие тонкого клиента. | Разделить version profile, capability и режим процесса. |
 | Поля запуска | `AppArch` применяется; `WA` и `ClientConnectionSpeed` пока только сохраняются. | Реализовать связь с `/WA`, `/WSA`, `/O`, proxy и сертификатами. |

@@ -216,8 +216,8 @@ std::optional<std::wstring> CollectDatabaseEditorResult(DatabaseEditorState& sta
   const auto server = TrimText(ReadControlText(state.server));
   const auto reference = TrimText(ReadControlText(state.reference));
   if (state.kind == DatabaseConnectionKind::file && file.empty()) return L"Укажите путь к файловой базе.";
-  if (state.kind == DatabaseConnectionKind::web && !catalog::Catalog::WebUrl(web)) {
-    return L"Укажите корректный адрес веб-сервера, начинающийся с http:// или https://.";
+  if (state.kind == DatabaseConnectionKind::web && !connection::IsValidHttpUrl(web)) {
+    return L"Укажите корректный URL http:// или https:// с непустым хостом, допустимым портом и без управляющих символов.";
   }
   if (state.kind == DatabaseConnectionKind::server && (server.empty() || reference.empty())) {
     return L"Укажите кластер серверов и имя информационной базы.";

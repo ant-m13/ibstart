@@ -33,8 +33,12 @@ enum class ConnectionKind { file, web, server };
 [[nodiscard]] std::wstring BuildConnection(ConnectionKind kind, std::wstring_view original,
     std::wstring_view file, std::wstring_view web, std::wstring_view server,
     std::wstring_view reference);
+// Validates a complete HTTP(S) URL. In a direct legacy Connect fragment, a
+// semicolon is a fragment separator; quote the whole URL to keep it in the URL.
 [[nodiscard]] bool IsValidHttpUrl(std::wstring_view value);
 
+// Returns a validated WS value or a validated direct legacy URL. An unquoted
+// legacy semicolon that could be part of the URL is treated as ambiguous.
 [[nodiscard]] std::optional<std::wstring> WebUrl(std::wstring_view connect);
 [[nodiscard]] bool IsBareWebUrl(std::wstring_view connect);
 

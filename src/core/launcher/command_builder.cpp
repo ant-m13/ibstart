@@ -231,10 +231,20 @@ ConnectionSpec ParseConnectionSpec(std::wstring_view connect) {
   std::optional<std::wstring> reference;
   std::optional<std::wstring> web;
   bool direct_web = false;
-  if (!parsed.fragments.empty() && !parsed.fragments.front().has_equals &&
-      connection::IsValidHttpUrl(parsed.fragments.front().value)) {
-    direct_web = true;
-    web = parsed.fragments.front().value;
+  if (!parsed.fragments.empty() && !parsed.fragments.front().has_equals) {
+    const auto& first = parsed.fragments.front().value;
+    const bool has_http_scheme = (first.size() >= 7 && EqualNoCase(std::wstring_view(first).substr(0, 7), L"http://")) ||
+        (first.size() >= 8 && EqualNoCase(std::wstring_view(first).substr(0, 8), L"https://"));
+    if (has_http_scheme && !connection::IsValidHttpUrl(first)) {
+      ThrowValidation(L"Legacy URL должен содержать корректную схему, authority, хост и порт.");
+    }
+    if (has_http_scheme) {
+      if (parsed.fragments.size() > 1 && !connection::WebUrl(connect)) {
+        ThrowValidation(L"Legacy URL с неоднозначным символом ';'; заключите URL в кавычки.");
+      }
+      direct_web = true;
+      web = first;
+    }
   }
   for (const auto& fragment : parsed.fragments) {
     if (!fragment.has_equals) continue;
