@@ -281,12 +281,17 @@ std::vector<std::wstring> ValidateLaunchParameters(const domain::Database& datab
   }
 
   std::map<std::wstring, size_t, CaseInsensitiveLess> occurrences;
+  const auto individual_parameters = options.individual_parameters.empty() ? database.additional_parameters :
+      options.individual_parameters;
   try {
     ValidateParameterText(options.common_parameters, occurrences, errors);
-    ValidateParameterText(options.individual_parameters.empty() ? database.additional_parameters :
-        options.individual_parameters, occurrences, errors);
+    ValidateParameterText(individual_parameters, occurrences, errors);
   } catch (const std::exception& error) {
     AddParameterConflict(errors, utf::FromUtf8(error.what()));
+  }
+  const auto app_architecture = Trim(database.app_arch);
+  if (!app_architecture.empty() && !ParseAppArchitecture(app_architecture)) {
+    AddParameterConflict(errors, L"Недопустимое значение AppArch: " + app_architecture + L".");
   }
   return errors;
 }
