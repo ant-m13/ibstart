@@ -159,6 +159,9 @@ bool HasActiveOneCProcess() {
 
 ClearResult Clear(const std::vector<CacheItem>& candidates) {
   ClearResult result;
+  // This check is advisory only. A running 1C client may hold cache files, but it
+  // must not prevent the rest of the allowlisted candidates from being attempted.
+  result.active_one_c_process = HasActiveOneCProcess();
   for (const auto& item : candidates) {
     std::error_code error;
     if (_wcsicmp(item.path.filename().c_str(), L"1Cv8.1CD") == 0 || !IsSafeCachePath(item.path)) {
@@ -171,6 +174,7 @@ ClearResult Clear(const std::vector<CacheItem>& candidates) {
     if (error) { const auto message = error.message(); result.errors.push_back(L"Не удалось очистить " + item.path.wstring() + L": " + std::wstring(message.begin(), message.end())); }
     else { result.files += fileCount; result.bytes += bytes; }
   }
+  result.active_one_c_process = result.active_one_c_process || HasActiveOneCProcess();
   return result;
 }
 

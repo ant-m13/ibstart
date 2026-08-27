@@ -1734,7 +1734,11 @@ void MainWindow::CompleteCacheOperation() {
       list += item.path.wstring() + L" — " + cache::FormatSize(item.bytes) + L"\n";
     }
     list += L"\nПримерный объём для очистки: " + cache::FormatSize(totalBytes) + L".\n";
-    if (cache::HasActiveOneCProcess()) list += L"\nОбнаружен активный процесс 1С. Закройте его перед очисткой.\n";
+    if (cache::HasActiveOneCProcess()) {
+      list += L"\nОбнаружен работающий процесс 1С. Если он ещё не завершён, некоторые файлы кэша могут быть заняты, "
+              L"поэтому очистка может быть неполной, а отдельные каталоги могут остаться.\n"
+              L"IBStart не будет завершать процесс 1С автоматически. Можно продолжить очистку.\n";
+    }
     if (MessageBoxW(window_, list.c_str(), L"Очистка кэша", MB_YESNO | MB_ICONWARNING) != IDYES) {
       DisplaySelected();
       SetStatus(L"Очистка кэша отменена.");
@@ -1766,15 +1770,21 @@ void MainWindow::CompleteCacheOperation() {
     Message(window_, L"Не удалось очистить кэш. Подробности — в журнале.", L"Очистка кэша", MB_OK | MB_ICONERROR);
     return;
   }
+  const bool hasErrors = !completed->clear_result.errors.empty();
+  const bool activeOneCProcess = completed->clear_result.active_one_c_process;
   const auto size = cache::FormatSize(completed->clear_result.bytes);
   logger_.Info(L"Очистка кэша: файлов=" + std::to_wstring(completed->clear_result.files) + L", байт=" +
-      std::to_wstring(completed->clear_result.bytes) + L" (" + size + L")");
+      std::to_wstring(completed->clear_result.bytes) + L" (" + size + L")" +
+      (activeOneCProcess ? L", обнаружен работающий процесс 1С" : L""));
   for (const auto& item : completed->clear_result.errors) logger_.Error(L"Ошибка очистки кэша: " + item);
-  SetStatus(completed->clear_result.errors.empty() ? L"Кэш очищен." : L"Кэш очищен с ошибками.");
+  SetStatus(hasErrors ? L"Кэш очищен с предупреждениями." : L"Кэш очищен.");
   const std::wstring text = L"Очищено файлов: " + std::to_wstring(completed->clear_result.files) +
-      L"\nОсвобождено: " + size + (completed->clear_result.errors.empty()
-          ? L"" : L"\n\nНе удалось очистить некоторые каталоги. Подробности — в журнале.");
-  Message(window_, text, L"Очистка кэша", completed->clear_result.errors.empty()
+      L"\nОсвобождено: " + size + (hasErrors
+          ? L"\n\nНе удалось очистить некоторые каталоги. Подробности — в журнале."
+          : L"") + (activeOneCProcess
+          ? L"\n\nВо время очистки был обнаружен работающий процесс 1С. Если файлы остались, закройте его и повторите очистку."
+          : L"");
+  Message(window_, text, L"Очистка кэша", !hasErrors && !activeOneCProcess
       ? MB_OK | MB_ICONINFORMATION : MB_OK | MB_ICONWARNING);
 }
 

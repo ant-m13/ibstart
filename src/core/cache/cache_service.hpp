@@ -9,7 +9,12 @@
 namespace ibstart::cache {
 
 struct CacheItem { std::filesystem::path path; uintmax_t bytes{}; };
-struct ClearResult { uintmax_t files{}; uintmax_t bytes{}; std::vector<std::wstring> errors; };
+struct ClearResult {
+  uintmax_t files{};
+  uintmax_t bytes{};
+  bool active_one_c_process{};
+  std::vector<std::wstring> errors;
+};
 
 // Returns no candidates when cancellation is requested. Callers that need to distinguish
 // cancellation from an empty result should inspect the same stop token.
