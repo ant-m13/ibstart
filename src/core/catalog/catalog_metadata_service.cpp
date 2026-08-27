@@ -20,14 +20,22 @@ const storage::CatalogState& CatalogMetadataService::Read() const { return repos
 
 const storage::CatalogState& CatalogMetadataService::Reload() { return repository_.Reload(); }
 
-bool CatalogMetadataService::ToggleFavorite(std::wstring database_name) {
-  if (database_name.empty()) return false;
+bool CatalogMetadataService::ToggleFavorite(std::wstring database_id, std::wstring legacy_database_name) {
+  if (database_id.empty()) return false;
   const auto& favorites = Read().favorites;
-  const bool added = std::find(favorites.begin(), favorites.end(), database_name) == favorites.end();
+  const auto existing_id = std::find(favorites.begin(), favorites.end(), database_id);
+  const auto existing_legacy = existing_id == favorites.end() && !legacy_database_name.empty() ?
+      std::find_if(favorites.begin(), favorites.end(), [&](const auto& value) { return EqualNoCase(value, legacy_database_name); }) : favorites.end();
+  const bool added = existing_id == favorites.end() && existing_legacy == favorites.end();
   repository_.Update([&](storage::CatalogState& state) {
-    auto favorite = std::find(state.favorites.begin(), state.favorites.end(), database_name);
+    auto favorite = std::find(state.favorites.begin(), state.favorites.end(), database_id);
+    if (favorite == state.favorites.end() && !legacy_database_name.empty()) {
+      favorite = std::find_if(state.favorites.begin(), state.favorites.end(), [&](const auto& value) {
+        return EqualNoCase(value, legacy_database_name);
+      });
+    }
     if (favorite == state.favorites.end()) {
-      state.favorites.insert(state.favorites.begin(), std::move(database_name));
+      state.favorites.insert(state.favorites.begin(), std::move(database_id));
       if (state.favorites.size() > kMaxFavorites) state.favorites.resize(kMaxFavorites);
     } else {
       state.favorites.erase(favorite);
@@ -40,9 +48,9 @@ void CatalogMetadataService::RenameDatabaseMetadata(std::wstring previous_name, 
     std::wstring previous_tag_id, std::wstring updated_tag_id) {
   if (previous_name == updated_name && previous_tag_id == updated_tag_id) return;
   repository_.Update([&](storage::CatalogState& state) {
-    if (previous_name != updated_name) {
+    if (previous_name != updated_name || previous_tag_id != updated_tag_id) {
       for (auto& favorite : state.favorites) {
-        if (EqualNoCase(favorite, previous_name)) favorite = updated_name;
+        if (EqualNoCase(favorite, previous_name) || EqualNoCase(favorite, previous_tag_id)) favorite = updated_tag_id;
       }
     }
     if (previous_tag_id != updated_tag_id) {

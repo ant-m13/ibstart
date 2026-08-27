@@ -80,7 +80,7 @@ class TreeViewController final {
       const storage::CatalogState& catalog_state, const std::vector<std::wstring>& filter_favorites,
       std::wstring_view search_filter, const presentation::TreeTagFilter& tag_filter,
       std::wstring_view root_name, const std::vector<std::wstring>& names, int image, LPARAM item_data,
-      HTREEITEM insert_after) const;
+      HTREEITEM insert_after, bool names_are_ids) const;
   [[nodiscard]] HTREEITEM InsertCatalogRoot() const;
   [[nodiscard]] ViewState CaptureViewState() const;
   void RestoreViewState(const ViewState& state) const;

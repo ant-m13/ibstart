@@ -68,12 +68,16 @@ std::wstring TagsText(const std::vector<std::wstring>& tags) {
   return result;
 }
 
-std::wstring TagId(const domain::Entry& entry) { return entry.ValueOr(L"ID", entry.name); }
+std::wstring TagId(const domain::Entry& entry) { return catalog::StableDatabaseId(entry); }
 
 const std::vector<std::wstring>& TagsFor(const storage::DatabaseTags& tags, const domain::Entry& entry) {
   static const std::vector<std::wstring> empty;
   const auto found = tags.find(TagId(entry));
   return found == tags.end() ? empty : found->second;
+}
+
+bool IsFavorite(const std::vector<std::wstring>& favorites, const domain::Entry& entry) {
+  return ContainsTag(favorites, TagId(entry)) || ContainsTag(favorites, entry.name);
 }
 
 const storage::TagStyle* TagStyleFor(const storage::TagStyles& styles, std::wstring_view tag) {
@@ -158,7 +162,7 @@ std::vector<catalog::TreeItem> FilterTreeItems(const catalog::Catalog& catalog,
     bool result = filter.kind == TreeTagFilterKind::all;
     if (!result) {
       if (const auto* entry = EntryForItem(catalog, item); entry && entry->IsDatabase()) {
-        if (filter.kind == TreeTagFilterKind::favorites) result = ContainsTag(favorites, entry->name);
+        if (filter.kind == TreeTagFilterKind::favorites) result = IsFavorite(favorites, *entry);
         else result = ContainsTag(TagsFor(tags, *entry), filter.tag);
       }
     }
@@ -205,7 +209,7 @@ bool MatchesTagFilter(const catalog::Catalog& catalog, const catalog::TreeItem& 
     const storage::DatabaseTags& tags, const std::vector<std::wstring>& favorites) {
   if (filter.kind == TreeTagFilterKind::all) return true;
   if (const auto* entry = EntryForItem(catalog, item); entry && entry->IsDatabase()) {
-    if (filter.kind == TreeTagFilterKind::favorites) return ContainsTag(favorites, entry->name);
+    if (filter.kind == TreeTagFilterKind::favorites) return IsFavorite(favorites, *entry);
     return ContainsTag(TagsFor(tags, *entry), filter.tag);
   }
   return std::any_of(item.children.begin(), item.children.end(), [&](const auto& child) {

@@ -175,11 +175,11 @@ void TreeViewController::Populate(const catalog::Catalog& database_catalog,
       }
     } else {
       ReconcileSpecialRoot(database_catalog, catalog_state, filter_favorites, search_filter, tag_filter,
-          L"Избранное", catalog_state.favorites, kFavoriteImage, kFavoritesRootItemData, catalog_root);
+          L"Избранное", catalog_state.favorites, kFavoriteImage, kFavoritesRootItemData, catalog_root, true);
       const HTREEITEM favorites_root = FindTopLevelItem(kFavoritesRootItemData);
       ReconcileSpecialRoot(database_catalog, catalog_state, filter_favorites, search_filter, tag_filter,
           L"Недавние", presentation::CollectRecentDatabaseNames(database_catalog, catalog_state.history),
-          kRecentImage, kRecentRootItemData, favorites_root ? favorites_root : catalog_root);
+          kRecentImage, kRecentRootItemData, favorites_root ? favorites_root : catalog_root, false);
     }
 
     RestoreViewState(view_state);
@@ -207,7 +207,7 @@ void TreeViewController::RefreshRecentBranch(const catalog::Catalog& database_ca
   try {
     ReconcileSpecialRoot(database_catalog, catalog_state, filter_favorites, search_filter, tag_filter,
         L"Недавние", recent, kRecentImage, kRecentRootItemData,
-        FindTopLevelItem(kFavoritesRootItemData));
+        FindTopLevelItem(kFavoritesRootItemData), false);
     RestoreViewState(view_state);
     if (!selected_recent.empty()) static_cast<void>(SelectItem(selected_recent));
   } catch (...) {
@@ -509,12 +509,13 @@ void TreeViewController::ReconcileSpecialRoot(const catalog::Catalog& database_c
     const storage::CatalogState& catalog_state, const std::vector<std::wstring>& filter_favorites,
     std::wstring_view search_filter, const presentation::TreeTagFilter& tag_filter,
     std::wstring_view root_name, const std::vector<std::wstring>& names, int image, LPARAM item_data,
-    HTREEITEM insert_after) const {
+    HTREEITEM insert_after, bool names_are_ids) const {
   if (!tree_) return;
   std::vector<catalog::TreeItem> raw_items;
   raw_items.reserve(names.size());
   for (const auto& name : names) {
-    const auto* entry = database_catalog.Find(name);
+    const auto* entry = names_are_ids ? database_catalog.FindById(name) : database_catalog.Find(name);
+    if (!entry && names_are_ids) entry = database_catalog.Find(name);
     if (!entry || !entry->IsDatabase()) continue;
     const auto section_index = CatalogSectionIndex(database_catalog, entry);
     if (!section_index) continue;
