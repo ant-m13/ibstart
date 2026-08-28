@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <cstddef>
 #include <cwctype>
+#include <limits>
 #include <unordered_map>
 #include <utility>
 
@@ -32,6 +33,38 @@ LPARAM TreeItemData(HWND tree, HTREEITEM item) {
   data.mask = TVIF_PARAM;
   data.hItem = item;
   return TreeView_GetItem(tree, &data) ? data.lParam : 0;
+}
+
+std::wstring ReadTreeItemText(HWND tree, HTREEITEM item) {
+  if (!tree || !item) return {};
+  std::wstring text(256, L'\0');
+  for (;;) {
+    TVITEMW data{};
+    data.mask = TVIF_TEXT;
+    data.hItem = item;
+    data.pszText = text.data();
+    data.cchTextMax = static_cast<int>(text.size());
+    if (!TreeView_GetItem(tree, &data)) return {};
+
+    const auto end = std::find(text.begin(), text.end(), L'\0');
+    if (end != text.end() && end != text.end() - 1) {
+      text.erase(end, text.end());
+      return text;
+    }
+    if (text.size() > static_cast<size_t>(std::numeric_limits<int>::max()) / 2) return {};
+    text.resize(text.size() * 2, L'\0');
+  }
+}
+
+std::wstring TreeItemLabel(HWND tree, HTREEITEM item, const catalog::Catalog* catalog) {
+  const LPARAM item_data = TreeItemData(tree, item);
+  if (catalog && item_data >= static_cast<LPARAM>(catalog::kCatalogItemDataBase)) {
+    if (const auto* entry = catalog->FindBySectionIndex(
+            static_cast<size_t>(item_data - static_cast<LPARAM>(catalog::kCatalogItemDataBase)))) {
+      return entry->name;
+    }
+  }
+  return ReadTreeItemText(tree, item);
 }
 
 const domain::Entry* EntryForItem(const catalog::Catalog& catalog, const catalog::TreeItem& item) {
@@ -230,14 +263,8 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
 
     if (!search_filter.empty()) {
       const auto item = reinterpret_cast<HTREEITEM>(draw->nmcd.dwItemSpec);
-      wchar_t text[512]{};
-      TVITEMW tree_item{};
-      tree_item.mask = TVIF_TEXT;
-      tree_item.hItem = item;
-      tree_item.pszText = text;
-      tree_item.cchTextMax = 512;
-      if (TreeView_GetItem(tree, &tree_item) &&
-          utf::FindNoCaseOrdinal(std::wstring_view(text), search_filter) != std::wstring_view::npos) {
+      const auto label = TreeItemLabel(tree, item, catalog);
+      if (utf::FindNoCaseOrdinal(label, search_filter) != std::wstring_view::npos) {
         const bool selected = (draw->nmcd.uItemState & CDIS_SELECTED) != 0;
         const bool tree_focused = GetFocus() == tree;
         if (selected && !tree_focused) {
@@ -264,14 +291,8 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
   if (draw->nmcd.dwDrawStage != CDDS_ITEMPOSTPAINT) return CDRF_DODEFAULT;
 
   const auto item = reinterpret_cast<HTREEITEM>(draw->nmcd.dwItemSpec);
-  wchar_t text[512]{};
-  TVITEMW tree_item{};
-  tree_item.mask = TVIF_TEXT;
-  tree_item.hItem = item;
-  tree_item.pszText = text;
-  tree_item.cchTextMax = 512;
-  if (!TreeView_GetItem(tree, &tree_item)) return CDRF_DODEFAULT;
-  const std::wstring_view label(text);
+  const std::wstring label_storage = TreeItemLabel(tree, item, catalog);
+  const std::wstring_view label(label_storage);
 
   RECT label_rect{};
   if (!TreeView_GetItemRect(tree, item, &label_rect, TRUE)) return CDRF_DODEFAULT;

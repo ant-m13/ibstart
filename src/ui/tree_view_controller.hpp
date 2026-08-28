@@ -37,7 +37,7 @@ class TreeViewController final {
       const presentation::TreeTagFilter& tag_filter, bool simple_mode) const;
   void RefreshRecentBranch(const catalog::Catalog& database_catalog, const storage::CatalogState& catalog_state,
       const std::vector<std::wstring>& filter_favorites, std::wstring_view search_filter,
-      const presentation::TreeTagFilter& tag_filter, std::wstring_view selected_recent) const;
+      const presentation::TreeTagFilter& tag_filter, std::optional<size_t> selected_recent_section_index) const;
 
   [[nodiscard]] std::wstring ItemName(HTREEITEM item) const;
   [[nodiscard]] LPARAM ItemData(HTREEITEM item) const;
@@ -48,6 +48,7 @@ class TreeViewController final {
   [[nodiscard]] std::optional<size_t> SelectedSectionIndex() const;
   [[nodiscard]] bool SelectedItemIsRecentRoot() const;
   [[nodiscard]] bool SelectItem(std::wstring_view name) const;
+  [[nodiscard]] bool SelectItem(size_t section_index) const;
   [[nodiscard]] bool SelectCatalogRoot() const;
   [[nodiscard]] ExpansionStates CaptureExpansionStates() const;
   void RestoreExpansionStates(const ExpansionStates& states) const;
@@ -90,6 +91,8 @@ class TreeViewController final {
   void DeleteChildren(HTREEITEM parent) const;
   [[nodiscard]] HTREEITEM FindTopLevelItem(LPARAM item_data) const;
   [[nodiscard]] HTREEITEM FindItemInBranch(std::wstring_view name, LPARAM branch_data) const;
+  [[nodiscard]] HTREEITEM FindItemInBranch(LPARAM item_data, LPARAM branch_data) const;
+  [[nodiscard]] HTREEITEM FindItemByData(HTREEITEM item, LPARAM item_data) const;
   [[nodiscard]] HTREEITEM FindItemByName(HTREEITEM item, std::wstring_view name) const;
   [[nodiscard]] static int DatabaseImage(const domain::Entry* entry);
 
