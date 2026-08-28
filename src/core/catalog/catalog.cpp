@@ -52,6 +52,9 @@ namespace {
 bool EqualNoCase(std::wstring_view left, std::wstring_view right) {
   return left.size() == right.size() && _wcsnicmp(left.data(), right.data(), left.size()) == 0;
 }
+bool IsStructuralSearchField(std::wstring_view key) {
+  return EqualNoCase(key, L"Folder") || EqualNoCase(key, L"OrderInList") || EqualNoCase(key, L"OrderInTree");
+}
 bool StartsWithNoCase(std::wstring_view value, std::wstring_view prefix) {
   return value.size() >= prefix.size() && _wcsnicmp(value.data(), prefix.data(), prefix.size()) == 0;
 }
@@ -153,6 +156,7 @@ bool MatchesSearchText(const domain::Entry& entry, std::wstring_view query) {
   const auto matches = [query](std::wstring_view text) { return utf::FindNoCaseOrdinal(text, query) != std::wstring_view::npos; };
   if (matches(entry.name)) return true;
   return std::any_of(entry.fields.begin(), entry.fields.end(), [&](const auto& field) {
+    if (IsStructuralSearchField(field.key)) return false;
     return matches(field.key) || matches(field.value);
   });
 }

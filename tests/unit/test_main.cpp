@@ -863,13 +863,17 @@ void TestUpdateVersionsAndVersionFile() {
 
 void TestCatalogSearch() {
   const auto document = ibstart::v8i::V8iDocument::ParseUtf8(
-      "[Бухгалтерия]\nConnect=Srvr=cluster-01;Ref=Accounting\nFolder=/Рабочие\nCustom=клиент-А\n");
+      "[Бухгалтерия]\nConnect=Srvr=cluster-01;Ref=Accounting\nFolder=/Рабочие\n"
+      "OrderInList=1\nOrderInTree=2\nCustom=клиент-А\n");
   const auto* entry = document.Find(L"Бухгалтерия");
   CHECK(entry != nullptr);
   CHECK(entry && ibstart::catalog::MatchesSearchText(entry->entry, L"бух"));
   CHECK(entry && ibstart::catalog::MatchesSearchText(entry->entry, L"CLUSTER-01"));
   CHECK(entry && ibstart::catalog::MatchesSearchText(entry->entry, L"accounting"));
-  CHECK(entry && ibstart::catalog::MatchesSearchText(entry->entry, L"Рабочие"));
+  CHECK(entry && !ibstart::catalog::MatchesSearchText(entry->entry, L"Рабочие"));
+  CHECK(entry && !ibstart::catalog::MatchesSearchText(entry->entry, L"Folder"));
+  CHECK(entry && !ibstart::catalog::MatchesSearchText(entry->entry, L"OrderInList"));
+  CHECK(entry && !ibstart::catalog::MatchesSearchText(entry->entry, L"OrderInTree"));
   CHECK(entry && ibstart::catalog::MatchesSearchText(entry->entry, L"клиент-а"));
   CHECK(entry && ibstart::catalog::MatchesSearchText(entry->entry, L"custom"));
   CHECK(entry && !ibstart::catalog::MatchesSearchText(entry->entry, L"не найдено"));
@@ -877,9 +881,9 @@ void TestCatalogSearch() {
 
 void TestTreeFilters() {
   auto document = ibstart::v8i::V8iDocument::ParseUtf8(
-      "[Folder]\nFolder=/\n"
-      "[Alpha]\nConnect=File=\"C:\\\\alpha\"\nFolder=/Folder\n"
-      "[Beta]\nConnect=File=\"C:\\\\beta\"\nFolder=/Folder\n"
+      "[Рабочие базы]\nFolder=/\n"
+      "[Alpha]\nConnect=File=\"C:\\\\alpha\"\nFolder=/Рабочие базы\n"
+      "[Beta]\nConnect=File=\"C:\\\\beta\"\nFolder=/Рабочие базы\n"
       "[Other]\nConnect=File=\"C:\\\\other\"\n");
   ibstart::catalog::Catalog catalog(std::move(document));
   const ibstart::storage::DatabaseTags tags = {
@@ -890,12 +894,15 @@ void TestTreeFilters() {
   CHECK(available == std::vector<std::wstring>{L"Production", L"Shared", L"test"});
 
   const auto tree = catalog.Tree();
-  const auto folder = std::find_if(tree.begin(), tree.end(), [](const auto& item) { return item.name == L"Folder"; });
+  const auto folder = std::find_if(tree.begin(), tree.end(), [](const auto& item) { return item.name == L"Рабочие базы"; });
   CHECK(folder != tree.end());
   if (folder == tree.end()) return;
 
   CHECK(ibstart::ui::presentation::MatchesSearchFilter(catalog, *folder, L"prod", tags));
   CHECK(!ibstart::ui::presentation::MatchesSearchFilter(catalog, *folder, L"release", tags));
+  CHECK(!ibstart::ui::presentation::MatchesSearchFilter(catalog, *folder, L"баз", tags));
+  CHECK(ibstart::ui::presentation::FilterTreeItems(
+      catalog, tree, L"баз", ibstart::ui::presentation::TreeTagFilter{}, tags, {}).empty());
 
   ibstart::ui::presentation::TreeTagFilter favorites;
   favorites.kind = ibstart::ui::presentation::TreeTagFilterKind::favorites;
