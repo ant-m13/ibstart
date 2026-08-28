@@ -246,6 +246,9 @@ void Catalog::EnsureLookup() const {
     }
 
     if (entry.IsDatabase()) {
+      if (entry.ValueOr(L"Connect").empty()) {
+        add_warning(position, L"Пустая строка подключения Connect у базы: " + entry.name);
+      }
       if (const auto* id_field = entry.Find(L"ID"); id_field && id_field->value.empty()) {
         add_warning(position, L"Пустой ID базы; для внутренних связей используется имя: " + entry.name);
       }
