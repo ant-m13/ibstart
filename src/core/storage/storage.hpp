@@ -19,6 +19,9 @@ namespace ibstart::storage {
 
 inline constexpr std::size_t kMaxFavorites = 9;
 inline constexpr std::size_t kMaxHistory = 20;
+// Settings and catalog state are parsed from one in-memory JSON document.
+// Reject anomalously large files before allocating their contents.
+inline constexpr std::uintmax_t kMaxStorageFileSize = 4ULL * 1024ULL * 1024ULL;
 
 struct StorageLayout {
   std::filesystem::path root;

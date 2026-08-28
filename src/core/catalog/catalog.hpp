@@ -34,6 +34,12 @@ struct ValidationDiagnostic {
 
 enum class SortDirection { ascending, descending };
 
+enum class FileDatabasePathStatus { valid, missing, inaccessible };
+
+// Checks that a file database directory contains the native 1C marker file.
+// The check never creates or changes anything in the selected directory.
+[[nodiscard]] FileDatabasePathStatus CheckFileDatabasePath(const std::filesystem::path& directory);
+
 // A direct http(s) URL is a legacy but supported form of Connect.  It has no
 // connection key such as WS= and must not be preserved as an unknown field
 // when an editor rewrites it into the keyed form.

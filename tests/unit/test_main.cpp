@@ -317,6 +317,29 @@ void TestSafeStore() {
   std::error_code error; std::filesystem::remove_all(directory, error);
 }
 
+void TestV8iFileSizeLimit() {
+  const auto directory = Temp(L"store-size-limit");
+  const auto file = directory / L"ibases.v8i";
+  WriteBytes(file, "");
+  std::filesystem::resize_file(file, ibstart::v8i::kMaxV8iFileSize + 1);
+
+  bool rejected = false;
+  std::string diagnostic;
+  try {
+    ibstart::v8i::V8iFileStore store(file);
+    static_cast<void>(store.Read());
+  } catch (const std::exception& error) {
+    rejected = true;
+    diagnostic = error.what();
+  }
+  CHECK(rejected);
+  CHECK(diagnostic.find("safety limit") != std::string::npos);
+  CHECK(diagnostic.find("16777217") != std::string::npos);
+
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
 void TestConfirmedV8iOverwrite() {
   const auto directory = Temp(L"store-overwrite");
   const auto file = directory / L"ibases.v8i";
@@ -1243,6 +1266,28 @@ void TestFileBaseScanRegistration() {
   std::filesystem::remove_all(root, error);
 }
 
+void TestFileDatabasePathValidation() {
+  const auto root = Temp(L"file-database-validation");
+  const auto valid = root / L"valid";
+  const auto markerDirectory = root / L"marker-directory";
+  std::filesystem::create_directories(valid);
+  std::filesystem::create_directories(markerDirectory / L"1Cv8.1CD");
+  WriteBytes(valid / L"1Cv8.1CD", "");
+
+  CHECK(ibstart::catalog::CheckFileDatabasePath({}) == ibstart::catalog::FileDatabasePathStatus::missing);
+  CHECK(ibstart::catalog::CheckFileDatabasePath(valid) == ibstart::catalog::FileDatabasePathStatus::valid);
+  CHECK(ibstart::catalog::CheckFileDatabasePath(root / L"missing") == ibstart::catalog::FileDatabasePathStatus::missing);
+  CHECK(ibstart::catalog::CheckFileDatabasePath(markerDirectory) == ibstart::catalog::FileDatabasePathStatus::missing);
+
+  ibstart::catalog::Catalog catalog;
+  CHECK(!catalog.AddFileDatabase(L"Missing", root / L"missing"));
+  CHECK(catalog.AddFileDatabase(L"Valid", valid));
+  CHECK(catalog.Find(L"Valid") != nullptr);
+
+  std::error_code error;
+  std::filesystem::remove_all(root, error);
+}
+
 void TestSecretMasking() {
   const auto masked = ibstart::logging::MaskSecrets(
       L"/N admin /P \"s3cret\" --token=abc password=xyz /Password hunter2 Pwd=db-secret");
@@ -1546,6 +1591,41 @@ void TestCatalogStateRepository() {
   ibstart::storage::SaveCatalogState(layout, external);
   CHECK(repository.Read().favorites == std::vector<std::wstring>{L"Основная база"});
   CHECK(repository.Reload().favorites == std::vector<std::wstring>{L"Внешнее изменение"});
+
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
+void TestStorageFileSizeLimit() {
+  const auto directory = Temp(L"storage-size-limit");
+  const ibstart::storage::StorageLayout layout{directory, true};
+  ibstart::storage::EnsureWritable(layout);
+
+  const auto settings = layout.root / L"settings.json";
+  WriteBytes(settings, "{}");
+  std::filesystem::resize_file(settings, ibstart::storage::kMaxStorageFileSize + 1);
+  bool settingsRejected = false;
+  std::string settingsDiagnostic;
+  try {
+    static_cast<void>(ibstart::storage::LoadSettings(layout));
+  } catch (const std::exception& error) {
+    settingsRejected = true;
+    settingsDiagnostic = error.what();
+  }
+  CHECK(settingsRejected);
+  CHECK(settingsDiagnostic.find("safety limit") != std::string::npos);
+  CHECK(settingsDiagnostic.find("4194305") != std::string::npos);
+
+  const auto state = layout.root / L"catalog-state.json";
+  WriteBytes(state, "{}");
+  std::filesystem::resize_file(state, ibstart::storage::kMaxStorageFileSize + 1);
+  bool stateRejected = false;
+  try {
+    static_cast<void>(ibstart::storage::LoadCatalogState(layout));
+  } catch (const std::exception&) {
+    stateRejected = true;
+  }
+  CHECK(stateRejected);
 
   std::error_code error;
   std::filesystem::remove_all(directory, error);
@@ -2194,6 +2274,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"NoBomAndCatalog", TestNoBomAndCatalog);
   run(L"V8iLineEndingRoundTrips", TestV8iLineEndingRoundTrips);
   run(L"SafeStore", TestSafeStore);
+  run(L"V8iFileSizeLimit", TestV8iFileSizeLimit);
   run(L"ConfirmedV8iOverwrite", TestConfirmedV8iOverwrite);
   run(L"V8iSaveRejectsActiveWriter", TestV8iSaveRejectsActiveWriter);
   run(L"V8iConcurrentSavesConflict", TestV8iConcurrentSavesConflict);
@@ -2212,6 +2293,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"CatalogSortChildrenByName", TestCatalogSortChildrenByName);
   run(L"StandardFolderPaths", TestStandardFolderPaths);
   run(L"FileBaseScanRegistration", TestFileBaseScanRegistration);
+  run(L"FileDatabasePathValidation", TestFileDatabasePathValidation);
   run(L"SecretMasking", TestSecretMasking);
   run(L"LogPruning", TestLogPruning);
   run(L"CacheSizeFormatting", TestCacheSizeFormatting);
@@ -2222,6 +2304,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"CacheContinuesWithActiveOneCProcess", TestCacheContinuesWithActiveOneCProcess);
   run(L"CacheIdentifiersDoNotCollide", TestCacheIdentifiersDoNotCollide);
   run(L"PortableMode", TestPortableMode);
+  run(L"StorageFileSizeLimit", TestStorageFileSizeLimit);
   run(L"CatalogStateRepository", TestCatalogStateRepository);
   run(L"StorageRepositoryMergesStaleSnapshots", TestStorageRepositoryMergesStaleSnapshots);
   run(L"CatalogMetadataService", TestCatalogMetadataService);
