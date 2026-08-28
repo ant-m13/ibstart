@@ -44,9 +44,9 @@ HTML, CSS, изображений или исходного кода 1С.
 | Безопасность | Известные секреты маскируются в логах и перед запуском показывается предупреждение; значения в `ibases.v8i`, UI и явном копировании доступны пользователю. | Расширить registry и тесты так, чтобы секреты не попадали в открытом виде в логи и автоматически создаваемые diagnostics/report; fixtures должны быть синтетическими или замаскированными. |
 
 Фактическое mapping полей в коде находится в
-[catalog.cpp](../src/core/catalog/catalog.cpp:209), выбор launch options — в
-[main_window.cpp](../src/ui/main_window.cpp:1154), построение команды — в
-[command_builder.cpp](../src/core/launcher/command_builder.cpp:175).
+[`MakeDatabase`](../src/core/catalog/catalog.cpp), выбор launch options — в
+[`MainWindow::LaunchSelected`](../src/ui/main_window.cpp), построение команды — в
+[`launcher::BuildCommand`](../src/core/launcher/command_builder.cpp).
 
 ## 2. Сквозная модель
 

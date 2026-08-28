@@ -134,9 +134,10 @@ Lossless-слой должен хранить исходное представ�
 ## 5. Фактическая реализация IBStart
 
 Typed-представление текущего проекта находится в
-[model.hpp](../src/core/domain/model.hpp:34), mapping — в
-[catalog.cpp](../src/core/catalog/catalog.cpp:209), редактор читает и записывает
-известные поля в [database_editor_dialog.cpp](../src/ui/database_editor_dialog.cpp:443).
+[`domain::Database`](../src/core/domain/model.hpp), mapping выполняет
+[`MakeDatabase`](../src/core/catalog/catalog.cpp), редактор читает и записывает
+известные поля через [`DatabaseEditorDataFromEntry`](../src/ui/database_editor_dialog.cpp)
+и [`ApplyDatabaseEditorData`](../src/ui/database_editor_dialog.cpp).
 
 Сейчас применяются к каталогу или запуску:
 

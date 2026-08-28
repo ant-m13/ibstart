@@ -140,5 +140,7 @@ if(BUILD_TESTING)
   add_test(NAME ibstart.unit COMMAND ibstart_tests)
   add_test(NAME ibstart.version_validation COMMAND "${CMAKE_COMMAND}" -P
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/test-version-validation.cmake")
+  add_test(NAME ibstart.documentation_links COMMAND "${CMAKE_COMMAND}" -P
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-documentation-links.cmake")
   set_tests_properties(ibstart.unit PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
