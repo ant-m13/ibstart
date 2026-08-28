@@ -187,6 +187,7 @@ void TestUnicodeCaseInsensitiveSearch() {
   CHECK(ibstart::utf::FindNoCaseOrdinal(L"КД2", L"кд") == 0);
   CHECK(ibstart::utf::FindNoCaseOrdinal(L"Рабочая КД3", L"кд") == 8);
   CHECK(ibstart::utf::FindNoCaseOrdinal(L"Alpha BETA", L"beta") == 6);
+  CHECK(ibstart::utf::FindNoCaseOrdinal(L"retail3", L"etai") == 1);
   CHECK(ibstart::utf::FindNoCaseOrdinal(L"КД2", L"д3") == std::wstring_view::npos);
   CHECK(ibstart::utf::FindNoCaseOrdinal(L"КДКД", L"кд", 2) == 2);
 }

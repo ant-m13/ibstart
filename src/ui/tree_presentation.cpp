@@ -362,6 +362,8 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
   const int saved = SaveDC(draw->nmcd.hdc);
   if (const auto font = reinterpret_cast<HFONT>(SendMessageW(tree, WM_GETFONT, 0, 0))) SelectObject(draw->nmcd.hdc, font);
   SetBkMode(draw->nmcd.hdc, TRANSPARENT);
+  COLORREF normal_text_color = GetTextColor(draw->nmcd.hdc);
+  if (normal_text_color == CLR_INVALID) normal_text_color = GetSysColor(COLOR_WINDOWTEXT);
   SetTextColor(draw->nmcd.hdc, RGB(0, 97, 0));
   const HBRUSH match_brush = reinterpret_cast<HBRUSH>(GetStockObject(DC_BRUSH));
   if (!match_brush) {
@@ -370,17 +372,49 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
   }
   SetDCBrushColor(draw->nmcd.hdc, RGB(198, 239, 206));
 
+  // Render the complete label first.  The TreeView has already rendered it,
+  // but doing this in one run gives the prefix, match, and suffix one shared
+  // origin.  We then recolor the match through a clip instead of drawing a
+  // standalone substring at a separately measured origin.
+  SetTextColor(draw->nmcd.hdc, normal_text_color);
+  RECT label_text_rect = label_rect;
+  DrawTextW(draw->nmcd.hdc, label.data(), static_cast<int>(label.size()), &label_text_rect,
+      DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+
+  // Measure complete prefixes in the same context in which the label is
+  // rendered.  This keeps the highlight boundaries aligned with the text
+  // (for example, `etai` inside `retail3`).
+  const auto text_x = [&](size_t index) {
+    SIZE extent{};
+    if (index != 0) GetTextExtentPoint32W(draw->nmcd.hdc, label.data(), static_cast<int>(index), &extent);
+    return label_rect.left + extent.cx;
+  };
+
   size_t start = 0;
   size_t match = utf::FindNoCaseOrdinal(label, search_filter, start);
   while (match != std::wstring_view::npos) {
-    SIZE prefix_size{}, match_size{};
-    GetTextExtentPoint32W(draw->nmcd.hdc, label.data(), static_cast<int>(match), &prefix_size);
-    GetTextExtentPoint32W(draw->nmcd.hdc, label.data() + match, static_cast<int>(search_filter.size()), &match_size);
-    RECT match_rect{label_rect.left + prefix_size.cx, label_rect.top + 1, label_rect.left + prefix_size.cx + match_size.cx, label_rect.bottom - 1};
-    FillRect(draw->nmcd.hdc, &match_rect, match_brush);
-    RECT text_rect{match_rect.left, label_rect.top, match_rect.right, label_rect.bottom};
-    DrawTextW(draw->nmcd.hdc, label.data() + match, static_cast<int>(search_filter.size()), &text_rect, DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-    start = match + search_filter.size();
+    const size_t match_end = match + search_filter.size();
+    const LONG match_left = text_x(match);
+    const LONG match_right = text_x(match_end);
+    RECT match_rect{
+        std::max<LONG>(label_rect.left, match_left),
+        label_rect.top,
+        std::min<LONG>(label_rect.right, match_right),
+        label_rect.bottom
+    };
+    if (match_rect.left < match_rect.right && match_rect.top < match_rect.bottom) {
+      FillRect(draw->nmcd.hdc, &match_rect, match_brush);
+      const int clipped = SaveDC(draw->nmcd.hdc);
+      if (clipped != 0) {
+        IntersectClipRect(draw->nmcd.hdc, match_rect.left, match_rect.top, match_rect.right, match_rect.bottom);
+        SetTextColor(draw->nmcd.hdc, RGB(0, 97, 0));
+        RECT clipped_text_rect = label_rect;
+        DrawTextW(draw->nmcd.hdc, label.data(), static_cast<int>(label.size()), &clipped_text_rect,
+            DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+        RestoreDC(draw->nmcd.hdc, clipped);
+      }
+    }
+    start = match_end;
     match = utf::FindNoCaseOrdinal(label, search_filter, start);
   }
   RestoreDC(draw->nmcd.hdc, saved);
