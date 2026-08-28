@@ -211,6 +211,29 @@ std::size_t FindKeyValueSeparator(std::wstring_view value) {
   return std::wstring_view::npos;
 }
 
+enum class ConnectFragmentKind { other, file, server, reference, web, legacy_web };
+
+ConnectFragmentKind IdentifyConnectFragment(const Fragment& fragment, std::size_t index) {
+  if (!fragment.has_equals) {
+    return index == 0 && IsBareWebUrl(fragment.raw)
+        ? ConnectFragmentKind::legacy_web : ConnectFragmentKind::other;
+  }
+  if (EqualNoCase(fragment.key, L"File")) return ConnectFragmentKind::file;
+  if (EqualNoCase(fragment.key, L"Srvr")) return ConnectFragmentKind::server;
+  if (EqualNoCase(fragment.key, L"Ref")) return ConnectFragmentKind::reference;
+  if (EqualNoCase(fragment.key, L"WS")) return ConnectFragmentKind::web;
+  return ConnectFragmentKind::other;
+}
+
+bool IsTypedConnectFragment(ConnectFragmentKind kind) {
+  return kind != ConnectFragmentKind::other;
+}
+
+bool MatchesConnectionReplacement(ConnectFragmentKind original, ConnectFragmentKind replacement) {
+  return original == replacement ||
+      (replacement == ConnectFragmentKind::web && original == ConnectFragmentKind::legacy_web);
+}
+
 }  // namespace
 
 std::wstring Trim(std::wstring_view value) {
@@ -299,47 +322,105 @@ std::wstring BuildConnection(ConnectionKind kind, std::wstring_view original,
     throw std::invalid_argument("Connect contains an invalid web URL.");
   }
 
-  std::vector<std::wstring> replacement;
+  std::vector<std::pair<ConnectFragmentKind, std::wstring>> replacement;
   if (kind == ConnectionKind::file) {
-    replacement.push_back(L"File=" + QuoteValue(std::wstring(file)));
+    replacement.push_back({ConnectFragmentKind::file, L"File=" + QuoteValue(std::wstring(file))});
   } else if (kind == ConnectionKind::web) {
-    replacement.push_back(L"WS=" + QuoteValue(std::wstring(web)));
+    replacement.push_back({ConnectFragmentKind::web, L"WS=" + QuoteValue(std::wstring(web))});
   } else {
-    replacement.push_back(L"Srvr=" + QuoteValue(std::wstring(server)));
-    replacement.push_back(L"Ref=" + QuoteValue(std::wstring(reference)));
+    replacement.push_back({ConnectFragmentKind::server, L"Srvr=" + QuoteValue(std::wstring(server))});
+    replacement.push_back({ConnectFragmentKind::reference, L"Ref=" + QuoteValue(std::wstring(reference))});
   }
 
-  const auto is_connection_key = [](std::wstring_view key) {
-    return EqualNoCase(key, L"File") || EqualNoCase(key, L"WS") ||
-        EqualNoCase(key, L"Srvr") || EqualNoCase(key, L"Ref");
-  };
-  std::vector<std::wstring> preserved;
-  preserved.reserve(parsed.fragments.size());
-  std::optional<std::size_t> replacement_position;
+  std::vector<ConnectFragmentKind> fragment_kinds;
+  fragment_kinds.reserve(parsed.fragments.size());
+  std::optional<std::size_t> first_connection_position;
   for (std::size_t index = 0; index < parsed.fragments.size(); ++index) {
-    const auto& fragment = parsed.fragments[index];
-    // A legacy direct URL is the first connection fragment. Replace it for
-    // every target kind, not only when the target remains a web connection.
-    const bool legacy_url = index == 0 && IsBareWebUrl(fragment.raw);
-    if (legacy_url || is_connection_key(fragment.key)) {
-      if (!replacement_position) replacement_position = preserved.size();
-      continue;
+    const auto fragment_kind = IdentifyConnectFragment(parsed.fragments[index], index);
+    fragment_kinds.push_back(fragment_kind);
+    if (IsTypedConnectFragment(fragment_kind) && !first_connection_position) {
+      first_connection_position = index;
     }
-    preserved.push_back(fragment.raw);
   }
 
-  const std::size_t insertion_position = replacement_position.value_or(0);
+  // When the target keeps the same connection family, map every typed
+  // replacement to the corresponding original slot. If the family changes,
+  // place the new typed block at the first old connection slot and remove all
+  // old typed fragments there, keeping the unknown fragments in their order.
+  bool connection_family_changed = false;
+  if (first_connection_position) {
+    for (const auto fragment_kind : fragment_kinds) {
+      if (!IsTypedConnectFragment(fragment_kind)) continue;
+      const bool has_replacement = std::any_of(replacement.begin(), replacement.end(),
+          [&](const auto& part) { return MatchesConnectionReplacement(fragment_kind, part.first); });
+      if (!has_replacement) {
+        connection_family_changed = true;
+        break;
+      }
+    }
+  }
+
+  std::vector<std::optional<std::size_t>> replacement_positions(replacement.size());
+  if (!connection_family_changed) {
+    for (std::size_t index = 0; index < fragment_kinds.size(); ++index) {
+      for (std::size_t replacement_index = 0; replacement_index < replacement.size(); ++replacement_index) {
+        if (!replacement_positions[replacement_index] &&
+            MatchesConnectionReplacement(fragment_kinds[index], replacement[replacement_index].first)) {
+          replacement_positions[replacement_index] = index;
+        }
+      }
+    }
+  }
+
+  std::vector<std::wstring> before_first_connection;
+  std::vector<std::wstring> after_first_connection;
+  std::optional<std::size_t> first_replacement_at_first_connection;
+  if (first_connection_position && !connection_family_changed) {
+    for (std::size_t replacement_index = 0; replacement_index < replacement.size(); ++replacement_index) {
+      if (replacement_positions[replacement_index] &&
+          *replacement_positions[replacement_index] == *first_connection_position) {
+        first_replacement_at_first_connection = replacement_index;
+        break;
+      }
+    }
+  }
+  for (std::size_t replacement_index = 0; replacement_index < replacement.size(); ++replacement_index) {
+    if (replacement_positions[replacement_index]) continue;
+    const bool follows_first_replacement = first_replacement_at_first_connection &&
+        replacement_index > *first_replacement_at_first_connection;
+    (follows_first_replacement ? after_first_connection : before_first_connection).push_back(
+        replacement[replacement_index].second);
+  }
+
   std::wstring result;
   const auto append = [&result](std::wstring_view value) {
     if (value.empty()) return;
     if (!result.empty()) result.push_back(L';');
     result += value;
   };
-  for (std::size_t index = 0; index <= preserved.size(); ++index) {
-    if (index == insertion_position) {
-      for (const auto& part : replacement) append(part);
+  const auto append_all = [&append](const std::vector<std::wstring>& values) {
+    for (const auto& value : values) append(value);
+  };
+  for (std::size_t index = 0; index <= parsed.fragments.size(); ++index) {
+    if ((!first_connection_position && index == 0) ||
+        (first_connection_position && index == *first_connection_position)) {
+      append_all(before_first_connection);
     }
-    if (index < preserved.size()) append(preserved[index]);
+    if (index == parsed.fragments.size()) break;
+
+    if (IsTypedConnectFragment(fragment_kinds[index])) {
+      for (std::size_t replacement_index = 0; replacement_index < replacement.size(); ++replacement_index) {
+        if (replacement_positions[replacement_index] &&
+            *replacement_positions[replacement_index] == index) {
+          append(replacement[replacement_index].second);
+        }
+      }
+      if (first_connection_position && index == *first_connection_position) {
+        append_all(after_first_connection);
+      }
+      continue;
+    }
+    append(parsed.fragments[index].raw);
   }
   return result;
 }
