@@ -130,9 +130,27 @@ void WriteAtomically(const std::filesystem::path& path, std::string_view content
     // The profile mutex serializes cooperating writers; this check also
     // rejects an external writer that changed the file while the temporary
     // contents were built.
-    VerifyFingerprint(path, expected);
-    if (!MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
-      throw std::runtime_error("Cannot save application data: " + utf::ToUtf8(utf::LastErrorMessage()));
+    bool replaced = false;
+    DWORD last_error = ERROR_SUCCESS;
+    for (unsigned attempt = 0; attempt != 50; ++attempt) {
+      // Recheck before every retry as well. A transient sharing violation must
+      // not turn into an opportunity to overwrite a file changed meanwhile.
+      VerifyFingerprint(path, expected);
+      if (MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
+        replaced = true;
+        break;
+      }
+      last_error = GetLastError();
+      if (last_error != ERROR_ACCESS_DENIED && last_error != ERROR_SHARING_VIOLATION &&
+          last_error != ERROR_LOCK_VIOLATION) {
+        break;
+      }
+      if (attempt + 1 != 50) Sleep(10);
+    }
+    if (!replaced) {
+      throw std::runtime_error("Cannot save application data " + utf::ToUtf8(path.wstring()) +
+          ": " + utf::ToUtf8(utf::LastErrorMessage(last_error)) +
+          " (Win32 " + std::to_string(last_error) + ")");
     }
   } catch (...) {
     std::filesystem::remove(temporary, error);
