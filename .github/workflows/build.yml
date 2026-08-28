@@ -15,6 +15,11 @@ jobs:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v7
+      - name: Validate SemVer rules
+        shell: pwsh
+        run: |
+          ./.github/scripts/test-version-validation.ps1
+          cmake -P cmake/test-version-validation.cmake
       - name: Validate product version
         id: version
         shell: pwsh
