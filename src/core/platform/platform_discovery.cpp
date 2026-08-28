@@ -4,6 +4,7 @@
 #include <Windows.h>
 
 #include <algorithm>
+#include <cwchar>
 #include <cwctype>
 #include <optional>
 #include <set>
@@ -22,6 +23,8 @@ std::wstring Environment(std::wstring_view name) {
 }
 
 std::optional<domain::ClientBitness> ExecutableBitness(const std::filesystem::path& executable) {
+  std::error_code error;
+  if (!std::filesystem::is_regular_file(executable, error) || error) return std::nullopt;
   DWORD binaryType{};
   if (!GetBinaryTypeW(executable.c_str(), &binaryType)) return std::nullopt;
   if (binaryType == SCS_32BIT_BINARY) return domain::ClientBitness::x86;
@@ -29,10 +32,18 @@ std::optional<domain::ClientBitness> ExecutableBitness(const std::filesystem::pa
   return std::nullopt;
 }
 
+bool IsValidExecutableFile(const std::filesystem::path& executable) {
+  return ExecutableBitness(executable).has_value();
+}
+
+bool IsThinClientExecutable(const std::filesystem::path& executable) {
+  return _wcsicmp(executable.filename().c_str(), L"1cv8c.exe") == 0;
+}
+
 void AddClient(const std::filesystem::path& executable, std::vector<domain::PlatformInstallation>& output,
     std::set<std::wstring>& known, std::optional<domain::ClientBitness> bitness = std::nullopt) {
+  if (!IsValidExecutableFile(executable)) return;
   std::error_code error;
-  if (!std::filesystem::is_regular_file(executable, error)) return;
   const auto canonical = std::filesystem::weakly_canonical(executable, error);
   auto key = (error ? executable : canonical).wstring();
   std::transform(key.begin(), key.end(), key.begin(), [](wchar_t character) { return static_cast<wchar_t>(std::towlower(character)); });
@@ -46,8 +57,7 @@ void AddClient(const std::filesystem::path& executable, std::vector<domain::Plat
   const auto detectedBitness = ExecutableBitness(executable).value_or(
       bitness.value_or(x86Path ? domain::ClientBitness::x86 : domain::ClientBitness::x64));
   error.clear();
-  output.push_back({executable, version, detectedBitness,
-      executable.filename() == L"1cv8c.exe" || std::filesystem::exists(bin / L"1cv8c.exe", error)});
+  output.push_back({executable, version, detectedBitness, FindThinClient(executable).has_value()});
 }
 
 // A separate installation of the thin client contains 1cv8c.exe but not
@@ -56,12 +66,10 @@ void AddClient(const std::filesystem::path& executable, std::vector<domain::Plat
 void AddInstallation(const std::filesystem::path& directory, std::vector<domain::PlatformInstallation>& output,
     std::set<std::wstring>& known, std::optional<domain::ClientBitness> bitness = std::nullopt) {
   const auto thick = directory / L"1cv8.exe";
-  std::error_code error;
-  if (std::filesystem::is_regular_file(thick, error)) {
+  if (IsValidExecutableFile(thick)) {
     AddClient(thick, output, known, bitness);
     return;
   }
-  error.clear();
   AddClient(directory / L"1cv8c.exe", output, known, bitness);
 }
 
@@ -131,6 +139,14 @@ void ScanRegistry(HKEY hive, REGSAM view, std::vector<domain::PlatformInstallati
 }
 
 }  // namespace
+
+std::optional<std::filesystem::path> FindThinClient(const std::filesystem::path& platform_executable) {
+  const auto thin = IsThinClientExecutable(platform_executable)
+      ? platform_executable
+      : platform_executable.parent_path() / L"1cv8c.exe";
+  if (!IsValidExecutableFile(thin)) return std::nullopt;
+  return thin;
+}
 
 std::vector<std::filesystem::path> StandardSearchRoots() {
   std::vector<std::filesystem::path> roots;
