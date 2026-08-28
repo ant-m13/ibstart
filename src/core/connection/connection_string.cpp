@@ -182,6 +182,35 @@ bool QuoteIsEscapedAtBoundary(std::wstring_view text, size_t index) {
   return backslashes % 2 != 0;
 }
 
+std::wstring_view SchemePrefix(std::wstring_view value) {
+  constexpr std::wstring_view http = L"http://";
+  constexpr std::wstring_view https = L"https://";
+  if (value.size() >= http.size() && EqualNoCase(value.substr(0, http.size()), http)) return http;
+  if (value.size() >= https.size() && EqualNoCase(value.substr(0, https.size()), https)) return https;
+  return {};
+}
+
+std::size_t FindKeyValueSeparator(std::wstring_view value) {
+  // An unkeyed legacy URL is allowed to contain '=' in its query string.
+  // It is recognized by its scheme before looking for a key/value separator.
+  if (!SchemePrefix(value).empty()) return std::wstring_view::npos;
+
+  bool quoted = false;
+  for (std::size_t index = 0; index < value.size(); ++index) {
+    if (value[index] == L'\"') {
+      if (quoted && index + 1 < value.size() && value[index + 1] == L'\"') {
+        ++index;
+        continue;
+      }
+      if (quoted && QuoteIsEscapedAtBoundary(value, index)) continue;
+      quoted = !quoted;
+    } else if (value[index] == L'=' && !quoted) {
+      return index;
+    }
+  }
+  return std::wstring_view::npos;
+}
+
 }  // namespace
 
 std::wstring Trim(std::wstring_view value) {
@@ -212,13 +241,16 @@ ParseResult Parse(std::wstring_view connect) {
     if (!trimmed.empty()) {
       Fragment fragment;
       fragment.raw = raw;
-      const size_t separator = trimmed.find(L'=');
+      const size_t separator = FindKeyValueSeparator(trimmed);
       if (separator != std::wstring::npos) {
         fragment.has_equals = true;
         fragment.key = Trim(std::wstring_view(trimmed).substr(0, separator));
         fragment.value = DecodeQuotedValue(std::wstring_view(trimmed).substr(separator + 1), result.diagnostics);
       } else {
-        fragment.value = trimmed;
+        // A direct legacy URL may itself be quoted when it contains a
+        // semicolon. Decode it like a keyed value while retaining the raw
+        // fragment for lossless serialization.
+        fragment.value = DecodeQuotedValue(trimmed, result.diagnostics);
       }
       result.fragments.push_back(std::move(fragment));
     }
@@ -252,7 +284,7 @@ std::wstring QuoteValue(std::wstring value) {
   std::wstring result = L"\"";
   for (const wchar_t character : value) {
     if (character == L'"') result += L"\"\"";
-    result.push_back(character);
+    else result.push_back(character);
   }
   result.push_back(L'"');
   return result;
