@@ -908,6 +908,35 @@ void TestCatalogValidationAndStableSectionIndices() {
   CHECK(catalog.FindBySectionIndex(3) != nullptr);
 }
 
+void TestEmptyConnectDiagnosis() {
+  auto document = ibstart::v8i::V8iDocument::ParseUtf8(
+      "[Empty connection]\nConnect=\nID=empty-connection\nCustom=keep\n");
+  ibstart::catalog::Catalog catalog(std::move(document));
+
+  const auto* entry = catalog.Find(L"Empty connection");
+  CHECK(entry != nullptr && entry->IsDatabase());
+  CHECK(catalog.IsValid());
+  const auto& diagnostics = catalog.diagnostics();
+  const auto empty_connect = std::find_if(diagnostics.begin(), diagnostics.end(), [](const auto& diagnostic) {
+    return diagnostic.section_index == 0 && !diagnostic.blocking &&
+        diagnostic.message.find(L"Пустая строка подключения Connect") != std::wstring::npos;
+  });
+  CHECK(empty_connect != diagnostics.end());
+
+  const auto database = catalog.DatabaseFor(L"Empty connection");
+  CHECK(database.connect.empty());
+  ibstart::domain::LaunchOptions options;
+  const auto launch_diagnostics = ibstart::launcher::ValidateLaunchParameters(database, options);
+  CHECK(!launch_diagnostics.empty());
+  CHECK(!launch_diagnostics.empty() && launch_diagnostics.front().find(L"Connect") != std::wstring::npos);
+
+  auto* editable = catalog.Find(L"Empty connection");
+  CHECK(editable != nullptr);
+  if (editable) editable->Set(L"Connect", L"File=\"C:\\\\fixed\"");
+  CHECK(catalog.diagnostics().empty());
+  CHECK(catalog.DatabaseFor(L"Empty connection").connect == L"File=\"C:\\\\fixed\"");
+}
+
 void TestCatalogSetChildOrder() {
   auto document = ibstart::v8i::V8iDocument::ParseUtf8(
       "[Zulu database]\nConnect=File=\"C:\\\\zulu\"\nOrderInList=1\nOrderInTree=1\n"
@@ -2495,6 +2524,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"WindowsArgumentQuoting", TestWindowsArgumentQuoting);
   run(L"CatalogOrderingAndCycles", TestCatalogOrderingAndCycles);
   run(L"CatalogValidationAndStableSectionIndices", TestCatalogValidationAndStableSectionIndices);
+  run(L"EmptyConnectDiagnosis", TestEmptyConnectDiagnosis);
   run(L"CatalogSetChildOrder", TestCatalogSetChildOrder);
   run(L"CatalogSortChildrenByName", TestCatalogSortChildrenByName);
   run(L"StandardFolderPaths", TestStandardFolderPaths);
