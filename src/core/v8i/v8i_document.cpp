@@ -46,6 +46,11 @@ bool IsSectionHeader(std::wstring_view line) {
   return line.size() >= 2 && line.front() == L'[' && line.back() == L']';
 }
 
+struct SerializedLine {
+  std::wstring text;
+  std::wstring ending;
+};
+
 }  // namespace
 
 V8iDocument V8iDocument::ParseUtf8(std::string_view bytes) {
@@ -73,11 +78,16 @@ V8iDocument V8iDocument::ParseUtf8(std::string_view bytes) {
   const auto& lines = split.lines;
   Section* current = nullptr;
   std::vector<std::wstring> pending;
-  for (const auto& line : lines) {
+  std::vector<std::wstring> pending_line_endings;
+  for (size_t line_index = 0; line_index < lines.size(); ++line_index) {
+    const auto& line = lines[line_index];
+    const auto ending = line_index < split.endings.size() ? split.endings[line_index] : std::wstring();
     if (IsSectionHeader(line)) {
       Section section;
       if (current == nullptr) document.preamble = std::move(pending);
+      if (current == nullptr) document.preamble_line_endings = std::move(pending_line_endings);
       section.entry.name = line.substr(1, line.size() - 2);
+      section.header_ending = ending;
       document.sections.push_back(std::move(section));
       current = &document.sections.back();
       continue;
@@ -85,49 +95,73 @@ V8iDocument V8iDocument::ParseUtf8(std::string_view bytes) {
     const size_t separator = line.find(L'=');
     if (current != nullptr && separator != std::wstring::npos && separator != 0) {
       current->entry.fields.push_back({line.substr(0, separator), line.substr(separator + 1)});
+      current->field_line_endings.push_back(ending);
     } else if (current != nullptr) {
       current->opaque_lines.push_back(line);
       current->opaque_field_positions.push_back(current->entry.fields.size());
+      current->opaque_line_endings.push_back(ending);
     } else {
       pending.push_back(line);
+      pending_line_endings.push_back(ending);
     }
   }
-  if (document.sections.empty()) document.preamble = std::move(pending);
+  if (document.sections.empty()) {
+    document.preamble = std::move(pending);
+    document.preamble_line_endings = std::move(pending_line_endings);
+  }
   return document;
 }
 
 std::string V8iDocument::SerializeUtf8() const {
-  std::vector<std::wstring> lines;
-  const auto append_line = [&](std::wstring_view line) { lines.emplace_back(line); };
-  for (const auto& line : preamble) append_line(line);
+  std::vector<SerializedLine> lines;
+  const auto ending_at = [](const std::vector<std::wstring>& endings, size_t index) -> std::wstring_view {
+    return index < endings.size() ? std::wstring_view(endings[index]) : std::wstring_view();
+  };
+  const auto append_line = [&](std::wstring_view line, std::wstring_view ending) {
+    lines.push_back({std::wstring(line), std::wstring(ending)});
+  };
+  const auto append_lines = [&](const std::vector<std::wstring>& values,
+      const std::vector<std::wstring>& endings) {
+    for (size_t index = 0; index < values.size(); ++index) {
+      append_line(values[index], ending_at(endings, index));
+    }
+  };
+  append_lines(preamble, preamble_line_endings);
   for (const auto& section : sections) {
-    for (const auto& line : section.leading_lines) append_line(line);
-    append_line(L"[" + section.entry.name + L"]");
+    append_lines(section.leading_lines, section.leading_line_endings);
+    append_line(L"[" + section.entry.name + L"]", section.header_ending);
     if (section.opaque_field_positions.size() == section.opaque_lines.size()) {
       size_t opaque = 0;
       for (size_t field = 0; field <= section.entry.fields.size(); ++field) {
         while (opaque < section.opaque_lines.size() && section.opaque_field_positions[opaque] == field) {
-          append_line(section.opaque_lines[opaque++]);
+          append_line(section.opaque_lines[opaque], ending_at(section.opaque_line_endings, opaque));
+          ++opaque;
         }
         if (field < section.entry.fields.size()) {
           const auto& value = section.entry.fields[field];
-          append_line(value.key + L"=" + value.value);
+          append_line(value.key + L"=" + value.value, ending_at(section.field_line_endings, field));
         }
       }
-      while (opaque < section.opaque_lines.size()) append_line(section.opaque_lines[opaque++]);
+      while (opaque < section.opaque_lines.size()) {
+        append_line(section.opaque_lines[opaque], ending_at(section.opaque_line_endings, opaque));
+        ++opaque;
+      }
     } else {
       // Preserve compatibility with programmatically constructed Section
       // values that predate the position metadata.
-      for (const auto& field : section.entry.fields) append_line(field.key + L"=" + field.value);
-      for (const auto& line : section.opaque_lines) append_line(line);
+      for (size_t field = 0; field < section.entry.fields.size(); ++field) {
+        const auto& value = section.entry.fields[field];
+        append_line(value.key + L"=" + value.value, ending_at(section.field_line_endings, field));
+      }
+      append_lines(section.opaque_lines, section.opaque_line_endings);
     }
   }
   std::wstring output;
   const size_t ending_count = trailing_newline ? lines.size() : (lines.empty() ? 0 : lines.size() - 1);
   for (size_t index = 0; index < lines.size(); ++index) {
-    output.append(lines[index]);
+    output.append(lines[index].text);
     if (index < ending_count) {
-      output.append(index < line_endings.size() ? line_endings[index] : newline);
+      output.append(lines[index].ending.empty() ? newline : lines[index].ending);
     }
   }
   std::string bytes = utf::ToUtf8(output);
