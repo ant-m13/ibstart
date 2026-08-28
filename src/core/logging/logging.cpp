@@ -62,6 +62,60 @@ std::optional<size_t> InlineSecretPrefixLength(std::wstring_view argument) {
   return std::nullopt;
 }
 
+bool IsUrlSchemeStart(wchar_t value) {
+  return (value >= L'a' && value <= L'z') || (value >= L'A' && value <= L'Z');
+}
+
+bool IsUrlSchemeCharacter(wchar_t value) {
+  return IsUrlSchemeStart(value) || (value >= L'0' && value <= L'9') || value == L'+' || value == L'-' || value == L'.';
+}
+
+struct UrlUserInfoRange {
+  size_t begin{};
+  size_t end{};
+  size_t search_after{};
+};
+
+// URI userinfo is the authority prefix before '@'. Treat the complete prefix
+// as sensitive: a URL without ':' may still carry a token in its userinfo.
+std::optional<UrlUserInfoRange> FindUrlUserInfo(std::wstring_view value, size_t search_from) {
+  for (size_t start = search_from; start < value.size(); ++start) {
+    if (!IsUrlSchemeStart(value[start])) continue;
+
+    size_t scheme_end = start + 1;
+    while (scheme_end < value.size() && IsUrlSchemeCharacter(value[scheme_end])) ++scheme_end;
+    if (scheme_end + 2 >= value.size() || value[scheme_end] != L':' || value[scheme_end + 1] != L'/' ||
+        value[scheme_end + 2] != L'/') continue;
+
+    const size_t authority_begin = scheme_end + 3;
+    size_t authority_end = authority_begin;
+    while (authority_end < value.size() && !std::iswspace(value[authority_end]) && value[authority_end] != L'"' &&
+        value[authority_end] != L'/' && value[authority_end] != L'?' && value[authority_end] != L'#') {
+      ++authority_end;
+    }
+    const auto authority = value.substr(authority_begin, authority_end - authority_begin);
+    const size_t at = authority.rfind(L'@');
+    if (at != std::wstring_view::npos) return UrlUserInfoRange{authority_begin, authority_begin + at, authority_end};
+    start = scheme_end;
+  }
+  return std::nullopt;
+}
+
+std::wstring MaskUrlUserInfo(std::wstring_view value) {
+  std::wstring result;
+  result.reserve(value.size());
+  size_t copied = 0;
+  size_t search_from = 0;
+  while (const auto range = FindUrlUserInfo(value, search_from)) {
+    result.append(value, copied, range->begin - copied);
+    result += L"***";
+    copied = range->end;
+    search_from = range->search_after;
+  }
+  result.append(value, copied, value.size() - copied);
+  return result;
+}
+
 bool IsIdentifierCharacter(wchar_t value) {
   return std::iswalnum(value) != 0 || value == L'_';
 }
@@ -82,6 +136,10 @@ bool ContainsSecretAssignment(std::wstring_view argument) {
   return false;
 }
 
+bool ContainsSecretContent(std::wstring_view argument) {
+  return ContainsSecretAssignment(argument) || FindUrlUserInfo(argument, 0).has_value();
+}
+
 std::wstring Stamp(const wchar_t* format) {
   const auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
   std::tm local{};
@@ -93,7 +151,7 @@ std::wstring Stamp(const wchar_t* format) {
 }  // namespace
 
 std::wstring MaskSecrets(std::wstring_view arguments) {
-  std::wstring result(arguments);
+  std::wstring result = MaskUrlUserInfo(arguments);
   // Both forms are accepted by 1C: /P secret and /P"secret". Generic token/password forms are also masked.
   // Keep the expression portable: the MSVC ECMAScript implementation does
   // not support the negative lookahead that would otherwise exclude /Path,
@@ -174,19 +232,19 @@ bool ContainsSecretArguments(const domain::LaunchCommand& command) {
     }
     if (EqualNoCase(argument, L"/WS")) {
       if (index + 1 < command.arguments.size()) {
-        if (ContainsSecretAssignment(command.arguments[index + 1])) return true;
+        if (ContainsSecretContent(command.arguments[index + 1])) return true;
         ++index;
       }
       continue;
     }
     if (EqualNoCase(argument, L"/IBConnection") || EqualNoCase(argument, L"/IBConnectionString")) {
       if (index + 1 < command.arguments.size()) {
-        if (ContainsSecretAssignment(command.arguments[index + 1])) return true;
+        if (ContainsSecretContent(command.arguments[index + 1])) return true;
         ++index;
       }
       continue;
     }
-    if (IsSeparateSecretSwitch(argument) || ExplicitInlineSecretPrefixLength(argument) || ContainsSecretAssignment(argument)) return true;
+    if (IsSeparateSecretSwitch(argument) || ExplicitInlineSecretPrefixLength(argument) || ContainsSecretContent(argument)) return true;
   }
   return false;
 }
