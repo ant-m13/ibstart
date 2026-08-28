@@ -46,6 +46,7 @@ class TreeViewController final {
   [[nodiscard]] std::wstring SelectedName() const;
   [[nodiscard]] std::optional<size_t> SectionIndex(HTREEITEM item) const;
   [[nodiscard]] std::optional<size_t> SelectedSectionIndex() const;
+  [[nodiscard]] std::optional<size_t> SelectedSectionIndex(const catalog::Catalog& database_catalog) const;
   [[nodiscard]] bool SelectedItemIsRecentRoot() const;
   [[nodiscard]] bool SelectItem(std::wstring_view name) const;
   [[nodiscard]] bool SelectItem(size_t section_index) const;

@@ -43,13 +43,15 @@ TagManager::Result TagManager::EditAssignment(HWND owner, const domain::Entry* e
     return {};
   }
 
+  const domain::Entry selected = *entry;
+  const auto database_id = presentation::TagId(selected);
   const auto& metadata = catalog_metadata_.Read();
-  const auto edited = dialog::EditTagAssignment(owner, presentation::TagsFor(metadata.tags, *entry),
+  const auto edited = dialog::EditTagAssignment(owner, presentation::TagsFor(metadata.tags, selected),
       metadata.tags, metadata.tag_styles);
   if (!edited) return {};
 
   try {
-    catalog_metadata_.SetTags(presentation::TagId(*entry), *edited);
+    catalog_metadata_.SetTags(database_id, *edited);
   } catch (const std::exception& error) {
     logger_.Error(L"Ошибка сохранения тегов: " + utf::FromUtf8(error.what()));
     Message(owner, L"Не удалось сохранить теги базы.", MB_OK | MB_ICONERROR);
@@ -76,8 +78,10 @@ TagManager::Result TagManager::Configure(HWND owner) {
 TagManager::Result TagManager::AddTag(HWND owner, const domain::Entry* entry, std::wstring tag) {
   tag = TrimText(tag);
   if (tag.empty() || !entry || !entry->IsDatabase()) return {};
+  const domain::Entry selected = *entry;
+  const auto database_id = presentation::TagId(selected);
   try {
-    if (!catalog_metadata_.AddTag(presentation::TagId(*entry), tag)) {
+    if (!catalog_metadata_.AddTag(database_id, tag)) {
       return {false, L"У базы уже есть тег «" + tag + L"»."};
     }
   } catch (const std::exception& error) {
@@ -86,10 +90,15 @@ TagManager::Result TagManager::AddTag(HWND owner, const domain::Entry* entry, st
     return {};
   }
   return {true, L"Тег добавлен: " + presentation::TagsText(
-      presentation::TagsFor(catalog_metadata_.Read().tags, *entry))};
+      presentation::TagsFor(catalog_metadata_.Read().tags, selected))};
 }
 
 TagManager::Result TagManager::AddNewTag(HWND owner, const domain::Entry* entry) {
+  if (!entry || !entry->IsDatabase()) {
+    Message(owner, L"Выберите информационную базу для добавления тега.", MB_OK | MB_ICONWARNING);
+    return {};
+  }
+  const domain::Entry selected = *entry;
   const auto entered = dialog::InputBox(owner, L"Новый тег", L"Название тега:", L"");
   if (!entered) return {};
   const auto requested = TrimText(*entered);
@@ -98,7 +107,7 @@ TagManager::Result TagManager::AddNewTag(HWND owner, const domain::Entry* entry)
   const auto known = presentation::KnownTags(metadata.tags, metadata.tag_styles);
   const auto found = std::find_if(known.begin(), known.end(),
       [&](const auto& tag) { return EqualNoCase(tag, requested); });
-  return AddTag(owner, entry, found == known.end() ? requested : *found);
+  return AddTag(owner, &selected, found == known.end() ? requested : *found);
 }
 
 }  // namespace ibstart::ui

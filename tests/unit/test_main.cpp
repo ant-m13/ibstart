@@ -1247,6 +1247,40 @@ void TestSearchExpandsAndRestoresGroups() {
   DestroyWindow(tree);
 }
 
+void TestCatalogRefreshRejectsStaleSelection() {
+  INITCOMMONCONTROLSEX common_controls{sizeof(common_controls), ICC_TREEVIEW_CLASSES};
+  CHECK(InitCommonControlsEx(&common_controls) != FALSE);
+  const HWND tree = CreateWindowExW(0, WC_TREEVIEWW, L"",
+      WS_CHILD | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT,
+      0, 0, 640, 480, GetDesktopWindow(), nullptr, GetModuleHandleW(nullptr), nullptr);
+  CHECK(tree != nullptr);
+  if (!tree) return;
+
+  {
+    ibstart::ui::TreeViewController controller;
+    controller.Attach(tree, GetModuleHandleW(nullptr));
+    const auto original = ibstart::catalog::Catalog(ibstart::v8i::V8iDocument::ParseUtf8(
+        "[Alpha]\nConnect=File=\"C:\\\\alpha\"\nID=alpha-id\n"));
+    const auto replacement = ibstart::catalog::Catalog(ibstart::v8i::V8iDocument::ParseUtf8(
+        "[Replacement]\nConnect=File=\"C:\\\\replacement\"\nID=replacement-id\n"));
+    const ibstart::storage::CatalogState state;
+    const ibstart::ui::presentation::TreeTagFilter tag_filter;
+
+    controller.Populate(original, state, {}, L"", tag_filter, true);
+    CHECK(controller.SelectItem(static_cast<size_t>(0)));
+    CHECK(controller.SelectedSectionIndex(original) == static_cast<size_t>(0));
+
+    // A command from an already-open menu can run after the catalog has been
+    // replaced, while the native tree still carries the old section index.
+    CHECK(!controller.SelectedSectionIndex(replacement).has_value());
+
+    controller.Populate(replacement, state, {}, L"", tag_filter, true);
+    CHECK(!controller.SelectedSectionIndex().has_value());
+    CHECK(controller.SelectedName().empty());
+  }
+  DestroyWindow(tree);
+}
+
 void TestLongCatalogNamesUseFullIdentity() {
   const std::wstring name = std::wstring(600, L'N') + L" — база";
   const std::wstring contents = L"[" + name + L"]\nConnect=File=\"C:\\\\long\"\nID=long-id\n";
@@ -2587,6 +2621,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"CatalogSearch", TestCatalogSearch);
   run(L"TreeFilters", TestTreeFilters);
   run(L"SearchExpandsAndRestoresGroups", TestSearchExpandsAndRestoresGroups);
+  run(L"CatalogRefreshRejectsStaleSelection", TestCatalogRefreshRejectsStaleSelection);
   run(L"LongCatalogNamesUseFullIdentity", TestLongCatalogNamesUseFullIdentity);
   run(L"RecentDatabaseNames", TestRecentDatabaseNames);
   run(L"StableDatabaseId", TestStableDatabaseId);

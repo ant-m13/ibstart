@@ -53,7 +53,8 @@ class MainWindow {
   void PopulateTree();
   void PopulateTreeWithoutFlicker(std::wstring_view selected = {}, bool select_catalog_root = false);
   void RefreshRecentTreeBranch(std::optional<size_t> selected_recent_section_index = std::nullopt);
-  [[nodiscard]] const domain::Entry* SelectedCatalogEntry() const;
+  [[nodiscard]] std::optional<domain::Entry> SelectedCatalogEntry() const;
+  bool ResetStaleSelectionIfNeeded();
   [[nodiscard]] std::wstring SelectedCatalogName() const;
   void SortFolder(std::wstring_view folder, catalog::SortDirection direction);
   void ToggleFoldersFirstWhenSorting();
