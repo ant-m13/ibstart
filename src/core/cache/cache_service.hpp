@@ -22,6 +22,7 @@ struct ClearResult {
     const domain::Database& database, std::stop_token stop = {});
 [[nodiscard]] std::wstring FormatSize(uintmax_t bytes);
 [[nodiscard]] bool HasActiveOneCProcess();
+// Reparse points are never removed; a candidate containing one is rejected as a whole.
 [[nodiscard]] ClearResult Clear(const std::vector<CacheItem>& candidates);
 
 }  // namespace ibstart::cache

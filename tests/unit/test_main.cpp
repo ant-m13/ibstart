@@ -42,6 +42,52 @@ void WriteBytes(const std::filesystem::path& path, std::string_view text) { std:
 std::filesystem::path Fixture(const wchar_t* name) { return std::filesystem::current_path() / L"tests" / L"fixtures" / name; }
 std::filesystem::path Temp(const wchar_t* suffix) { auto path = std::filesystem::temp_directory_path() / (std::wstring(L"ibstart-tests-") + suffix + L"-" + std::to_wstring(GetCurrentProcessId())); std::error_code error; std::filesystem::remove_all(path, error); std::filesystem::create_directories(path); return path; }
 
+bool CreateJunction(const std::filesystem::path& junction, const std::filesystem::path& target) {
+  std::wstring command_line = L"cmd.exe /d /c mklink /J \"" + junction.wstring() + L"\" \"" + target.wstring() + L"\"";
+  std::vector<wchar_t> mutable_command_line(command_line.begin(), command_line.end());
+  mutable_command_line.push_back(L'\0');
+  STARTUPINFOW startup{};
+  startup.cb = sizeof(startup);
+  PROCESS_INFORMATION process{};
+  if (!CreateProcessW(nullptr, mutable_command_line.data(), nullptr, nullptr, FALSE, CREATE_NO_WINDOW,
+                      nullptr, nullptr, &startup, &process)) {
+    return false;
+  }
+  const DWORD wait = WaitForSingleObject(process.hProcess, 5000);
+  DWORD exit_code = 1;
+  if (wait == WAIT_OBJECT_0) GetExitCodeProcess(process.hProcess, &exit_code);
+  else TerminateProcess(process.hProcess, exit_code);
+  CloseHandle(process.hThread);
+  CloseHandle(process.hProcess);
+  return wait == WAIT_OBJECT_0 && exit_code == 0;
+}
+
+DWORD CreateDirectorySymbolicLink(const std::filesystem::path& link, const std::filesystem::path& target) {
+  if (CreateSymbolicLinkW(link.c_str(), target.c_str(),
+                          SYMBOLIC_LINK_FLAG_DIRECTORY | SYMBOLIC_LINK_FLAG_ALLOW_UNPRIVILEGED_CREATE)) {
+    return ERROR_SUCCESS;
+  }
+  const DWORD first_error = GetLastError();
+  if (first_error == ERROR_INVALID_PARAMETER &&
+      CreateSymbolicLinkW(link.c_str(), target.c_str(), SYMBOLIC_LINK_FLAG_DIRECTORY)) {
+    return ERROR_SUCCESS;
+  }
+  return GetLastError();
+}
+
+void RemoveDirectoryLink(const std::filesystem::path& link) {
+  if (!RemoveDirectoryW(link.c_str())) {
+    std::error_code error;
+    std::filesystem::remove(link, error);
+  }
+}
+
+bool EntryExistsWithoutFollowingReparsePoint(const std::filesystem::path& path) {
+  std::error_code error;
+  const auto status = std::filesystem::symlink_status(path, error);
+  return !error && std::filesystem::exists(status);
+}
+
 void TestCheckMacroAcceptsCommaExpressions() {
   CHECK(std::vector<int>{1, 2, 3} == std::vector<int>{1, 2, 3});
 }
@@ -1139,6 +1185,104 @@ void TestCacheIdentifiersDoNotCollide() {
   std::filesystem::remove_all(directory, error);
 }
 
+void TestCacheRejectsJunctions() {
+  const auto directory = Temp(L"cache-junction-safety");
+  const auto local = directory / L"local";
+  const auto cacheRoot = local / L"1C" / L"1Cv8";
+  const auto cache = cacheRoot / L"cache";
+  const auto external = directory / L"external";
+  const auto junction = cache / L"external-junction";
+  const auto realTarget = cacheRoot / L"real-target";
+  const auto rootJunction = cacheRoot / L"root-junction";
+  std::filesystem::create_directories(cache);
+  std::filesystem::create_directories(external);
+  std::filesystem::create_directories(realTarget);
+  WriteBytes(cache / L"keep.dat", "keep");
+  WriteBytes(external / L"do-not-delete.dat", "keep");
+  WriteBytes(realTarget / L"do-not-delete.dat", "keep");
+
+  const bool junction_created = CreateJunction(junction, external);
+  CHECK(junction_created);
+  if (!junction_created) {
+    std::error_code error;
+    std::filesystem::remove_all(directory, error);
+    return;
+  }
+  const bool root_junction_created = CreateJunction(rootJunction, realTarget);
+  CHECK(root_junction_created);
+  if (!root_junction_created) {
+    RemoveDirectoryLink(junction);
+    std::error_code error;
+    std::filesystem::remove_all(directory, error);
+    return;
+  }
+
+  const DWORD required = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
+  std::wstring previous(required, L'\0');
+  if (required != 0) {
+    const DWORD copied = GetEnvironmentVariableW(L"LOCALAPPDATA", previous.data(), required);
+    previous.resize(copied);
+  }
+  SetEnvironmentVariableW(L"LOCALAPPDATA", local.c_str());
+  const auto result = ibstart::cache::Clear({{cache, 0}, {rootJunction, 0}});
+  SetEnvironmentVariableW(L"LOCALAPPDATA", required == 0 ? nullptr : previous.c_str());
+
+  CHECK(result.errors.size() == 2);
+  CHECK(std::filesystem::exists(cache / L"keep.dat"));
+  CHECK(EntryExistsWithoutFollowingReparsePoint(junction));
+  CHECK(std::filesystem::exists(external / L"do-not-delete.dat"));
+  CHECK(EntryExistsWithoutFollowingReparsePoint(rootJunction));
+  CHECK(std::filesystem::exists(realTarget / L"do-not-delete.dat"));
+
+  RemoveDirectoryLink(junction);
+  RemoveDirectoryLink(rootJunction);
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
+void TestCacheRejectsSymbolicReparsePoints() {
+  const auto directory = Temp(L"cache-symbolic-link-safety");
+  const auto local = directory / L"local";
+  const auto cache = local / L"1C" / L"1Cv8" / L"cache";
+  const auto external = directory / L"external";
+  const auto link = cache / L"external-symbolic-link";
+  std::filesystem::create_directories(cache);
+  std::filesystem::create_directories(external);
+  WriteBytes(cache / L"keep.dat", "keep");
+  WriteBytes(external / L"do-not-delete.dat", "keep");
+
+  const DWORD link_error = CreateDirectorySymbolicLink(link, external);
+  if (link_error != ERROR_SUCCESS) {
+    if (link_error != ERROR_PRIVILEGE_NOT_HELD && link_error != ERROR_ACCESS_DENIED &&
+        link_error != ERROR_NOT_SUPPORTED && link_error != ERROR_INVALID_PARAMETER &&
+        link_error != ERROR_INVALID_FUNCTION) {
+      CHECK(false);
+    }
+    std::error_code error;
+    std::filesystem::remove_all(directory, error);
+    return;
+  }
+
+  const DWORD required = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
+  std::wstring previous(required, L'\0');
+  if (required != 0) {
+    const DWORD copied = GetEnvironmentVariableW(L"LOCALAPPDATA", previous.data(), required);
+    previous.resize(copied);
+  }
+  SetEnvironmentVariableW(L"LOCALAPPDATA", local.c_str());
+  const auto result = ibstart::cache::Clear({{cache, 0}});
+  SetEnvironmentVariableW(L"LOCALAPPDATA", required == 0 ? nullptr : previous.c_str());
+
+  CHECK(!result.errors.empty());
+  CHECK(std::filesystem::exists(cache / L"keep.dat"));
+  CHECK(EntryExistsWithoutFollowingReparsePoint(link));
+  CHECK(std::filesystem::exists(external / L"do-not-delete.dat"));
+
+  RemoveDirectoryLink(link);
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
 void TestPortableMode() {
   const auto directory = Temp(L"portable"); const auto executable = directory / L"IBStart.exe"; WriteBytes(executable, ""); WriteBytes(directory / L"IBStart.portable", "");
   const auto layout = ibstart::storage::ResolveLayout(executable); CHECK(layout.portable); CHECK(layout.root == directory / L"data"); ibstart::storage::EnsureWritable(layout);
@@ -1870,6 +2014,8 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"LogPruning", TestLogPruning);
   run(L"CacheSizeFormatting", TestCacheSizeFormatting);
   run(L"CacheRejectsLicenseDescendants", TestCacheRejectsLicenseDescendants);
+  run(L"CacheRejectsJunctions", TestCacheRejectsJunctions);
+  run(L"CacheRejectsSymbolicReparsePoints", TestCacheRejectsSymbolicReparsePoints);
   run(L"CacheContinuesAfterCandidateError", TestCacheContinuesAfterCandidateError);
   run(L"CacheContinuesWithActiveOneCProcess", TestCacheContinuesWithActiveOneCProcess);
   run(L"CacheIdentifiersDoNotCollide", TestCacheIdentifiersDoNotCollide);
