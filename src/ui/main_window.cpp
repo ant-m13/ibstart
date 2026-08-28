@@ -1134,7 +1134,7 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   const std::wstring sortParent = catalogRoot ? std::wstring() : group ? entry->name : std::wstring();
   const auto& favorites = catalog_state_.Read().favorites;
   const auto favorite_id = database ? TagId(*entry) : std::wstring();
-  const bool favorite = database && (std::find(favorites.begin(), favorites.end(), favorite_id) != favorites.end() ||
+  const bool favorite = database && (ContainsTag(favorites, favorite_id) ||
       std::find_if(favorites.begin(), favorites.end(), [&](const auto& value) { return EqualNoCase(value, name); }) != favorites.end());
   std::vector<std::wstring> quick_tags;
   if (database && !settings_.simple_mode) {
@@ -1371,7 +1371,7 @@ void MainWindow::EditSelected() {
   dialog::ApplyDatabaseEditorData(*entry, *edited);
   const auto updatedTagId = TagId(*entry);
   if (!SaveCatalog(std::move(candidate))) return;
-  if (selected != edited->name || previousTagId != updatedTagId) {
+  if (selected != edited->name || !domain::EqualIdentifier(previousTagId, updatedTagId)) {
     try {
       catalog_state_.RenameDatabaseMetadata(selected, edited->name, previousTagId, updatedTagId);
     } catch (const std::exception& error) {

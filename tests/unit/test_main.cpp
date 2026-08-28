@@ -823,6 +823,87 @@ void TestStableDatabaseId() {
   }));
 }
 
+void TestCaseInsensitiveDatabaseIdentifiers() {
+  const auto directory = Temp(L"case-insensitive-identifiers");
+  const ibstart::storage::StorageLayout layout{directory, true};
+  ibstart::storage::EnsureWritable(layout);
+  WriteBytes(layout.root / L"catalog-state.json", R"({
+    "favorites": [
+      {"favorite": "{ABC}"},
+      {"favorite": "{abc}"},
+      {"favorite": "other"}
+    ],
+    "history": [
+      {"history_id": "{ABC}", "time": 100, "mode": 0},
+      {"history_id": "{abc}", "time": 200, "mode": 1},
+      {"history_id": "other", "time": 150, "mode": 2}
+    ],
+    "last_launches": [
+      {"last_launch_id": "{ABC}", "time": 100},
+      {"last_launch_id": "{abc}", "time": 250}
+    ],
+    "tags": [
+      {"tag_id": "{ABC}", "values": ["One", "Shared"]},
+      {"tag_id": "{abc}", "values": ["two", "one"]}
+    ]
+  })");
+
+  auto document = ibstart::v8i::V8iDocument::ParseUtf8(
+      "[Base]\nConnect=File=\"C:\\\\base\"\nID={abc}\n");
+  ibstart::catalog::Catalog catalog(std::move(document));
+  const auto* entry = catalog.FindById(L"{ABC}");
+  CHECK(entry != nullptr);
+  if (!entry) return;
+
+  const auto state = ibstart::storage::LoadCatalogState(layout);
+  CHECK(state.favorites == std::vector<std::wstring>{L"{ABC}", L"other"});
+  CHECK(state.history.size() == 2);
+  if (!state.history.empty()) {
+    CHECK(state.history[0].database_id == L"{abc}");
+    CHECK(state.history[0].timestamp == std::chrono::system_clock::from_time_t(200));
+    CHECK(state.history[0].mode == ibstart::domain::LaunchMode::designer);
+  }
+
+  const auto launch = state.last_launches.find(L"{AbC}");
+  CHECK(launch != state.last_launches.end());
+  CHECK(launch == state.last_launches.end() ||
+      launch->second == std::chrono::system_clock::from_time_t(250));
+
+  const auto tags = state.tags.find(L"{aBc}");
+  CHECK(tags != state.tags.end());
+  CHECK(tags == state.tags.end() || tags->second == std::vector<std::wstring>{L"One", L"Shared", L"two"});
+  CHECK(ibstart::ui::presentation::TagsFor(state.tags, *entry).size() == 3);
+
+  const auto tree = catalog.Tree();
+  CHECK(tree.size() == 1);
+  if (!tree.empty()) {
+    ibstart::ui::presentation::TreeTagFilter favorites;
+    favorites.kind = ibstart::ui::presentation::TreeTagFilterKind::favorites;
+    CHECK(ibstart::ui::presentation::MatchesTagFilter(catalog, tree.front(), favorites, state.tags, state.favorites));
+  }
+  CHECK(ibstart::ui::presentation::CollectRecentDatabaseNames(catalog, state.history) ==
+      std::vector<std::wstring>{L"Base"});
+
+  ibstart::catalog::CatalogMetadataService service(layout);
+  CHECK(!service.ToggleFavorite(L"{aBc}"));
+  CHECK(service.Read().favorites == std::vector<std::wstring>{L"other"});
+  CHECK(service.ToggleFavorite(L"{aBc}"));
+  CHECK(service.Read().favorites == std::vector<std::wstring>{L"{aBc}", L"other"});
+  service.SetTags(L"{aBc}", {L"Replacement"});
+  CHECK(service.Read().tags.size() == 2);
+  const auto replacement = service.Read().tags.find(L"{ABC}");
+  CHECK(replacement != service.Read().tags.end());
+  CHECK(replacement == service.Read().tags.end() || replacement->second == std::vector<std::wstring>{L"Replacement"});
+  service.RecordLaunch({L"{ABC}", std::chrono::system_clock::from_time_t(300),
+      ibstart::domain::LaunchMode::enterprise});
+  CHECK(service.Read().history.size() == 2);
+  CHECK(!service.Read().history.empty() && service.Read().history.front().database_id == L"{ABC}");
+  CHECK(service.Read().last_launches.at(L"{abc}") == std::chrono::system_clock::from_time_t(300));
+
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
 void TestStandardFolderPaths() {
   auto document = ibstart::v8i::V8iDocument::ParseUtf8(
       "[Root database]\nConnect=File=\"C:\\\\root\"\nFolder=/\n"
@@ -1566,6 +1647,86 @@ void TestStorageSkipsMalformedRecords() {
   std::filesystem::remove_all(directory, error);
 }
 
+void TestCatalogStateNormalization() {
+  const auto directory = Temp(L"catalog-state-normalization");
+  const ibstart::storage::StorageLayout layout{directory, true};
+  ibstart::storage::EnsureWritable(layout);
+
+  std::string json = R"({
+    "favorites": [
+      {"favorite": ""},
+      {"favorite": 42},
+      {"favorite": "Favorite 0"},
+      {"favorite": "favorite 0"})";
+  for (unsigned index = 1; index != 11; ++index) {
+    json += ", {\"favorite\": \"Favorite " + std::to_string(index) + "\"}";
+  }
+  json += R"(],
+    "history": [
+      {"history_id": "", "time": 1, "mode": 0},
+      {"history_id": "bad-mode", "time": 2, "mode": 3},
+      {"history_id": "bad-time", "time": "not-a-number", "mode": 0},
+      {"history_id": "duplicate", "time": 100, "mode": 0},
+      {"history_id": "DUPLICATE", "time": 200, "mode": 1})";
+  for (unsigned index = 0; index != 21; ++index) {
+    json += ", {\"history_id\": \"history-" + std::to_string(index) +
+        "\", \"time\": " + std::to_string(300 + index) + ", \"mode\": 0}";
+  }
+  json += "]\n}";
+  WriteBytes(layout.root / L"catalog-state.json", json);
+
+  const auto loaded = ibstart::storage::LoadCatalogState(layout);
+  CHECK(loaded.favorites.size() == 9);
+  CHECK(!loaded.favorites.empty() && loaded.favorites.front() == L"Favorite 0");
+  CHECK(!loaded.favorites.empty() && loaded.favorites.back() == L"Favorite 8");
+  CHECK(std::find(loaded.favorites.begin(), loaded.favorites.end(), L"Favorite 9") == loaded.favorites.end());
+  CHECK(loaded.history.size() == 20);
+  CHECK(!loaded.history.empty() && loaded.history.front().database_id == L"DUPLICATE");
+  CHECK(!loaded.history.empty() && loaded.history.front().timestamp == std::chrono::system_clock::from_time_t(200));
+  CHECK(!loaded.history.empty() && loaded.history.front().mode == ibstart::domain::LaunchMode::designer);
+  CHECK(!loaded.history.empty() && loaded.history.back().database_id == L"history-18");
+  CHECK(std::none_of(loaded.history.begin(), loaded.history.end(), [](const auto& item) {
+    return item.database_id.empty() || static_cast<int>(item.mode) < 0 || static_cast<int>(item.mode) > 2;
+  }));
+
+  ibstart::storage::CatalogState dirty;
+  dirty.favorites = {L"", L"Saved 0", L"saved 0"};
+  for (unsigned index = 1; index != 12; ++index) dirty.favorites.push_back(L"Saved " + std::to_wstring(index));
+  dirty.history = {{L"", {}, ibstart::domain::LaunchMode::enterprise},
+      {L"bad-mode", {}, static_cast<ibstart::domain::LaunchMode>(3)}};
+  for (unsigned index = 0; index != 21; ++index) {
+    dirty.history.push_back({L"saved-" + std::to_wstring(index),
+        std::chrono::system_clock::from_time_t(400 + index), ibstart::domain::LaunchMode::enterprise});
+  }
+  dirty.history.push_back({L"SAVED-0", std::chrono::system_clock::from_time_t(999),
+      ibstart::domain::LaunchMode::web_client});
+  ibstart::storage::SaveCatalogState(layout, dirty);
+
+  const auto persistedJson = ReadBytes(layout.root / L"catalog-state.json");
+  const auto count = [&persistedJson](std::string_view token) {
+    std::size_t result = 0;
+    for (std::size_t position = persistedJson.find(token); position != std::string::npos;
+        position = persistedJson.find(token, position + token.size())) {
+      ++result;
+    }
+    return result;
+  };
+  CHECK(count(R"("favorite":)") == 9);
+  CHECK(count(R"("history_id":)") == 20);
+
+  ibstart::storage::CatalogStateRepository repository(layout);
+  repository.Update([](ibstart::storage::CatalogState& state) {
+    state.favorites.push_back(L"Update 0");
+    state.favorites.push_back(L"update 0");
+    state.history.push_back({L"Update history", {}, ibstart::domain::LaunchMode::enterprise});
+  });
+  CHECK(repository.Read().favorites.size() == 9);
+  CHECK(repository.Read().history.size() == 20);
+
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
 void TestStorageRejectsUnreadableDataPath() {
   const auto directory = Temp(L"unreadable-storage");
   const ibstart::storage::StorageLayout layout{directory, true};
@@ -1609,6 +1770,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"TreeFilters", TestTreeFilters);
   run(L"RecentDatabaseNames", TestRecentDatabaseNames);
   run(L"StableDatabaseId", TestStableDatabaseId);
+  run(L"CaseInsensitiveDatabaseIdentifiers", TestCaseInsensitiveDatabaseIdentifiers);
   run(L"NoBomAndCatalog", TestNoBomAndCatalog);
   run(L"V8iLineEndingRoundTrips", TestV8iLineEndingRoundTrips);
   run(L"SafeStore", TestSafeStore);
@@ -1642,6 +1804,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"CatalogMetadataRenamePreservesFallbackHistory", TestCatalogMetadataRenamePreservesFallbackHistory);
   run(L"CatalogMetadataExplicitIdChangeKeepsHistoryKey", TestCatalogMetadataExplicitIdChangeKeepsHistoryKey);
   run(L"StorageSkipsMalformedRecords", TestStorageSkipsMalformedRecords);
+  run(L"CatalogStateNormalization", TestCatalogStateNormalization);
   run(L"StorageRejectsUnreadableDataPath", TestStorageRejectsUnreadableDataPath);
   if (failures) { std::wcerr << failures << L" test(s) failed\n"; return 1; }
   std::wcout << L"All IBStart unit tests passed\n"; return 0;

@@ -75,18 +75,99 @@ std::string ReadFile(const std::filesystem::path& path) {
   return contents;
 }
 
+bool IsValidHistoryItem(const domain::HistoryItem& item) noexcept {
+  const auto mode = static_cast<int>(item.mode);
+  return !item.database_id.empty() &&
+      mode >= static_cast<int>(domain::LaunchMode::enterprise) &&
+      mode <= static_cast<int>(domain::LaunchMode::web_client);
+}
+
 void AppendHistoryToState(CatalogState& state, domain::HistoryItem item) {
+  if (!IsValidHistoryItem(item)) return;
   state.history.erase(std::remove_if(state.history.begin(), state.history.end(), [&](const auto& existing) {
-    return existing.database_id == item.database_id;
+    return domain::EqualIdentifier(existing.database_id, item.database_id);
   }), state.history.end());
   const auto id = item.database_id;
   const auto timestamp = item.timestamp;
   state.history.insert(state.history.begin(), std::move(item));
-  if (state.history.size() > 20) state.history.resize(20);
+  if (state.history.size() > kMaxHistory) state.history.resize(kMaxHistory);
   if (!id.empty()) state.last_launches[id] = timestamp;
 }
 
+void AddFavorite(CatalogState& state, std::wstring favorite) {
+  if (favorite.empty()) return;
+  if (std::none_of(state.favorites.begin(), state.favorites.end(), [&](const auto& existing) {
+        return domain::EqualIdentifier(existing, favorite);
+      })) {
+    if (state.favorites.size() >= kMaxFavorites) return;
+    state.favorites.push_back(std::move(favorite));
+  }
+}
+
+void AddHistory(CatalogState& state, domain::HistoryItem item) {
+  if (!IsValidHistoryItem(item)) return;
+  const auto existing = std::find_if(state.history.begin(), state.history.end(), [&](const auto& value) {
+    return domain::EqualIdentifier(value.database_id, item.database_id);
+  });
+  if (existing == state.history.end()) {
+    if (state.history.size() >= kMaxHistory) return;
+    state.history.push_back(std::move(item));
+  } else if (existing->timestamp < item.timestamp) {
+    *existing = std::move(item);
+  }
+}
+
+void AddLastLaunch(LastLaunchTimes& launches, std::wstring id,
+    std::chrono::system_clock::time_point timestamp) {
+  const auto [existing, inserted] = launches.emplace(std::move(id), timestamp);
+  if (!inserted && existing->second < timestamp) existing->second = timestamp;
+}
+
+void AddTagAssignment(DatabaseTags& tags, std::wstring id, std::vector<std::wstring> values) {
+  if (id.empty() || values.empty()) return;
+  auto [assignment, inserted] = tags.emplace(std::move(id), std::vector<std::wstring>{});
+  static_cast<void>(inserted);
+  for (auto& value : values) {
+    if (std::none_of(assignment->second.begin(), assignment->second.end(), [&](const auto& existing) {
+          return domain::EqualIdentifier(existing, value);
+        })) {
+      assignment->second.push_back(std::move(value));
+    }
+  }
+}
+
 }  // namespace
+
+void NormalizeCatalogState(CatalogState& state) {
+  std::vector<std::wstring> favorites;
+  favorites.reserve(std::min(state.favorites.size(), kMaxFavorites));
+  for (auto& favorite : state.favorites) {
+    if (favorite.empty() || std::any_of(favorites.begin(), favorites.end(), [&](const auto& existing) {
+          return domain::EqualIdentifier(existing, favorite);
+        })) {
+      continue;
+    }
+    favorites.push_back(std::move(favorite));
+    if (favorites.size() == kMaxFavorites) break;
+  }
+  state.favorites = std::move(favorites);
+
+  std::vector<domain::HistoryItem> history;
+  history.reserve(std::min(state.history.size(), kMaxHistory));
+  for (auto& item : state.history) {
+    if (!IsValidHistoryItem(item)) continue;
+    const auto existing = std::find_if(history.begin(), history.end(), [&](const auto& value) {
+      return domain::EqualIdentifier(value.database_id, item.database_id);
+    });
+    if (existing != history.end()) {
+      if (existing->timestamp < item.timestamp) *existing = std::move(item);
+      continue;
+    }
+    if (history.size() == kMaxHistory) continue;
+    history.push_back(std::move(item));
+  }
+  state.history = std::move(history);
+}
 
 Settings LoadSettings(const StorageLayout& layout) {
   Settings result;
@@ -137,16 +218,14 @@ CatalogState LoadCatalogState(const StorageLayout& layout) {
   const auto contents = ReadFile(PathFor(layout, L"catalog-state.json"));
   if (const auto root = json::RootObject(contents)) {
     json::ForEachArrayObject(*root, "favorites", [&](const json::Object& object) {
-      if (const auto favorite = json::ObjectString(object, "favorite")) result.favorites.push_back(*favorite);
+      if (const auto favorite = json::ObjectString(object, "favorite")) AddFavorite(result, *favorite);
     });
     json::ForEachArrayObject(*root, "history", [&](const json::Object& object) {
       const auto history_id = json::ObjectString(object, "history_id");
       const auto history_time = json::ObjectInteger(object, "time");
       const auto history_mode = json::ObjectInt(object, "mode");
-      if (history_id && history_time && history_mode &&
-          *history_mode >= static_cast<int>(domain::LaunchMode::enterprise) &&
-          *history_mode <= static_cast<int>(domain::LaunchMode::web_client)) {
-        result.history.push_back({*history_id, std::chrono::system_clock::from_time_t(static_cast<std::time_t>(*history_time)),
+      if (history_id && history_time && history_mode) {
+        AddHistory(result, {*history_id, std::chrono::system_clock::from_time_t(static_cast<std::time_t>(*history_time)),
             static_cast<domain::LaunchMode>(*history_mode)});
       }
     });
@@ -154,13 +233,14 @@ CatalogState LoadCatalogState(const StorageLayout& layout) {
       const auto launch_id = json::ObjectString(object, "last_launch_id");
       const auto launch_time = json::ObjectInteger(object, "time");
       if (launch_id && launch_time && !launch_id->empty()) {
-        result.last_launches[*launch_id] = std::chrono::system_clock::from_time_t(static_cast<std::time_t>(*launch_time));
+        AddLastLaunch(result.last_launches, *launch_id,
+            std::chrono::system_clock::from_time_t(static_cast<std::time_t>(*launch_time)));
       }
     });
     json::ForEachArrayObject(*root, "tags", [&](const json::Object& object) {
       const auto tag_id = json::ObjectString(object, "tag_id");
       const auto tags = json::StringArray(json::ObjectValue(object, "values"));
-      if (tag_id && !tag_id->empty() && tags && !tags->empty()) result.tags[*tag_id] = *tags;
+      if (tag_id && tags) AddTagAssignment(result.tags, *tag_id, *tags);
     });
     json::ForEachArrayObject(*root, "tag_styles", [&](const json::Object& object) {
       const auto style_name = json::ObjectString(object, "tag_style");
@@ -173,23 +253,26 @@ CatalogState LoadCatalogState(const StorageLayout& layout) {
     });
   }
 
+  NormalizeCatalogState(result);
   for (const auto& history : result.history) {
     if (!history.database_id.empty() && !result.last_launches.contains(history.database_id)) {
-      result.last_launches[history.database_id] = history.timestamp;
+      result.last_launches.emplace(history.database_id, history.timestamp);
     }
   }
   return result;
 }
 
 void SaveCatalogState(const StorageLayout& layout, const CatalogState& state) {
+  CatalogState normalized = state;
+  NormalizeCatalogState(normalized);
   std::string json = "{\n  \"schema_version\": 1,\n  \"favorites\": [";
-  for (std::size_t index = 0; index < state.favorites.size(); ++index) {
+  for (std::size_t index = 0; index < normalized.favorites.size(); ++index) {
     if (index) json += ", ";
-    json += "{\"favorite\": \"" + ::ibstart::storage::json::Escape(state.favorites[index]) + "\"}";
+    json += "{\"favorite\": \"" + ::ibstart::storage::json::Escape(normalized.favorites[index]) + "\"}";
   }
   json += "],\n  \"history\": [";
-  for (std::size_t index = 0; index < state.history.size(); ++index) {
-    const auto& record = state.history[index];
+  for (std::size_t index = 0; index < normalized.history.size(); ++index) {
+    const auto& record = normalized.history[index];
     if (index) json += ", ";
     json += "{\"history_id\": \"" + ::ibstart::storage::json::Escape(record.database_id) + "\", \"time\": " +
         std::to_string(std::chrono::system_clock::to_time_t(record.timestamp)) + ", \"mode\": " +
@@ -197,7 +280,7 @@ void SaveCatalogState(const StorageLayout& layout, const CatalogState& state) {
   }
   json += "],\n  \"last_launches\": [";
   std::size_t written = 0;
-  for (const auto& [id, timestamp] : state.last_launches) {
+  for (const auto& [id, timestamp] : normalized.last_launches) {
     if (id.empty()) continue;
     if (written++) json += ", ";
     json += "{\"last_launch_id\": \"" + ::ibstart::storage::json::Escape(id) + "\", \"time\": " +
@@ -205,7 +288,7 @@ void SaveCatalogState(const StorageLayout& layout, const CatalogState& state) {
   }
   json += "],\n  \"tags\": [";
   written = 0;
-  for (const auto& [id, values] : state.tags) {
+  for (const auto& [id, values] : normalized.tags) {
     if (id.empty() || values.empty()) continue;
     if (written++) json += ", ";
     json += "{\"tag_id\": \"" + ::ibstart::storage::json::Escape(id) + "\", \"values\": [";
@@ -217,7 +300,7 @@ void SaveCatalogState(const StorageLayout& layout, const CatalogState& state) {
   }
   json += "],\n  \"tag_styles\": [";
   written = 0;
-  for (const auto& [tag, style] : state.tag_styles) {
+  for (const auto& [tag, style] : normalized.tag_styles) {
     if (tag.empty()) continue;
     if (written++) json += ", ";
     json += "{\"tag_style\": \"" + ::ibstart::storage::json::Escape(tag) + "\", \"background\": " +
@@ -242,6 +325,7 @@ const CatalogState& CatalogStateRepository::Reload() {
 void CatalogStateRepository::Update(const std::function<void(CatalogState&)>& mutation) {
   CatalogState updated = Read();
   mutation(updated);
+  NormalizeCatalogState(updated);
   SaveCatalogState(layout_, updated);
   state_ = std::move(updated);
 }
