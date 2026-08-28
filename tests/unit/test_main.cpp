@@ -936,7 +936,8 @@ void TestCaseInsensitiveDatabaseIdentifiers() {
   CHECK(service.ToggleFavorite(L"{aBc}"));
   CHECK(service.Read().favorites == std::vector<std::wstring>{L"{aBc}", L"other"});
   service.SetTags(L"{aBc}", {L"Replacement"});
-  CHECK(service.Read().tags.size() == 2);
+  // Case-insensitive identifier aliases represent one tag assignment.
+  CHECK(service.Read().tags.size() == 1);
   const auto replacement = service.Read().tags.find(L"{ABC}");
   CHECK(replacement != service.Read().tags.end());
   CHECK(replacement == service.Read().tags.end() || replacement->second == std::vector<std::wstring>{L"Replacement"});
