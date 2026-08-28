@@ -223,7 +223,33 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
     if ((settings.simple_mode || !settings.show_tags_in_list) && search_filter.empty()) return CDRF_DODEFAULT;
     return CDRF_NOTIFYITEMDRAW;
   }
-  if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) return (!settings.simple_mode && settings.show_tags_in_list) || !search_filter.empty() ? CDRF_NOTIFYPOSTPAINT : CDRF_DODEFAULT;
+  if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
+    const bool needs_postpaint = (!settings.simple_mode && settings.show_tags_in_list) || !search_filter.empty();
+    if (!needs_postpaint) return CDRF_DODEFAULT;
+
+    if (!search_filter.empty()) {
+      const auto item = reinterpret_cast<HTREEITEM>(draw->nmcd.dwItemSpec);
+      wchar_t text[512]{};
+      TVITEMW tree_item{};
+      tree_item.mask = TVIF_TEXT;
+      tree_item.hItem = item;
+      tree_item.pszText = text;
+      tree_item.cchTextMax = 512;
+      if (TreeView_GetItem(tree, &tree_item) &&
+          utf::FindNoCaseOrdinal(std::wstring_view(text), search_filter) != std::wstring_view::npos) {
+        COLORREF text_background = draw->clrTextBk;
+        if (text_background == CLR_NONE) {
+          text_background = (draw->nmcd.uItemState & CDIS_SELECTED) != 0 ?
+              GetSysColor(COLOR_HIGHLIGHT) : GetSysColor(COLOR_WINDOW);
+        }
+        // Keep the default TreeView item drawing (icons, lines, selection),
+        // but make its copy of the label invisible.  The label is rendered
+        // once in CDDS_ITEMPOSTPAINT below.
+        draw->clrText = text_background;
+      }
+    }
+    return CDRF_NOTIFYPOSTPAINT;
+  }
   if (draw->nmcd.dwDrawStage != CDDS_ITEMPOSTPAINT) return CDRF_DODEFAULT;
 
   const auto item = reinterpret_cast<HTREEITEM>(draw->nmcd.dwItemSpec);
@@ -362,34 +388,44 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
   const int saved = SaveDC(draw->nmcd.hdc);
   if (const auto font = reinterpret_cast<HFONT>(SendMessageW(tree, WM_GETFONT, 0, 0))) SelectObject(draw->nmcd.hdc, font);
   SetBkMode(draw->nmcd.hdc, TRANSPARENT);
-  COLORREF normal_text_color = GetTextColor(draw->nmcd.hdc);
-  if (normal_text_color == CLR_INVALID) normal_text_color = GetSysColor(COLOR_WINDOWTEXT);
-  SetTextColor(draw->nmcd.hdc, RGB(0, 97, 0));
-  const HBRUSH match_brush = reinterpret_cast<HBRUSH>(GetStockObject(DC_BRUSH));
-  if (!match_brush) {
+  const bool selected = TreeView_GetSelection(tree) == item;
+  const COLORREF normal_text_color = GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT);
+  const HBRUSH fill_brush = reinterpret_cast<HBRUSH>(GetStockObject(DC_BRUSH));
+  if (!fill_brush) {
     RestoreDC(draw->nmcd.hdc, saved);
     return CDRF_DODEFAULT;
   }
-  SetDCBrushColor(draw->nmcd.hdc, RGB(198, 239, 206));
-
-  // Render the complete label first.  The TreeView has already rendered it,
-  // but doing this in one run gives the prefix, match, and suffix one shared
-  // origin.  We then recolor the match through a clip instead of drawing a
-  // standalone substring at a separately measured origin.
-  SetTextColor(draw->nmcd.hdc, normal_text_color);
-  RECT label_text_rect = label_rect;
-  DrawTextW(draw->nmcd.hdc, label.data(), static_cast<int>(label.size()), &label_text_rect,
-      DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
 
   // Measure complete prefixes in the same context in which the label is
-  // rendered.  This keeps the highlight boundaries aligned with the text
-  // (for example, `etai` inside `retail3`).
+  // rendered.  This keeps the segment boundaries aligned with the text (for
+  // example, `etai` inside `retail3`).
   const auto text_x = [&](size_t index) {
     SIZE extent{};
     if (index != 0) GetTextExtentPoint32W(draw->nmcd.hdc, label.data(), static_cast<int>(index), &extent);
     return label_rect.left + extent.cx;
   };
 
+  COLORREF label_background = draw->clrTextBk;
+  if (label_background == CLR_NONE) label_background = TreeView_GetBkColor(tree);
+  if (label_background == CLR_NONE) label_background = selected ?
+      GetSysColor(COLOR_HIGHLIGHT) : GetSysColor(COLOR_WINDOW);
+  SetDCBrushColor(draw->nmcd.hdc, label_background);
+  FillRect(draw->nmcd.hdc, &label_rect, fill_brush);
+
+  const COLORREF match_text_color = RGB(0, 97, 0);
+  const COLORREF match_background = RGB(198, 239, 206);
+  const auto draw_segment = [&](size_t begin, size_t end, COLORREF color) {
+    if (begin >= end) return;
+    const LONG left = text_x(begin);
+    const LONG right = text_x(end);
+    if (left >= right) return;
+    SetTextColor(draw->nmcd.hdc, color);
+    RECT text_rect{left, label_rect.top, right, label_rect.bottom};
+    DrawTextW(draw->nmcd.hdc, label.data() + begin, static_cast<int>(end - begin), &text_rect,
+        DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+  };
+
+  SetDCBrushColor(draw->nmcd.hdc, match_background);
   size_t start = 0;
   size_t match = utf::FindNoCaseOrdinal(label, search_filter, start);
   while (match != std::wstring_view::npos) {
@@ -403,20 +439,16 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
         label_rect.bottom
     };
     if (match_rect.left < match_rect.right && match_rect.top < match_rect.bottom) {
-      FillRect(draw->nmcd.hdc, &match_rect, match_brush);
-      const int clipped = SaveDC(draw->nmcd.hdc);
-      if (clipped != 0) {
-        IntersectClipRect(draw->nmcd.hdc, match_rect.left, match_rect.top, match_rect.right, match_rect.bottom);
-        SetTextColor(draw->nmcd.hdc, RGB(0, 97, 0));
-        RECT clipped_text_rect = label_rect;
-        DrawTextW(draw->nmcd.hdc, label.data(), static_cast<int>(label.size()), &clipped_text_rect,
-            DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
-        RestoreDC(draw->nmcd.hdc, clipped);
-      }
+      draw_segment(start, match, normal_text_color);
+      FillRect(draw->nmcd.hdc, &match_rect, fill_brush);
+      draw_segment(match, match_end, match_text_color);
+    } else {
+      draw_segment(start, match_end, normal_text_color);
     }
     start = match_end;
     match = utf::FindNoCaseOrdinal(label, search_filter, start);
   }
+  draw_segment(start, label.size(), normal_text_color);
   RestoreDC(draw->nmcd.hdc, saved);
   return CDRF_DODEFAULT;
 }
