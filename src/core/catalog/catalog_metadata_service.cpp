@@ -133,7 +133,8 @@ void CatalogMetadataService::RenameDatabaseMetadata(std::wstring previous_name, 
   repository_.Update([&](storage::CatalogState& state) {
     if (previous_name != updated_name || !EqualNoCase(previous_tag_id, updated_tag_id)) {
       for (auto& favorite : state.favorites) {
-        if (EqualNoCase(favorite, previous_name) || EqualNoCase(favorite, previous_tag_id)) favorite = updated_tag_id;
+        if (EqualNoCase(favorite, previous_name)) favorite = updated_name;
+        else if (EqualNoCase(favorite, previous_tag_id)) favorite = updated_tag_id;
       }
       RemoveDuplicateFavorites(state.favorites);
       if (state.favorites.size() > kMaxFavorites) state.favorites.resize(kMaxFavorites);
