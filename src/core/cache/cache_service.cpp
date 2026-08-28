@@ -169,8 +169,9 @@ struct RemovalStats {
   uintmax_t bytes{};
 };
 
-// Do not share deletion while a candidate or one of its entries is being processed.
-// This prevents a validated object from being renamed underneath its handle.
+// Do not share deletion while a candidate or one of its entries is being
+// processed. This prevents a validated object from being renamed underneath
+// its handle.
 constexpr DWORD kFileShare = FILE_SHARE_READ | FILE_SHARE_WRITE;
 
 std::wstring NormalizeWindowsPath(std::wstring value) {
@@ -327,8 +328,11 @@ bool PathStillNames(const OpenEntry& entry, std::wstring& failure) {
 bool ReadDirectoryEntries(const OpenDirectory& directory, std::vector<DirectoryEntry>& entries,
                           std::wstring& failure) {
   alignas(FILE_ID_BOTH_DIR_INFO) std::array<std::byte, 64 * 1024> buffer{};
+  bool restart = true;
   for (;;) {
-    if (!GetFileInformationByHandleEx(directory.handle.get(), FileIdBothDirectoryInfo,
+    const auto info_class = restart ? FileIdBothDirectoryRestartInfo : FileIdBothDirectoryInfo;
+    restart = false;
+    if (!GetFileInformationByHandleEx(directory.handle.get(), info_class,
                                        buffer.data(), static_cast<DWORD>(buffer.size()))) {
       const DWORD error = GetLastError();
       if (error == ERROR_NO_MORE_FILES || error == ERROR_HANDLE_EOF) return true;
@@ -422,6 +426,14 @@ bool DeleteOpenedHandle(HANDLE handle, const std::filesystem::path& path, bool d
       !CheckSafeMetadata(path, metadata, directory, failure)) {
     return false;
   }
+  // POSIX semantics removes the directory entry as soon as the disposition is
+  // set, even though this validation handle remains open until the current
+  // traversal scope ends.  That is required before deleting an otherwise empty
+  // parent directory.
+  FILE_DISPOSITION_INFO_EX disposition_ex{};
+  disposition_ex.Flags = FILE_DISPOSITION_FLAG_DELETE | FILE_DISPOSITION_FLAG_POSIX_SEMANTICS;
+  if (SetFileInformationByHandle(handle, FileDispositionInfoEx, &disposition_ex, sizeof(disposition_ex))) return true;
+
   FILE_DISPOSITION_INFO disposition{};
   disposition.DeleteFile = TRUE;
   if (SetFileInformationByHandle(handle, FileDispositionInfo, &disposition, sizeof(disposition))) return true;
@@ -453,6 +465,9 @@ bool DeleteTree(OpenDirectory& directory, const OpenDirectory& root, RemovalStat
       }
       if (!IsHandleInAllowedCacheRoot(root.handle.get(), root.path, failure) ||
           !DeleteOpenedHandle(child_directory.handle.get(), child_directory.path, true, failure)) return false;
+      // Close the disposition handle before the parent is considered for
+      // deletion; non-POSIX filesystems may only remove the entry on close.
+      child_directory.handle = ScopedHandle();
     } else {
       if (!IsHandleInAllowedCacheRoot(root.handle.get(), root.path, failure) ||
           !PathStillNames(directory, failure) ||
@@ -466,6 +481,7 @@ bool DeleteTree(OpenDirectory& directory, const OpenDirectory& root, RemovalStat
       }
       if (!IsHandleInAllowedCacheRoot(root.handle.get(), root.path, failure) ||
           !DeleteOpenedHandle(child.handle.get(), child.path, false, failure)) return false;
+      child.handle = ScopedHandle();
       ++stats.files;
       stats.bytes += metadata.size;
     }
