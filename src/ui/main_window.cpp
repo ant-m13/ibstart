@@ -520,7 +520,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
 void MainWindow::CreateControls() {
   HWND searchLabel = CreateWindowW(L"STATIC", L"Поиск:", WS_CHILD | WS_VISIBLE, 8, 10, 50, 20, window_, nullptr, instance_, nullptr);
   search_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 58, 7, 600, 25, window_, nullptr, instance_, nullptr);
-  search_clear_ = CreateWindowW(L"BUTTON", L"Очистить поиск", WS_CHILD | WS_TABSTOP | BS_OWNERDRAW,
+  search_clear_ = CreateWindowW(L"BUTTON", L"Очистить поиск", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
       0, 0, kSearchClearButtonWidth, kSearchClearButtonHeight, window_,
       reinterpret_cast<HMENU>(kClearSearch), instance_, nullptr);
   tag_filter_label_ = CreateWindowW(L"STATIC", L"Фильтр по тегу:", WS_CHILD | WS_VISIBLE, 8, 42, 106, 20, window_, nullptr, instance_, nullptr);
@@ -547,7 +547,9 @@ void MainWindow::CreateControls() {
       if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(controls_font_), TRUE);
     }
   }
-  if (search_clear_font_) SendMessageW(search_clear_, WM_SETFONT, reinterpret_cast<WPARAM>(search_clear_font_), TRUE);
+  if (search_clear_ && search_clear_font_) {
+    SendMessageW(search_clear_, WM_SETFONT, reinterpret_cast<WPARAM>(search_clear_font_), TRUE);
+  }
   ListView_SetExtendedListViewStyle(details_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP);
   ListView_SetBkColor(details_, RGB(248, 250, 252));
   ListView_SetTextBkColor(details_, RGB(248, 250, 252));
@@ -721,7 +723,10 @@ void MainWindow::PositionSearchClearButton(int x, int y, int width, int height) 
 void MainWindow::RefreshSearchClearButton() {
   if (!search_clear_) return;
   const bool hasText = search_ && GetWindowTextLengthW(search_) > 0;
-  ShowWindow(search_clear_, hasText ? SW_SHOWNOACTIVATE : SW_HIDE);
+  SetWindowPos(search_clear_, nullptr, 0, 0, 0, 0,
+      SWP_NOMOVE | SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE | SWP_SHOWWINDOW);
+  EnableWindow(search_clear_, hasText ? TRUE : FALSE);
+  RedrawWindow(search_clear_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
 }
 
 bool MainWindow::DrawSearchClearButton(const DRAWITEMSTRUCT* draw) const {
@@ -952,6 +957,7 @@ void MainWindow::PopulateTree() {
   wchar_t text[512]{};
   GetWindowTextW(search_, text, static_cast<int>(std::size(text)));
   search_filter_ = text;
+  RefreshSearchClearButton();
   if (catalog_) {
     tree_view_.Populate(*catalog_, catalog_state_.Read(), filter_favorites_, search_filter_,
         CurrentTagFilter(), settings_.simple_mode);
