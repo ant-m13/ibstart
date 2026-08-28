@@ -11,6 +11,9 @@
 namespace ibstart::ui::presentation {
 namespace {
 
+constexpr COLORREF kInactiveSearchSelectionBackground = RGB(206, 235, 240);
+constexpr COLORREF kInactiveSearchSelectionText = RGB(0, 74, 84);
+
 bool EqualNoCase(std::wstring_view left, std::wstring_view right) {
   return domain::EqualIdentifier(left, right);
 }
@@ -235,9 +238,19 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
       tree_item.cchTextMax = 512;
       if (TreeView_GetItem(tree, &tree_item) &&
           utf::FindNoCaseOrdinal(std::wstring_view(text), search_filter) != std::wstring_view::npos) {
+        const bool selected = (draw->nmcd.uItemState & CDIS_SELECTED) != 0;
+        const bool tree_focused = GetFocus() == tree;
+        if (selected && !tree_focused) {
+          // The native TreeView switches to a low-contrast inactive selection
+          // and may pair it with a light/white text color.  Use a dedicated
+          // cyan selection for search matches so the complete label remains
+          // readable when focus is in another control.
+          draw->clrTextBk = kInactiveSearchSelectionBackground;
+          draw->clrText = kInactiveSearchSelectionText;
+        }
         COLORREF text_background = draw->clrTextBk;
         if (text_background == CLR_NONE) {
-          text_background = (draw->nmcd.uItemState & CDIS_SELECTED) != 0 ?
+          text_background = selected ?
               GetSysColor(COLOR_HIGHLIGHT) : GetSysColor(COLOR_WINDOW);
         }
         // Keep the default TreeView item drawing (icons, lines, selection),
@@ -387,7 +400,10 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
   if (const auto font = reinterpret_cast<HFONT>(SendMessageW(tree, WM_GETFONT, 0, 0))) SelectObject(draw->nmcd.hdc, font);
   SetBkMode(draw->nmcd.hdc, TRANSPARENT);
   const bool selected = TreeView_GetSelection(tree) == item;
-  const COLORREF normal_text_color = GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT);
+  const bool tree_focused = GetFocus() == tree;
+  const bool inactive_selected = selected && !tree_focused;
+  const COLORREF normal_text_color = inactive_selected ? kInactiveSearchSelectionText :
+      GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_WINDOWTEXT);
   const HBRUSH fill_brush = reinterpret_cast<HBRUSH>(GetStockObject(DC_BRUSH));
   if (!fill_brush) {
     RestoreDC(draw->nmcd.hdc, saved);
@@ -404,6 +420,7 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
   };
 
   COLORREF label_background = draw->clrTextBk;
+  if (inactive_selected) label_background = kInactiveSearchSelectionBackground;
   if (label_background == CLR_NONE) label_background = TreeView_GetBkColor(tree);
   if (label_background == CLR_NONE) label_background = selected ?
       GetSysColor(COLOR_HIGHLIGHT) : GetSysColor(COLOR_WINDOW);
