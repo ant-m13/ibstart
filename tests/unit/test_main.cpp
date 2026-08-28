@@ -50,6 +50,16 @@ void WriteBytes(const std::filesystem::path& path, std::string_view text) { std:
 std::filesystem::path Fixture(const wchar_t* name) { return std::filesystem::current_path() / L"tests" / L"fixtures" / name; }
 std::filesystem::path Temp(const wchar_t* suffix) { auto path = std::filesystem::temp_directory_path() / (std::wstring(L"ibstart-tests-") + suffix + L"-" + std::to_wstring(GetCurrentProcessId())); std::error_code error; std::filesystem::remove_all(path, error); std::filesystem::create_directories(path); return path; }
 
+std::wstring WindowsSystemErrorMessage(DWORD error) {
+  wchar_t buffer[512]{};
+  const DWORD length = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+      nullptr, error, 0, buffer, static_cast<DWORD>(std::size(buffer)), nullptr);
+  if (!length) return {};
+  std::wstring message(buffer, length);
+  while (!message.empty() && (message.back() == L'\r' || message.back() == L'\n' || message.back() == L' ')) message.pop_back();
+  return message;
+}
+
 class LoopbackHttpServer {
  public:
   explicit LoopbackHttpServer(std::string response = {}) : response_(std::move(response)) {
@@ -1617,6 +1627,48 @@ void TestCacheSizeFormatting() {
   CHECK(ibstart::cache::FormatSize(1024ULL * 1024ULL * 1024ULL) == L"1 ГБ");
 }
 
+void TestCacheReportsLocalizedWindowsError() {
+  const auto directory = Temp(L"cache-localized-error");
+  const auto local = directory / L"local";
+  const auto cache = local / L"1C" / L"1Cv8" / L"locked-cache";
+  const auto lockedFile = cache / L"locked.dat";
+  std::filesystem::create_directories(cache);
+  WriteBytes(lockedFile, "keep");
+
+  const HANDLE lock = CreateFileW(lockedFile.c_str(), GENERIC_READ, 0, nullptr, OPEN_EXISTING,
+                                  FILE_ATTRIBUTE_NORMAL, nullptr);
+  CHECK(lock != INVALID_HANDLE_VALUE);
+  if (lock == INVALID_HANDLE_VALUE) {
+    std::error_code error;
+    std::filesystem::remove_all(directory, error);
+    return;
+  }
+
+  const DWORD required = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
+  std::wstring previous(required, L'\0');
+  if (required != 0) {
+    const DWORD copied = GetEnvironmentVariableW(L"LOCALAPPDATA", previous.data(), required);
+    previous.resize(copied);
+  }
+  SetEnvironmentVariableW(L"LOCALAPPDATA", local.c_str());
+  const auto result = ibstart::cache::Clear({{cache, 0}});
+  SetEnvironmentVariableW(L"LOCALAPPDATA", required == 0 ? nullptr : previous.c_str());
+  CloseHandle(lock);
+
+  const auto expected = WindowsSystemErrorMessage(ERROR_SHARING_VIOLATION);
+  CHECK(!expected.empty());
+  // On a localized Windows installation this contains non-ASCII characters;
+  // comparing the wide system message catches byte-wise conversions from
+  // std::error_code::message().
+  CHECK(std::any_of(result.errors.begin(), result.errors.end(), [&](const std::wstring& error) {
+    return !expected.empty() && error.find(expected) != std::wstring::npos;
+  }));
+  CHECK(std::filesystem::exists(lockedFile));
+
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
 void TestCacheRejectsLicenseDescendants() {
   const auto directory = Temp(L"cache-license-safety");
   const auto local = directory / L"local";
@@ -2567,6 +2619,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"SecretMasking", TestSecretMasking);
   run(L"LogPruning", TestLogPruning);
   run(L"CacheSizeFormatting", TestCacheSizeFormatting);
+  run(L"CacheReportsLocalizedWindowsError", TestCacheReportsLocalizedWindowsError);
   run(L"CacheRejectsLicenseDescendants", TestCacheRejectsLicenseDescendants);
   run(L"CacheRejectsJunctions", TestCacheRejectsJunctions);
   run(L"CacheRejectsSymbolicReparsePoints", TestCacheRejectsSymbolicReparsePoints);

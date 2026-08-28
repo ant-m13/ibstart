@@ -10,6 +10,7 @@
 #include <cwctype>
 #include <fstream>
 #include <iomanip>
+#include <memory>
 #include <optional>
 #include <sstream>
 #include <string_view>
@@ -186,13 +187,21 @@ std::wstring NormalizeWindowsPath(std::wstring value) {
   return value;
 }
 
-std::wstring WindowsErrorMessage(DWORD error) {
-  wchar_t buffer[256]{};
-  const DWORD length = FormatMessageW(FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
-      nullptr, error, 0, buffer, static_cast<DWORD>(sizeof(buffer) / sizeof(buffer[0])), nullptr);
-  if (!length) return L"код " + std::to_wstring(error);
+struct LocalFreeDeleter {
+  void operator()(wchar_t* value) const noexcept {
+    if (value != nullptr) static_cast<void>(LocalFree(value));
+  }
+};
 
-  std::wstring message(buffer, length);
+std::wstring WindowsErrorMessage(DWORD error) {
+  wchar_t* raw_buffer = nullptr;
+  const DWORD length = FormatMessageW(
+      FORMAT_MESSAGE_ALLOCATE_BUFFER | FORMAT_MESSAGE_FROM_SYSTEM | FORMAT_MESSAGE_IGNORE_INSERTS,
+      nullptr, error, 0, reinterpret_cast<LPWSTR>(&raw_buffer), 0, nullptr);
+  std::unique_ptr<wchar_t, LocalFreeDeleter> buffer(raw_buffer);
+  if (!length || !buffer) return L"код " + std::to_wstring(error);
+
+  std::wstring message(buffer.get(), length);
   while (!message.empty() && (message.back() == L'\r' || message.back() == L'\n' || message.back() == L' ')) message.pop_back();
   return message;
 }
