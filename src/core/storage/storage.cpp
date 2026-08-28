@@ -41,6 +41,12 @@ std::wstring NormalizedStoragePath(const std::filesystem::path& path) {
   return result;
 }
 
+std::string FileSizeLimitFailure(std::string_view action, const std::filesystem::path& path,
+    std::uintmax_t size, std::uintmax_t limit) {
+  return std::string(action) + ": " + utf::ToUtf8(path.wstring()) + " is " + std::to_string(size) +
+      " bytes, exceeding the " + std::to_string(limit / (1024ULL * 1024ULL)) + " MiB safety limit.";
+}
+
 std::optional<StorageFingerprint> FingerprintOf(const std::filesystem::path& path) {
   std::error_code error;
   const bool exists = std::filesystem::exists(path, error);
@@ -52,6 +58,9 @@ std::optional<StorageFingerprint> FingerprintOf(const std::filesystem::path& pat
   }
   const auto size = std::filesystem::file_size(path, error);
   if (error) throw std::runtime_error("Cannot inspect application data file: " + utf::ToUtf8(path.wstring()) + ": " + error.message());
+  if (size > kMaxStorageFileSize) {
+    throw std::runtime_error(FileSizeLimitFailure("Cannot inspect application data file", path, size, kMaxStorageFileSize));
+  }
   const auto write_time = std::filesystem::last_write_time(path, error);
   if (error) throw std::runtime_error("Cannot inspect application data file: " + utf::ToUtf8(path.wstring()) + ": " + error.message());
 
@@ -59,14 +68,21 @@ std::optional<StorageFingerprint> FingerprintOf(const std::filesystem::path& pat
   if (!input) throw std::runtime_error("Cannot open application data file: " + utf::ToUtf8(path.wstring()));
   std::uint64_t hash = 1469598103934665603ULL;
   char buffer[8192];
+  std::uintmax_t hashed_size = 0;
   while (input.read(buffer, sizeof(buffer)) || input.gcount() > 0) {
-    for (std::streamsize index = 0; index < input.gcount(); ++index) {
+    const auto count = input.gcount();
+    hashed_size += static_cast<std::uintmax_t>(count);
+    if (hashed_size > kMaxStorageFileSize) {
+      throw std::runtime_error(FileSizeLimitFailure("Cannot inspect application data file", path,
+          hashed_size, kMaxStorageFileSize));
+    }
+    for (std::streamsize index = 0; index < count; ++index) {
       hash ^= static_cast<unsigned char>(buffer[index]);
       hash *= 1099511628211ULL;
     }
   }
   if (!input.eof()) throw std::runtime_error("Cannot read application data file completely: " + utf::ToUtf8(path.wstring()));
-  return StorageFingerprint{size, write_time, hash};
+  return StorageFingerprint{hashed_size, write_time, hash};
 }
 
 struct FileSnapshot {
@@ -80,8 +96,13 @@ FileSnapshot ReadFileSnapshot(const std::filesystem::path& path) {
 
   std::ifstream input(path, std::ios::binary);
   if (!input) throw std::runtime_error("Cannot open application data file: " + utf::ToUtf8(path.wstring()));
-  std::string contents((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-  if (!input.good() && !input.eof()) throw std::runtime_error("Cannot read application data file completely: " + utf::ToUtf8(path.wstring()));
+  std::string contents(static_cast<size_t>(before->size), '\0');
+  if (!contents.empty()) {
+    input.read(contents.data(), static_cast<std::streamsize>(contents.size()));
+    if (input.gcount() != static_cast<std::streamsize>(contents.size())) {
+      throw std::runtime_error("Cannot read application data file completely: " + utf::ToUtf8(path.wstring()));
+    }
+  }
 
   const auto after = FingerprintOf(path);
   if (before != after) {
@@ -99,6 +120,10 @@ void VerifyFingerprint(const std::filesystem::path& path,
 
 void WriteAtomically(const std::filesystem::path& path, std::string_view contents,
     const std::optional<StorageFingerprint>& expected) {
+  if (contents.size() > kMaxStorageFileSize) {
+    throw std::runtime_error(FileSizeLimitFailure("Cannot save application data file", path,
+        contents.size(), kMaxStorageFileSize));
+  }
   std::error_code error;
   if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path(), error);
   if (error) throw std::runtime_error("Cannot create application data directory: " + error.message());

@@ -12,6 +12,10 @@
 
 namespace ibstart::v8i {
 
+// The catalog parser keeps the complete document in memory, so reject
+// anomalously large ibases.v8i files before allocating the input buffer.
+inline constexpr std::uintmax_t kMaxV8iFileSize = 16ULL * 1024ULL * 1024ULL;
+
 class ExternalModificationError final : public std::runtime_error {
  public:
   using std::runtime_error::runtime_error;

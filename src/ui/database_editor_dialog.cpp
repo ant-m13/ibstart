@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cwctype>
+#include <filesystem>
 #include <stdexcept>
 #include <utility>
 
@@ -35,6 +36,11 @@ std::wstring TrimText(std::wstring_view value) {
   size_t last = value.size();
   while (last > first && std::iswspace(value[last - 1])) --last;
   return std::wstring(value.substr(first, last - first));
+}
+
+bool IsUncPath(std::wstring_view path) {
+  return path.size() >= 2 && ((path[0] == L'\\' && path[1] == L'\\') ||
+      (path[0] == L'/' && path[1] == L'/'));
 }
 
 std::wstring ReadControlText(HWND control) {
@@ -216,6 +222,19 @@ std::optional<std::wstring> CollectDatabaseEditorResult(DatabaseEditorState& sta
   const auto server = TrimText(ReadControlText(state.server));
   const auto reference = TrimText(ReadControlText(state.reference));
   if (state.kind == DatabaseConnectionKind::file && file.empty()) return L"Укажите путь к файловой базе.";
+  if (state.kind == DatabaseConnectionKind::file) {
+    const auto path_status = catalog::CheckFileDatabasePath(std::filesystem::path(file));
+    if (path_status == catalog::FileDatabasePathStatus::missing) {
+      return IsUncPath(file)
+          ? L"UNC-каталог файловой базы не содержит файл 1Cv8.1CD. Сохранение заблокировано; проверьте сетевой путь и содержимое базы."
+          : L"Каталог файловой базы должен содержать файл 1Cv8.1CD.";
+    }
+    if (path_status == catalog::FileDatabasePathStatus::inaccessible) {
+      return IsUncPath(file)
+          ? L"UNC-каталог файловой базы сейчас недоступен. Восстановите доступ к сетевому ресурсу и повторите сохранение; сохранение недоступной базы заблокировано."
+          : L"Не удалось проверить каталог файловой базы. Убедитесь, что путь доступен и содержит файл 1Cv8.1CD.";
+    }
+  }
   if (state.kind == DatabaseConnectionKind::web && !connection::IsValidHttpUrl(web)) {
     return L"Укажите корректный URL http:// или https:// с непустым хостом, допустимым портом и без управляющих символов.";
   }

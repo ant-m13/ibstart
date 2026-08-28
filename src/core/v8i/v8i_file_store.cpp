@@ -25,6 +25,12 @@ std::string FilesystemFailure(std::string_view action, const std::filesystem::pa
   return std::string(action) + ": " + PathText(path) + ": " + error.message();
 }
 
+std::string FileSizeLimitFailure(std::string_view action, const std::filesystem::path& path,
+    std::uintmax_t size, std::uintmax_t limit) {
+  return std::string(action) + ": " + PathText(path) + " is " + std::to_string(size) +
+      " bytes, exceeding the " + std::to_string(limit / (1024ULL * 1024ULL)) + " MiB safety limit.";
+}
+
 std::wstring Timestamp() {
   const auto now = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
   std::tm local{};
@@ -129,17 +135,29 @@ std::optional<V8iFileStore::Fingerprint> V8iFileStore::FingerprintOf(const std::
   if (!exists) return std::nullopt;
   const auto size = std::filesystem::file_size(path, error);
   if (error) throw std::runtime_error(FilesystemFailure("Cannot inspect ibases.v8i", path, error));
+  if (size > kMaxV8iFileSize) {
+    throw std::runtime_error(FileSizeLimitFailure("Cannot inspect ibases.v8i", path, size, kMaxV8iFileSize));
+  }
   const auto time = std::filesystem::last_write_time(path, error);
   if (error) throw std::runtime_error(FilesystemFailure("Cannot inspect ibases.v8i", path, error));
   std::ifstream input(path, std::ios::binary);
   if (!input) throw std::runtime_error("Cannot inspect ibases.v8i contents: " + PathText(path));
   std::uint64_t hash = 1469598103934665603ULL;
   char buffer[8192];
+  std::uintmax_t hashed_size = 0;
   while (input.read(buffer, sizeof(buffer)) || input.gcount() > 0) {
-    for (std::streamsize index = 0; index < input.gcount(); ++index) { hash ^= static_cast<unsigned char>(buffer[index]); hash *= 1099511628211ULL; }
+    const auto count = input.gcount();
+    hashed_size += static_cast<std::uintmax_t>(count);
+    if (hashed_size > kMaxV8iFileSize) {
+      throw std::runtime_error(FileSizeLimitFailure("Cannot inspect ibases.v8i", path, hashed_size, kMaxV8iFileSize));
+    }
+    for (std::streamsize index = 0; index < count; ++index) {
+      hash ^= static_cast<unsigned char>(buffer[index]);
+      hash *= 1099511628211ULL;
+    }
   }
   if (!input.eof()) throw std::runtime_error("Cannot inspect ibases.v8i contents completely: " + PathText(path));
-  return Fingerprint{size, time, hash};
+  return Fingerprint{hashed_size, time, hash};
 }
 
 V8iDocument V8iFileStore::Read() {
@@ -147,8 +165,13 @@ V8iDocument V8iFileStore::Read() {
   if (!before) throw std::runtime_error("Cannot open ibases.v8i for reading: " + utf::ToUtf8(path_.wstring()));
   std::ifstream input(path_, std::ios::binary);
   if (!input) throw std::runtime_error("Cannot open ibases.v8i for reading: " + utf::ToUtf8(path_.wstring()));
-  const std::string bytes((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-  if (!input.good() && !input.eof()) throw std::runtime_error("Cannot read ibases.v8i completely.");
+  std::string bytes(static_cast<size_t>(before->size), '\0');
+  if (!bytes.empty()) {
+    input.read(bytes.data(), static_cast<std::streamsize>(bytes.size()));
+    if (input.gcount() != static_cast<std::streamsize>(bytes.size())) {
+      throw std::runtime_error("Cannot read ibases.v8i completely: " + PathText(path_));
+    }
+  }
   const auto after = FingerprintOf(path_);
   if (before != after) throw ExternalModificationError("ibases.v8i changed while it was being read. Reload it.");
   loaded_fingerprint_ = after;
@@ -248,6 +271,9 @@ void V8iFileStore::Save(const V8iDocument& document, const std::function<void()>
   const auto temporary = UniqueTemporaryPath(path_);
   try {
     const auto contents = document.SerializeUtf8();
+    if (contents.size() > kMaxV8iFileSize) {
+      throw std::runtime_error(FileSizeLimitFailure("Cannot save ibases.v8i", path_, contents.size(), kMaxV8iFileSize));
+    }
     {
       std::ofstream output(temporary, std::ios::binary | std::ios::trunc);
       if (!output) throw std::runtime_error("Cannot create temporary ibases.v8i file.");

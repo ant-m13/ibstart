@@ -61,6 +61,19 @@ bool StartsWithNoCase(std::wstring_view value, std::wstring_view prefix) {
 bool IsBlankName(std::wstring_view value) {
   return value.empty() || std::all_of(value.begin(), value.end(), [](wchar_t character) { return std::iswspace(character) != 0; });
 }
+bool IsMissingPathError(const std::error_code& error) {
+  switch (error.value()) {
+    case ERROR_FILE_NOT_FOUND:
+    case ERROR_PATH_NOT_FOUND:
+    case ERROR_INVALID_NAME:
+    case ERROR_INVALID_DRIVE:
+    case ERROR_BAD_PATHNAME:
+    case ERROR_DIRECTORY:
+      return true;
+    default:
+      return false;
+  }
+}
 std::optional<long long> NumericOrder(std::wstring_view value) {
   if (value.empty()) return std::nullopt;
   const std::wstring text(value);
@@ -176,6 +189,13 @@ domain::Database MakeDatabase(const domain::Entry& entry) {
 }
 
 }  // namespace
+
+FileDatabasePathStatus CheckFileDatabasePath(const std::filesystem::path& directory) {
+  if (directory.empty()) return FileDatabasePathStatus::missing;
+  std::error_code error;
+  if (std::filesystem::is_regular_file(directory / L"1Cv8.1CD", error)) return FileDatabasePathStatus::valid;
+  return !error || IsMissingPathError(error) ? FileDatabasePathStatus::missing : FileDatabasePathStatus::inaccessible;
+}
 
 bool MatchesSearchText(const domain::Entry& entry, std::wstring_view query) {
   if (query.empty()) return true;
@@ -406,9 +426,8 @@ std::wstring Catalog::QuoteConnectionPath(const std::filesystem::path& path) {
 }
 
 bool Catalog::AddFileDatabase(std::wstring name, const std::filesystem::path& directory, std::wstring parent) {
-  std::error_code error;
   if (IsBlankName(name) || Find(name) != nullptr || !ValidParent(document_, parent) ||
-      !std::filesystem::is_regular_file(directory / L"1Cv8.1CD", error)) return false;
+      CheckFileDatabasePath(directory) != FileDatabasePathStatus::valid) return false;
   auto& entry = document_.Add(std::move(name)).entry;
   entry.Set(L"Connect", QuoteConnectionPath(directory));
   entry.Set(L"ID", NewDatabaseId());
