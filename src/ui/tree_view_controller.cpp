@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <initializer_list>
 #include <iterator>
+#include <limits>
 #include <map>
 #include <utility>
 
@@ -24,6 +25,27 @@ LPARAM CatalogItemData(size_t section_index) {
 
 bool IsCatalogItemData(LPARAM data) {
   return data >= static_cast<LPARAM>(catalog::kCatalogItemDataBase);
+}
+
+std::wstring ReadTreeItemText(HWND tree, HTREEITEM item) {
+  if (!tree || !item) return {};
+  std::wstring text(256, L'\0');
+  for (;;) {
+    TVITEMW data{};
+    data.mask = TVIF_TEXT;
+    data.hItem = item;
+    data.pszText = text.data();
+    data.cchTextMax = static_cast<int>(text.size());
+    if (!TreeView_GetItem(tree, &data)) return {};
+
+    const auto end = std::find(text.begin(), text.end(), L'\0');
+    if (end != text.end() && end != text.end() - 1) {
+      text.erase(end, text.end());
+      return text;
+    }
+    if (text.size() > static_cast<size_t>(std::numeric_limits<int>::max()) / 2) return {};
+    text.resize(text.size() * 2, L'\0');
+  }
 }
 
 std::optional<size_t> CatalogSectionIndex(const catalog::Catalog& database_catalog, const domain::Entry* entry) {
@@ -209,7 +231,7 @@ void TreeViewController::Populate(const catalog::Catalog& database_catalog,
 void TreeViewController::RefreshRecentBranch(const catalog::Catalog& database_catalog,
     const storage::CatalogState& catalog_state, const std::vector<std::wstring>& filter_favorites,
     std::wstring_view search_filter, const presentation::TreeTagFilter& tag_filter,
-    std::wstring_view selected_recent) const {
+    std::optional<size_t> selected_recent_section_index) const {
   if (!tree_) return;
   const auto recent = presentation::CollectRecentDatabaseNames(database_catalog, catalog_state.history);
   const auto view_state = CaptureViewState();
@@ -225,7 +247,12 @@ void TreeViewController::RefreshRecentBranch(const catalog::Catalog& database_ca
         L"Недавние", recent, kRecentImage, kRecentRootItemData,
         FindTopLevelItem(kFavoritesRootItemData), false);
     RestoreViewState(view_state, !search_filter.empty());
-    if (!selected_recent.empty()) static_cast<void>(SelectItem(selected_recent));
+    if (selected_recent_section_index) {
+      if (const HTREEITEM item = FindItemInBranch(CatalogItemData(*selected_recent_section_index), kRecentRootItemData)) {
+        TreeView_SelectItem(tree_, item);
+        TreeView_EnsureVisible(tree_, item);
+      }
+    }
   } catch (...) {
     resume_drawing();
     throw;
@@ -234,14 +261,7 @@ void TreeViewController::RefreshRecentBranch(const catalog::Catalog& database_ca
 }
 
 std::wstring TreeViewController::ItemName(HTREEITEM item) const {
-  if (!tree_ || !item) return {};
-  wchar_t text[512]{};
-  TVITEMW data{};
-  data.mask = TVIF_TEXT;
-  data.hItem = item;
-  data.pszText = text;
-  data.cchTextMax = static_cast<int>(std::size(text));
-  return TreeView_GetItem(tree_, &data) ? text : L"";
+  return ReadTreeItemText(tree_, item);
 }
 
 LPARAM TreeViewController::ItemData(HTREEITEM item) const {
@@ -291,6 +311,15 @@ bool TreeViewController::SelectedItemIsRecentRoot() const {
 bool TreeViewController::SelectItem(std::wstring_view name) const {
   if (!tree_ || name.empty()) return false;
   const HTREEITEM item = FindItemByName(TreeView_GetRoot(tree_), name);
+  if (!item) return false;
+  TreeView_SelectItem(tree_, item);
+  TreeView_EnsureVisible(tree_, item);
+  return true;
+}
+
+bool TreeViewController::SelectItem(size_t section_index) const {
+  if (!tree_ || section_index == catalog::kInvalidSectionIndex) return false;
+  const HTREEITEM item = FindItemByData(TreeView_GetRoot(tree_), CatalogItemData(section_index));
   if (!item) return false;
   TreeView_SelectItem(tree_, item);
   TreeView_EnsureVisible(tree_, item);
@@ -597,6 +626,23 @@ HTREEITEM TreeViewController::FindItemInBranch(std::wstring_view name, LPARAM br
   if (branch_data == 0) return FindItemByName(TreeView_GetRoot(tree_), name);
   const HTREEITEM branch = FindTopLevelItem(branch_data);
   return branch ? FindItemByName(TreeView_GetChild(tree_, branch), name) : nullptr;
+}
+
+HTREEITEM TreeViewController::FindItemInBranch(LPARAM item_data, LPARAM branch_data) const {
+  if (!tree_) return nullptr;
+  if (branch_data == 0) return FindItemByData(TreeView_GetRoot(tree_), item_data);
+  const HTREEITEM branch = FindTopLevelItem(branch_data);
+  if (!branch) return nullptr;
+  if (ItemData(branch) == item_data) return branch;
+  return FindItemByData(TreeView_GetChild(tree_, branch), item_data);
+}
+
+HTREEITEM TreeViewController::FindItemByData(HTREEITEM item, LPARAM item_data) const {
+  for (auto current = item; current; current = TreeView_GetNextSibling(tree_, current)) {
+    if (ItemData(current) == item_data) return current;
+    if (const auto child = FindItemByData(TreeView_GetChild(tree_, current), item_data)) return child;
+  }
+  return nullptr;
 }
 
 HTREEITEM TreeViewController::FindItemByName(HTREEITEM item, std::wstring_view name) const {

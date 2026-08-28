@@ -987,6 +987,44 @@ void TestSearchExpandsAndRestoresGroups() {
   DestroyWindow(tree);
 }
 
+void TestLongCatalogNamesUseFullIdentity() {
+  const std::wstring name = std::wstring(600, L'N') + L" — база";
+  const std::wstring contents = L"[" + name + L"]\nConnect=File=\"C:\\\\long\"\nID=long-id\n";
+  ibstart::catalog::Catalog catalog(ibstart::v8i::V8iDocument::ParseUtf8(ibstart::utf::ToUtf8(contents)));
+
+  const auto* entry = catalog.FindBySectionIndex(0);
+  CHECK(entry != nullptr && entry->name == name);
+  const auto database = catalog.DatabaseFor(static_cast<size_t>(0));
+  CHECK(database.name == name);
+  CHECK(database.id == L"long-id");
+
+  INITCOMMONCONTROLSEX common_controls{sizeof(common_controls), ICC_TREEVIEW_CLASSES};
+  CHECK(InitCommonControlsEx(&common_controls) != FALSE);
+  const HWND tree = CreateWindowExW(0, WC_TREEVIEWW, L"",
+      WS_CHILD | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT,
+      0, 0, 640, 480, GetDesktopWindow(), nullptr, GetModuleHandleW(nullptr), nullptr);
+  CHECK(tree != nullptr);
+  if (!tree) return;
+
+  {
+    ibstart::ui::TreeViewController controller;
+    controller.Attach(tree, GetModuleHandleW(nullptr));
+    const ibstart::storage::CatalogState state;
+    const ibstart::ui::presentation::TreeTagFilter tag_filter;
+    controller.Populate(catalog, state, {}, L"", tag_filter, true);
+
+    const HTREEITEM root = TreeView_GetRoot(tree);
+    const HTREEITEM item = root ? TreeView_GetChild(tree, root) : nullptr;
+    CHECK(item != nullptr);
+    CHECK(item && controller.ItemName(item) == name);
+    CHECK(item && controller.SectionIndex(item) == static_cast<size_t>(0));
+    CHECK(controller.SelectItem(static_cast<size_t>(0)));
+    CHECK(controller.SelectedSectionIndex() == static_cast<size_t>(0));
+    CHECK(controller.SelectedName() == name);
+  }
+  DestroyWindow(tree);
+}
+
 void TestRecentDatabaseNames() {
   auto document = ibstart::v8i::V8iDocument::ParseUtf8(
       "[Alpha]\nConnect=File=\"C:\\\\alpha\"\nID=alpha-id\n"
@@ -2149,6 +2187,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"CatalogSearch", TestCatalogSearch);
   run(L"TreeFilters", TestTreeFilters);
   run(L"SearchExpandsAndRestoresGroups", TestSearchExpandsAndRestoresGroups);
+  run(L"LongCatalogNamesUseFullIdentity", TestLongCatalogNamesUseFullIdentity);
   run(L"RecentDatabaseNames", TestRecentDatabaseNames);
   run(L"StableDatabaseId", TestStableDatabaseId);
   run(L"CaseInsensitiveDatabaseIdentifiers", TestCaseInsensitiveDatabaseIdentifiers);

@@ -149,6 +149,32 @@ std::wstring SectionPath(const domain::Entry& entry) {
   return folder == L"/" ? L"/" + entry.name : folder + L"/" + entry.name;
 }
 
+domain::Database MakeDatabase(const domain::Entry& entry) {
+  if (!entry.IsDatabase()) throw std::invalid_argument("The requested catalog entry is not a database.");
+  domain::Database result;
+  result.name = entry.name;
+  result.id = StableDatabaseId(entry);
+  result.connect = entry.ValueOr(L"Connect");
+  result.folder = entry.ValueOr(L"Folder");
+  result.order_in_list = entry.ValueOr(L"OrderInList");
+  result.order_in_tree = entry.ValueOr(L"OrderInTree");
+  result.version = entry.ValueOr(L"Version");
+  result.default_version = entry.ValueOr(L"DefaultVersion");
+  result.app = entry.ValueOr(L"App");
+  result.default_app = entry.ValueOr(L"DefaultApp");
+  result.wa = entry.ValueOr(L"WA");
+  result.external = entry.ValueOr(L"External");
+  result.locale = entry.ValueOr(L"Locale");
+  result.client_connection_speed = entry.ValueOr(L"ClientConnectionSpeed");
+  result.app_arch = entry.ValueOr(L"AppArch");
+  result.additional_parameters = entry.ValueOr(L"AdditionalParameters");
+  constexpr std::wstring_view known[] = {L"Connect", L"ID", L"Folder", L"OrderInList", L"OrderInTree", L"Version", L"DefaultVersion", L"App", L"DefaultApp", L"WA", L"External", L"Locale", L"ClientConnectionSpeed", L"AppArch", L"AdditionalParameters"};
+  for (const auto& field : entry.fields) {
+    if (std::none_of(std::begin(known), std::end(known), [&](std::wstring_view key) { return EqualNoCase(key, field.key); })) result.unknown_fields.push_back(field);
+  }
+  return result;
+}
+
 }  // namespace
 
 bool MatchesSearchText(const domain::Entry& entry, std::wstring_view query) {
@@ -308,29 +334,14 @@ std::wstring Catalog::ParentOf(std::wstring_view name) const {
 
 domain::Database Catalog::DatabaseFor(std::wstring_view name) const {
   const auto* entry = Find(name);
-  if (entry == nullptr || !entry->IsDatabase()) throw std::invalid_argument("The requested catalog entry is not a database.");
-  domain::Database result;
-  result.name = entry->name;
-  result.id = StableDatabaseId(*entry);
-  result.connect = entry->ValueOr(L"Connect");
-  result.folder = entry->ValueOr(L"Folder");
-  result.order_in_list = entry->ValueOr(L"OrderInList");
-  result.order_in_tree = entry->ValueOr(L"OrderInTree");
-  result.version = entry->ValueOr(L"Version");
-  result.default_version = entry->ValueOr(L"DefaultVersion");
-  result.app = entry->ValueOr(L"App");
-  result.default_app = entry->ValueOr(L"DefaultApp");
-  result.wa = entry->ValueOr(L"WA");
-  result.external = entry->ValueOr(L"External");
-  result.locale = entry->ValueOr(L"Locale");
-  result.client_connection_speed = entry->ValueOr(L"ClientConnectionSpeed");
-  result.app_arch = entry->ValueOr(L"AppArch");
-  result.additional_parameters = entry->ValueOr(L"AdditionalParameters");
-  constexpr std::wstring_view known[] = {L"Connect", L"ID", L"Folder", L"OrderInList", L"OrderInTree", L"Version", L"DefaultVersion", L"App", L"DefaultApp", L"WA", L"External", L"Locale", L"ClientConnectionSpeed", L"AppArch", L"AdditionalParameters"};
-  for (const auto& field : entry->fields) {
-    if (std::none_of(std::begin(known), std::end(known), [&](std::wstring_view key) { return EqualNoCase(key, field.key); })) result.unknown_fields.push_back(field);
-  }
-  return result;
+  if (entry == nullptr) throw std::invalid_argument("The requested catalog entry is not a database.");
+  return MakeDatabase(*entry);
+}
+
+domain::Database Catalog::DatabaseFor(size_t section_index) const {
+  const auto* entry = FindBySectionIndex(section_index);
+  if (entry == nullptr) throw std::invalid_argument("The requested catalog entry is not a database.");
+  return MakeDatabase(*entry);
 }
 
 std::vector<const domain::Entry*> Catalog::ChildrenOf(std::wstring_view parent) const {

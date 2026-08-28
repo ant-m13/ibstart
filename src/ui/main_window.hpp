@@ -52,7 +52,9 @@ class MainWindow {
   [[nodiscard]] bool EnsureCatalogValid(const catalog::Catalog& catalog, std::wstring_view operation) const;
   void PopulateTree();
   void PopulateTreeWithoutFlicker(std::wstring_view selected = {}, bool select_catalog_root = false);
-  void RefreshRecentTreeBranch(std::wstring_view selected_recent = {});
+  void RefreshRecentTreeBranch(std::optional<size_t> selected_recent_section_index = std::nullopt);
+  [[nodiscard]] const domain::Entry* SelectedCatalogEntry() const;
+  [[nodiscard]] std::wstring SelectedCatalogName() const;
   void SortFolder(std::wstring_view folder, catalog::SortDirection direction);
   void ToggleFoldersFirstWhenSorting();
   void RefreshTagFilter();

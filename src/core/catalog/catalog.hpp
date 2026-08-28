@@ -61,6 +61,7 @@ class Catalog {
   [[nodiscard]] const domain::Entry* FindById(std::wstring_view id) const;
   [[nodiscard]] std::wstring ParentOf(std::wstring_view name) const;
   [[nodiscard]] domain::Database DatabaseFor(std::wstring_view name) const;
+  [[nodiscard]] domain::Database DatabaseFor(size_t section_index) const;
 
   bool AddGroup(std::wstring name, std::wstring parent = {});
   bool AddFileDatabase(std::wstring name, const std::filesystem::path& directory, std::wstring parent = {});
