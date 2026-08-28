@@ -18,6 +18,7 @@ enum Id : int {
   kSimpleMode,
   kToggleFavorite,
   kFocusSearch,
+  kClearSearch,
   kCheckForUpdates,
   kAbout,
   kMoveUp,

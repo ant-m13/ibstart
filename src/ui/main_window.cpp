@@ -59,6 +59,10 @@ constexpr UINT kSearchRefreshDelayMilliseconds = 180;
 constexpr int kMinimumWindowWidth = 940;
 constexpr int kMinimumSimpleWindowWidth = 520;
 constexpr int kMinimumWindowHeight = 460;
+constexpr int kSearchClearButtonWidth = 22;
+constexpr int kSearchClearButtonHeight = 21;
+constexpr int kSearchClearButtonInset = 2;
+constexpr int kSearchClearTextGap = 4;
 void Message(HWND owner, std::wstring_view text, std::wstring_view title = L"ИБ Старт", UINT type = MB_OK | MB_ICONINFORMATION) { MessageBoxW(owner, std::wstring(text).c_str(), std::wstring(title).c_str(), type); }
 std::wstring WideErrorText(std::string_view message) noexcept {
   try { return utf::FromUtf8(message); }
@@ -182,6 +186,7 @@ void MainWindow::RegisterCommandHandlers() {
   command_dispatcher_.Register(kToggleFavorite, [this] { ToggleFavorite(); });
   command_dispatcher_.Register(kShowTagsInList, [this] { ToggleTagDisplay(); });
   command_dispatcher_.Register(kFocusSearch, [this] { SetFocus(search_); });
+  command_dispatcher_.Register(kClearSearch, [this] { ClearSearch(); });
   command_dispatcher_.Register(kCheckForUpdates, [this] { CheckForUpdates(); });
   command_dispatcher_.Register(kAbout, [this] { ShowAbout(); });
   command_dispatcher_.Register(kExit, [this] { SendMessageW(window_, WM_CLOSE, 0, 0); });
@@ -205,6 +210,7 @@ MainWindow::~MainWindow() {
   if (controls_font_) DeleteObject(controls_font_);
   if (controls_bold_font_) DeleteObject(controls_bold_font_);
   if (button_font_) DeleteObject(button_font_);
+  if (search_clear_font_) DeleteObject(search_clear_font_);
   if (details_title_font_) DeleteObject(details_title_font_);
   if (details_subtitle_font_) DeleteObject(details_subtitle_font_);
   if (details_key_font_) DeleteObject(details_key_font_);
@@ -350,7 +356,12 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       break;
     case WM_COMMAND:
       if (closing_) return 0;
+      if (reinterpret_cast<HWND>(lparam) == search_clear_ && HIWORD(wparam) == BN_CLICKED) {
+        static_cast<void>(command_dispatcher_.Dispatch(LOWORD(wparam)));
+        return 0;
+      }
       if (reinterpret_cast<HWND>(lparam) == search_ && HIWORD(wparam) == EN_CHANGE) {
+        RefreshSearchClearButton();
         if (!suppress_search_refresh_) {
           KillTimer(window, kSearchRefreshTimer);
           SetTimer(window, kSearchRefreshTimer, kSearchRefreshDelayMilliseconds, nullptr);
@@ -437,7 +448,10 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       if (lparam && MeasureContextMenuItem(reinterpret_cast<MEASUREITEMSTRUCT*>(lparam))) return TRUE;
       break;
     case WM_DRAWITEM:
-      if (lparam && DrawContextMenuItem(reinterpret_cast<const DRAWITEMSTRUCT*>(lparam))) return TRUE;
+      if (lparam) {
+        const auto* draw = reinterpret_cast<const DRAWITEMSTRUCT*>(lparam);
+        if (DrawSearchClearButton(draw) || DrawContextMenuItem(draw)) return TRUE;
+      }
       break;
     case WM_MOUSEMOVE:
       if (!dragging_name_.empty()) { UpdateTreeDrag({GET_X_LPARAM(lparam), GET_Y_LPARAM(lparam)}); return 0; }
@@ -506,6 +520,9 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
 void MainWindow::CreateControls() {
   HWND searchLabel = CreateWindowW(L"STATIC", L"Поиск:", WS_CHILD | WS_VISIBLE, 8, 10, 50, 20, window_, nullptr, instance_, nullptr);
   search_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 58, 7, 600, 25, window_, nullptr, instance_, nullptr);
+  search_clear_ = CreateWindowW(L"BUTTON", L"Очистить поиск", WS_CHILD | WS_TABSTOP | BS_OWNERDRAW,
+      0, 0, kSearchClearButtonWidth, kSearchClearButtonHeight, window_,
+      reinterpret_cast<HMENU>(kClearSearch), instance_, nullptr);
   tag_filter_label_ = CreateWindowW(L"STATIC", L"Фильтр по тегу:", WS_CHILD | WS_VISIBLE, 8, 42, 106, 20, window_, nullptr, instance_, nullptr);
   tag_filter_ = CreateWindowExW(0, WC_COMBOBOXW, L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL, 116, 39, 258, 160, window_, nullptr, instance_, nullptr);
   SendMessageW(tag_filter_, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Все базы"));
@@ -524,11 +541,13 @@ void MainWindow::CreateControls() {
   controls_font_ = CreateUiFont(window_, 9, FW_NORMAL);
   controls_bold_font_ = CreateUiFont(window_, 9, FW_BOLD);
   button_font_ = CreateUiFont(window_, 9, FW_NORMAL);
+  search_clear_font_ = CreateUiFont(window_, 12, FW_NORMAL);
   if (controls_font_) {
     for (const HWND control : {searchLabel, search_, tag_filter_label_, tag_filter_, tree_, details_, connection_}) {
       if (control) SendMessageW(control, WM_SETFONT, reinterpret_cast<WPARAM>(controls_font_), TRUE);
     }
   }
+  if (search_clear_font_) SendMessageW(search_clear_, WM_SETFONT, reinterpret_cast<WPARAM>(search_clear_font_), TRUE);
   ListView_SetExtendedListViewStyle(details_, LVS_EX_FULLROWSELECT | LVS_EX_DOUBLEBUFFER | LVS_EX_LABELTIP);
   ListView_SetBkColor(details_, RGB(248, 250, 252));
   ListView_SetTextBkColor(details_, RGB(248, 250, 252));
@@ -565,6 +584,7 @@ void MainWindow::CreateControls() {
     AddButtonTooltip(tooltips, cache_, L"Очистить кэш выбранной базы — Ctrl+Shift+Del");
     AddButtonTooltip(tooltips, shortcut_, L"Создать ярлык выбранной базы — Ctrl+Shift+S");
     AddButtonTooltip(tooltips, remove_, L"Удалить выбранную запись — Alt+Shift+Del");
+    AddButtonTooltip(tooltips, search_clear_, L"Очистить поиск");
     AddButtonTooltip(tooltips, connection_, L"Строку подключения можно выделить и скопировать — Ctrl+C");
   }
   AttachButtonIcon(enterprise_, instance_, IDI_ACTION_ENTERPRISE, button_images_);
@@ -579,6 +599,7 @@ void MainWindow::CreateControls() {
   RefreshFileMenu();
   RefreshMainMenuBar();
   SetSimpleMode(settings_.simple_mode);
+  RefreshSearchClearButton();
   DisplaySelected();
   RECT client{};
   if (GetClientRect(window_, &client)) Layout(client.right - client.left, client.bottom - client.top);
@@ -592,7 +613,9 @@ void MainWindow::Layout(int width, int height) {
     constexpr int buttonHeight = 30;
     const int footerTop = std::max(42, height - footerHeight);
     const int buttonWidth = std::max(1, (width - footerPadding * 2 - buttonGap) / 2);
-    MoveWindow(search_, 58, 7, std::max(1, width - 66), 25, TRUE);
+    const int searchWidth = std::max(1, width - 66);
+    MoveWindow(search_, 58, 7, searchWidth, 25, TRUE);
+    PositionSearchClearButton(58, 7, searchWidth, 25);
     MoveWindow(tree_, footerPadding, 42, std::max(1, width - footerPadding * 2), std::max(1, footerTop - 50), TRUE);
     MoveWindow(connection_, footerPadding, footerTop, std::max(1, width - footerPadding * 2), 22, TRUE);
     MoveWindow(enterprise_, footerPadding, footerTop + 28, buttonWidth, buttonHeight, TRUE);
@@ -660,7 +683,9 @@ void MainWindow::Layout(int width, int height) {
   if (!positioned) {
     // DeferWindowPos can fail only under severe resource pressure.  Keep a
     // complete fallback layout instead of leaving controls at old positions.
-    MoveWindow(search_, 58, 7, std::max(1, width - 66), 25, TRUE);
+    const int searchWidth = std::max(1, width - 66);
+    MoveWindow(search_, 58, 7, searchWidth, 25, TRUE);
+    PositionSearchClearButton(58, 7, searchWidth, 25);
     MoveWindow(tag_filter_, 116, 39, 258, 25, TRUE);
     MoveWindow(tree_, 8, treeTop, leftWidth, std::max(1, height - treeTop - bottom), TRUE);
     MoveWindow(details_title_, rightX + 10, detailsTop + 7, std::max(1, rightWidth - 20), 26, TRUE);
@@ -669,6 +694,7 @@ void MainWindow::Layout(int width, int height) {
     MoveWindow(connection_, rightX, connectionY, rightWidth, 22, TRUE);
     for (const auto& button : buttons) MoveWindow(button.window, rightX + button.x, buttonsY + button.y, button.width, buttonHeight, TRUE);
   }
+  PositionSearchClearButton(58, 7, std::max(1, width - 66), 25);
   ListView_SetColumnWidth(details_, 0, keyWidth);
   ListView_SetColumnWidth(details_, 1, std::max(1, rightWidth - keyWidth - 5));
   SendMessageW(status_, WM_SIZE, 0, 0);
@@ -676,6 +702,48 @@ void MainWindow::Layout(int width, int height) {
   // Repaint the parent and all children in one pass so stale button pixels
   // cannot remain visible while the user drags a window border.
   RedrawWindow(window_, nullptr, nullptr, RDW_INVALIDATE | RDW_ERASE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+}
+
+void MainWindow::PositionSearchClearButton(int x, int y, int width, int height) {
+  if (!search_ || !search_clear_) return;
+  const int searchWidth = std::max(1, width);
+  const int searchHeight = std::max(1, height);
+  const int buttonWidth = std::min(kSearchClearButtonWidth, searchWidth);
+  const int buttonHeight = std::max(1, std::min(kSearchClearButtonHeight, searchHeight - 4));
+  const int buttonX = x + std::max(0, searchWidth - buttonWidth - kSearchClearButtonInset);
+  const int buttonY = y + std::max(0, (searchHeight - buttonHeight) / 2);
+  SendMessageW(search_, EM_SETMARGINS, EC_RIGHTMARGIN,
+      MAKELONG(0, static_cast<WORD>(buttonWidth + kSearchClearTextGap)));
+  SetWindowPos(search_clear_, HWND_TOP, buttonX, buttonY, buttonWidth, buttonHeight,
+      SWP_NOACTIVATE | SWP_NOOWNERZORDER);
+}
+
+void MainWindow::RefreshSearchClearButton() {
+  if (!search_clear_) return;
+  const bool hasText = search_ && GetWindowTextLengthW(search_) > 0;
+  ShowWindow(search_clear_, hasText ? SW_SHOWNOACTIVATE : SW_HIDE);
+}
+
+bool MainWindow::DrawSearchClearButton(const DRAWITEMSTRUCT* draw) const {
+  if (!draw || draw->hwndItem != search_clear_) return false;
+  const int saved = SaveDC(draw->hDC);
+  const bool pressed = (draw->itemState & ODS_SELECTED) != 0;
+  const bool disabled = (draw->itemState & ODS_DISABLED) != 0;
+  FillRect(draw->hDC, &draw->rcItem, GetSysColorBrush(pressed ? COLOR_3DFACE : COLOR_WINDOW));
+  const HFONT font = search_clear_font_ ? search_clear_font_ :
+      static_cast<HFONT>(GetStockObject(DEFAULT_GUI_FONT));
+  const HGDIOBJ previousFont = SelectObject(draw->hDC, font);
+  SetBkMode(draw->hDC, TRANSPARENT);
+  SetTextColor(draw->hDC, disabled ? GetSysColor(COLOR_GRAYTEXT) : GetSysColor(COLOR_WINDOWTEXT));
+  RECT glyph = draw->rcItem;
+  DrawTextW(draw->hDC, L"\u00D7", 1, &glyph, DT_SINGLELINE | DT_CENTER | DT_VCENTER | DT_NOPREFIX);
+  if (draw->itemState & ODS_FOCUS) {
+    InflateRect(&glyph, -2, -2);
+    DrawFocusRect(draw->hDC, &glyph);
+  }
+  SelectObject(draw->hDC, previousFont);
+  RestoreDC(draw->hDC, saved);
+  return true;
 }
 
 void MainWindow::LoadCatalog(bool report_error) {
@@ -1663,6 +1731,11 @@ void MainWindow::ToggleTagDisplay() {
 }
 void MainWindow::SetStatus(std::wstring text) { if (status_) SendMessageW(status_, SB_SETTEXTW, 0, reinterpret_cast<LPARAM>(text.c_str())); }
 std::wstring MainWindow::CatalogStatistics() const { return L"Баз: " + std::to_wstring(catalog_ ? catalog_->Databases().size() : 0) + L" | Платформ: " + std::to_wstring(platforms_.size()); }
+void MainWindow::ClearSearch() {
+  if (!search_ || GetWindowTextLengthW(search_) == 0) return;
+  SetWindowTextW(search_, L"");
+  SetFocus(search_);
+}
 void MainWindow::SetSimpleMode(bool enabled) {
   const std::wstring selected = tree_view_.SelectedName();
   settings_.simple_mode = enabled;
