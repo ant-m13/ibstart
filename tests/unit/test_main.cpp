@@ -417,6 +417,18 @@ void TestConnectionStringParsing() {
       L"Before=first;File=\"old\";After=second",
       L"", L"", L"cluster", L"database");
   CHECK(orderedConnection == L"Before=first;Srvr=\"cluster\";Ref=\"database\";After=second");
+  const auto interleavedConnection = ibstart::connection::BuildConnection(
+      ibstart::connection::ConnectionKind::server,
+      L"Srvr=\"old-cluster\";Custom=between;Ref=\"old-database\";Tail=keep",
+      L"", L"", L"cluster", L"database");
+  CHECK(interleavedConnection ==
+      L"Srvr=\"cluster\";Custom=between;Ref=\"database\";Tail=keep");
+  const auto reversedConnection = ibstart::connection::BuildConnection(
+      ibstart::connection::ConnectionKind::server,
+      L"Ref=\"old-database\";Custom=between;Srvr=\"old-cluster\";Tail=keep",
+      L"", L"", L"cluster", L"database");
+  CHECK(reversedConnection ==
+      L"Ref=\"database\";Custom=between;Srvr=\"cluster\";Tail=keep");
 }
 
 void TestNoBomAndCatalog() {

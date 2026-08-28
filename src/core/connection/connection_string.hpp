@@ -18,6 +18,8 @@ struct Fragment {
 };
 
 struct ParseResult {
+  // Source order is significant: editors replace typed fragments in these
+  // slots while leaving unknown fragments around them untouched.
   std::vector<Fragment> fragments;
   std::vector<std::wstring> diagnostics;
 };
