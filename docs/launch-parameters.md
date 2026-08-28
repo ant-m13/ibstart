@@ -58,11 +58,11 @@ Raw `AdditionalParameters` может временно сохранять неи
 Основные места текущей реализации:
 
 - выбор launch context и источника параметров —
-  [main_window.cpp](../src/ui/main_window.cpp:1154);
+  [`MainWindow::LaunchSelected`](../src/ui/main_window.cpp);
 - построение executable и аргументов —
-  [command_builder.cpp](../src/core/launcher/command_builder.cpp:175);
+  [`launcher::BuildCommand`](../src/core/launcher/command_builder.cpp);
 - распознавание raw Windows-аргументов —
-  [command_builder.cpp](../src/core/launcher/command_builder.cpp:1).
+  [`launcher::SplitCommandArguments`](../src/core/launcher/command_builder.cpp).
 
 Полный version profile и отдельные API для batch/web/mobile/OLE/agent пока не
 реализованы; неизвестные параметры по-прежнему передаются как raw-текст после

@@ -19,6 +19,11 @@ cmake --build --preset msvc-x64-release
 ctest --preset msvc-x64-release
 ```
 
+Ссылки из документации на исходный код оформляйте через имя устойчивого символа,
+например [`launcher::BuildCommand`](src/core/launcher/command_builder.cpp);
+ссылки на номера строк не используйте. Проверка таких ссылок входит в
+`ibstart.documentation_links` и запускается вместе с CTest.
+
 Перед отправкой изменений также проверьте, что `git diff --check` не выводит ошибок. Не добавляйте в commit содержимое `out/`, `.vs/`, пользовательские файлы `data/` или журналы.
 
 ## Правила для изменений
