@@ -1,9 +1,11 @@
 #pragma once
 
+#include "core/domain/identifier.hpp"
 #include "core/domain/model.hpp"
 
 #include <Windows.h>
 
+#include <cstddef>
 #include <filesystem>
 #include <functional>
 #include <map>
@@ -12,6 +14,9 @@
 #include <vector>
 
 namespace ibstart::storage {
+
+inline constexpr std::size_t kMaxFavorites = 9;
+inline constexpr std::size_t kMaxHistory = 20;
 
 struct StorageLayout {
   std::filesystem::path root;
@@ -32,7 +37,7 @@ struct Settings {
   int window_height{560};
 };
 
-using DatabaseTags = std::map<std::wstring, std::vector<std::wstring>>;
+using DatabaseTags = std::map<std::wstring, std::vector<std::wstring>, domain::IdentifierLess>;
 
 struct TagStyle {
   COLORREF background{RGB(226, 242, 244)};
@@ -43,7 +48,7 @@ struct TagStyle {
 
 using TagStyles = std::map<std::wstring, TagStyle>;
 
-using LastLaunchTimes = std::map<std::wstring, std::chrono::system_clock::time_point>;
+using LastLaunchTimes = std::map<std::wstring, std::chrono::system_clock::time_point, domain::IdentifierLess>;
 
 struct CatalogState {
   std::vector<std::wstring> favorites;
@@ -74,6 +79,8 @@ void EnsureWritable(const StorageLayout& layout);
 [[nodiscard]] Settings LoadSettings(const StorageLayout& layout);
 void SaveSettings(const StorageLayout& layout, const Settings& settings);
 [[nodiscard]] CatalogState LoadCatalogState(const StorageLayout& layout);
+// Removes invalid and duplicate favorite/history entries and applies their size limits.
+void NormalizeCatalogState(CatalogState& state);
 void SaveCatalogState(const StorageLayout& layout, const CatalogState& state);
 
 }  // namespace ibstart::storage

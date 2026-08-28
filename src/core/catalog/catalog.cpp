@@ -20,7 +20,7 @@
 namespace ibstart::domain {
 namespace {
 bool EqualNoCase(std::wstring_view left, std::wstring_view right) {
-  return left.size() == right.size() && _wcsnicmp(left.data(), right.data(), left.size()) == 0;
+  return EqualIdentifier(left, right);
 }
 }
 
@@ -147,14 +147,6 @@ std::wstring SectionPath(const domain::Entry& entry) {
 }
 
 }  // namespace
-
-bool Catalog::CaseInsensitiveLess::operator()(std::wstring_view left,
-    std::wstring_view right) const noexcept {
-  if (left.empty() || right.empty()) return left.size() < right.size();
-  const size_t common = std::min(left.size(), right.size());
-  const int comparison = _wcsnicmp(left.data(), right.data(), common);
-  return comparison == 0 ? left.size() < right.size() : comparison < 0;
-}
 
 bool MatchesSearchText(const domain::Entry& entry, std::wstring_view query) {
   if (query.empty()) return true;

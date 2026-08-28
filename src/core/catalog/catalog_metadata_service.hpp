@@ -14,7 +14,7 @@ namespace ibstart::catalog {
 // selecting an entry and refreshing its controls after a successful change.
 class CatalogMetadataService {
  public:
-  static constexpr size_t kMaxFavorites = 9;
+  static constexpr size_t kMaxFavorites = storage::kMaxFavorites;
 
   explicit CatalogMetadataService(storage::StorageLayout layout);
 

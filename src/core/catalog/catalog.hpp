@@ -1,5 +1,6 @@
 #pragma once
 
+#include "core/domain/identifier.hpp"
 #include "core/domain/model.hpp"
 #include "core/v8i/v8i_document.hpp"
 
@@ -82,10 +83,7 @@ class Catalog {
   [[nodiscard]] static bool IsWebConnection(std::wstring_view connect);
 
  private:
-  struct CaseInsensitiveLess {
-    using is_transparent = void;
-    bool operator()(std::wstring_view left, std::wstring_view right) const noexcept;
-  };
+  using CaseInsensitiveLess = domain::IdentifierLess;
   struct LookupIndex {
     std::map<std::wstring, size_t, CaseInsensitiveLess> by_name;
     std::map<std::wstring, size_t, CaseInsensitiveLess> by_id;

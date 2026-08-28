@@ -12,8 +12,7 @@ namespace ibstart::ui::presentation {
 namespace {
 
 bool EqualNoCase(std::wstring_view left, std::wstring_view right) {
-  return left.size() == right.size() && CompareStringOrdinal(left.data(), static_cast<int>(left.size()),
-      right.data(), static_cast<int>(right.size()), TRUE) == CSTR_EQUAL;
+  return domain::EqualIdentifier(left, right);
 }
 
 std::wstring TrimText(std::wstring_view value) {
