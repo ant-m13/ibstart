@@ -73,9 +73,9 @@ class TreeViewController final {
   };
 
   void AddItems(const catalog::Catalog& database_catalog, const std::vector<catalog::TreeItem>& items,
-      HTREEITEM parent, bool expand_for_search) const;
+      HTREEITEM parent) const;
   void ReconcileChildren(const catalog::Catalog& database_catalog,
-      const std::vector<catalog::TreeItem>& items, HTREEITEM parent, bool expand_for_search) const;
+      const std::vector<catalog::TreeItem>& items, HTREEITEM parent) const;
   void ReconcileSpecialRoot(const catalog::Catalog& database_catalog,
       const storage::CatalogState& catalog_state, const std::vector<std::wstring>& filter_favorites,
       std::wstring_view search_filter, const presentation::TreeTagFilter& tag_filter,
@@ -83,7 +83,8 @@ class TreeViewController final {
       HTREEITEM insert_after, bool names_are_ids) const;
   [[nodiscard]] HTREEITEM InsertCatalogRoot() const;
   [[nodiscard]] ViewState CaptureViewState() const;
-  void RestoreViewState(const ViewState& state) const;
+  void RestoreViewState(const ViewState& state, bool expand_visible_branches) const;
+  void ExpandVisibleBranches(HTREEITEM item) const;
   void UpdateTreeItem(HTREEITEM handle, const catalog::Catalog& database_catalog,
       const catalog::TreeItem& item) const;
   void DeleteChildren(HTREEITEM parent) const;
@@ -94,6 +95,10 @@ class TreeViewController final {
 
   HWND tree_{};
   HIMAGELIST images_{};
+  // Search expands matching branches temporarily; keep the user's layout to
+  // restore it when the search filter is cleared.
+  mutable bool search_active_{false};
+  mutable std::optional<ExpansionStates> pre_search_expansion_states_;
 };
 
 }  // namespace ibstart::ui

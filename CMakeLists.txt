@@ -130,7 +130,7 @@ add_custom_command(TARGET IBStart POST_BUILD
 
 include(CTest)
 if(BUILD_TESTING)
-  add_executable(ibstart_tests tests/unit/test_main.cpp src/ui/tree_presentation.cpp)
+  add_executable(ibstart_tests tests/unit/test_main.cpp src/ui/tree_presentation.cpp src/ui/tree_view_controller.cpp)
   target_link_libraries(ibstart_tests PRIVATE ibstart_core Comctl32)
   target_compile_definitions(ibstart_tests PRIVATE
     UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)

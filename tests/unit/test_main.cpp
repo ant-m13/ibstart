@@ -14,6 +14,7 @@
 #include "core/update/update_service.hpp"
 #include "core/v8i/v8i_file_store.hpp"
 #include "ui/tree_presentation.hpp"
+#include "ui/tree_view_controller.hpp"
 
 #include <Windows.h>
 #include <shellapi.h>
@@ -915,6 +916,75 @@ void TestTreeFilters() {
   CHECK(ibstart::ui::presentation::MatchesTagFilter(catalog, *folder, tag, tags, {}));
   tag.tag = L"Unknown";
   CHECK(!ibstart::ui::presentation::MatchesTagFilter(catalog, *folder, tag, tags, {}));
+}
+
+HTREEITEM FindTreeItemByName(const ibstart::ui::TreeViewController& controller, HWND tree,
+    HTREEITEM first, std::wstring_view name) {
+  for (auto current = first; current; current = TreeView_GetNextSibling(tree, current)) {
+    if (std::wstring_view(controller.ItemName(current)) == name) return current;
+    if (const auto found = FindTreeItemByName(controller, tree, TreeView_GetChild(tree, current), name)) return found;
+  }
+  return nullptr;
+}
+
+bool IsTreeItemExpanded(HWND tree, HTREEITEM item) {
+  return item && (TreeView_GetItemState(tree, item, TVIS_EXPANDED) & TVIS_EXPANDED) != 0;
+}
+
+void TestSearchExpandsAndRestoresGroups() {
+  INITCOMMONCONTROLSEX common_controls{sizeof(common_controls), ICC_TREEVIEW_CLASSES};
+  CHECK(InitCommonControlsEx(&common_controls) != FALSE);
+  const HWND tree = CreateWindowExW(0, WC_TREEVIEWW, L"",
+      WS_CHILD | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT,
+      0, 0, 640, 480, GetDesktopWindow(), nullptr, GetModuleHandleW(nullptr), nullptr);
+  CHECK(tree != nullptr);
+  if (!tree) return;
+
+  {
+    ibstart::ui::TreeViewController controller;
+    controller.Attach(tree, GetModuleHandleW(nullptr));
+    auto document = ibstart::v8i::V8iDocument::ParseUtf8(
+        "[Архив]\nFolder=/\n"
+        "[Рабочие базы]\nFolder=/\n"
+        "[Продажи]\nFolder=/Рабочие базы\n"
+        "[Alpha]\nConnect=File=\"C:\\\\alpha\"\nFolder=/Рабочие базы/Продажи\n"
+        "[Beta]\nConnect=File=\"C:\\\\beta\"\nFolder=/Архив\n");
+    ibstart::catalog::Catalog catalog(std::move(document));
+    const ibstart::storage::CatalogState state;
+    const ibstart::ui::presentation::TreeTagFilter tag_filter;
+
+    controller.Populate(catalog, state, {}, L"", tag_filter, false);
+    const HTREEITEM catalog_root = TreeView_GetRoot(tree);
+    const HTREEITEM work_group = FindTreeItemByName(controller, tree, catalog_root, L"Рабочие базы");
+    const HTREEITEM nested_group = FindTreeItemByName(controller, tree, catalog_root, L"Продажи");
+    const HTREEITEM archive_group = FindTreeItemByName(controller, tree, catalog_root, L"Архив");
+    CHECK(catalog_root != nullptr);
+    CHECK(work_group != nullptr && !IsTreeItemExpanded(tree, work_group));
+    CHECK(nested_group != nullptr && !IsTreeItemExpanded(tree, nested_group));
+    CHECK(archive_group != nullptr && !IsTreeItemExpanded(tree, archive_group));
+    if (archive_group) {
+      TreeView_Expand(tree, archive_group, TVE_EXPAND);
+      CHECK(IsTreeItemExpanded(tree, archive_group));
+    }
+
+    controller.Populate(catalog, state, {}, L"alpha", tag_filter, false);
+    const HTREEITEM filtered_root = TreeView_GetRoot(tree);
+    const HTREEITEM filtered_work_group = FindTreeItemByName(controller, tree, filtered_root, L"Рабочие базы");
+    const HTREEITEM filtered_nested_group = FindTreeItemByName(controller, tree, filtered_root, L"Продажи");
+    CHECK(filtered_work_group != nullptr && IsTreeItemExpanded(tree, filtered_work_group));
+    CHECK(filtered_nested_group != nullptr && IsTreeItemExpanded(tree, filtered_nested_group));
+    CHECK(FindTreeItemByName(controller, tree, filtered_root, L"Архив") == nullptr);
+
+    controller.Populate(catalog, state, {}, L"", tag_filter, false);
+    const HTREEITEM restored_root = TreeView_GetRoot(tree);
+    const HTREEITEM restored_work_group = FindTreeItemByName(controller, tree, restored_root, L"Рабочие базы");
+    const HTREEITEM restored_nested_group = FindTreeItemByName(controller, tree, restored_root, L"Продажи");
+    const HTREEITEM restored_archive_group = FindTreeItemByName(controller, tree, restored_root, L"Архив");
+    CHECK(restored_work_group != nullptr && !IsTreeItemExpanded(tree, restored_work_group));
+    CHECK(restored_nested_group != nullptr && !IsTreeItemExpanded(tree, restored_nested_group));
+    CHECK(restored_archive_group != nullptr && IsTreeItemExpanded(tree, restored_archive_group));
+  }
+  DestroyWindow(tree);
 }
 
 void TestRecentDatabaseNames() {
@@ -2078,6 +2148,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"InstanceActivationPayload", TestInstanceActivationPayload);
   run(L"CatalogSearch", TestCatalogSearch);
   run(L"TreeFilters", TestTreeFilters);
+  run(L"SearchExpandsAndRestoresGroups", TestSearchExpandsAndRestoresGroups);
   run(L"RecentDatabaseNames", TestRecentDatabaseNames);
   run(L"StableDatabaseId", TestStableDatabaseId);
   run(L"CaseInsensitiveDatabaseIdentifiers", TestCaseInsensitiveDatabaseIdentifiers);
