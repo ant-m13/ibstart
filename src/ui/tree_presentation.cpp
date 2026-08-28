@@ -138,9 +138,9 @@ std::vector<catalog::TreeItem> FilterTreeItems(const catalog::Catalog& catalog,
     if (const auto found = search_cache.find(&item); found != search_cache.end()) return found->second;
     bool result = search_filter.empty();
     if (!result) {
-      if (const auto* entry = EntryForItem(catalog, item)) {
+      if (const auto* entry = EntryForItem(catalog, item); entry && entry->IsDatabase()) {
         result = catalog::MatchesSearchText(*entry, search_filter);
-        if (!result && entry->IsDatabase()) {
+        if (!result) {
           const auto& entry_tags = TagsFor(tags, *entry);
           result = std::any_of(entry_tags.begin(), entry_tags.end(), [&](const auto& tag) {
             return utf::FindNoCaseOrdinal(tag, search_filter) != std::wstring_view::npos;
@@ -190,14 +190,12 @@ std::vector<catalog::TreeItem> FilterTreeItems(const catalog::Catalog& catalog,
 bool MatchesSearchFilter(const catalog::Catalog& catalog, const catalog::TreeItem& item, std::wstring_view search_filter,
     const storage::DatabaseTags& tags) {
   if (search_filter.empty()) return true;
-  if (const auto* entry = EntryForItem(catalog, item)) {
+  if (const auto* entry = EntryForItem(catalog, item); entry && entry->IsDatabase()) {
     if (catalog::MatchesSearchText(*entry, search_filter)) return true;
-    if (entry->IsDatabase()) {
-      const auto& entry_tags = TagsFor(tags, *entry);
-      if (std::any_of(entry_tags.begin(), entry_tags.end(), [&](const auto& tag) {
-        return utf::FindNoCaseOrdinal(tag, search_filter) != std::wstring_view::npos;
-      })) return true;
-    }
+    const auto& entry_tags = TagsFor(tags, *entry);
+    if (std::any_of(entry_tags.begin(), entry_tags.end(), [&](const auto& tag) {
+      return utf::FindNoCaseOrdinal(tag, search_filter) != std::wstring_view::npos;
+    })) return true;
   }
   return std::any_of(item.children.begin(), item.children.end(), [&](const auto& child) {
     return MatchesSearchFilter(catalog, child, search_filter, tags);
