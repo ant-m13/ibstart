@@ -108,6 +108,8 @@ void TreeViewController::Attach(HWND tree, HINSTANCE instance) {
     images_ = nullptr;
   }
   tree_ = tree;
+  search_active_ = false;
+  pre_search_expansion_states_.reset();
   if (!tree_) return;
 
   TreeView_SetExtendedStyle(tree_, TVS_EX_DOUBLEBUFFER, TVS_EX_DOUBLEBUFFER);
@@ -138,6 +140,8 @@ void TreeViewController::Attach(HWND tree, HINSTANCE instance) {
 
 void TreeViewController::Clear() const {
   if (tree_) TreeView_DeleteAllItems(tree_);
+  search_active_ = false;
+  pre_search_expansion_states_.reset();
 }
 
 void TreeViewController::Populate(const catalog::Catalog& database_catalog,
@@ -149,6 +153,12 @@ void TreeViewController::Populate(const catalog::Catalog& database_catalog,
   // important here: changing a filter or a tag should not destroy an
   // unrelated expanded branch just to recreate the same rows.
   const auto view_state = CaptureViewState();
+  const bool has_search_filter = !search_filter.empty();
+  const bool leaving_search = !has_search_filter && search_active_;
+  ViewState restore_state = view_state;
+  if (leaving_search && pre_search_expansion_states_) {
+    restore_state.expansion_states = *pre_search_expansion_states_;
+  }
   const bool can_suspend_drawing = IsWindow(tree_);
   if (can_suspend_drawing) SendMessageW(tree_, WM_SETREDRAW, FALSE, 0);
   const auto resume_drawing = [&] {
@@ -166,7 +176,7 @@ void TreeViewController::Populate(const catalog::Catalog& database_catalog,
       if (catalog_root) TreeView_Expand(tree_, catalog_root, TVE_EXPAND);
     }
     if (catalog_root) {
-      ReconcileChildren(database_catalog, catalog_items, catalog_root, !search_filter.empty());
+      ReconcileChildren(database_catalog, catalog_items, catalog_root);
     }
 
     if (simple_mode) {
@@ -182,7 +192,13 @@ void TreeViewController::Populate(const catalog::Catalog& database_catalog,
           kRecentImage, kRecentRootItemData, favorites_root ? favorites_root : catalog_root, false);
     }
 
-    RestoreViewState(view_state);
+    RestoreViewState(restore_state, has_search_filter);
+    if (has_search_filter && !search_active_) {
+      pre_search_expansion_states_ = view_state.expansion_states;
+    } else if (!has_search_filter) {
+      pre_search_expansion_states_.reset();
+    }
+    search_active_ = has_search_filter;
   } catch (...) {
     resume_drawing();
     throw;
@@ -208,7 +224,7 @@ void TreeViewController::RefreshRecentBranch(const catalog::Catalog& database_ca
     ReconcileSpecialRoot(database_catalog, catalog_state, filter_favorites, search_filter, tag_filter,
         L"Недавние", recent, kRecentImage, kRecentRootItemData,
         FindTopLevelItem(kFavoritesRootItemData), false);
-    RestoreViewState(view_state);
+    RestoreViewState(view_state, !search_filter.empty());
     if (!selected_recent.empty()) static_cast<void>(SelectItem(selected_recent));
   } catch (...) {
     resume_drawing();
@@ -338,9 +354,10 @@ TreeViewController::ViewState TreeViewController::CaptureViewState() const {
   return result;
 }
 
-void TreeViewController::RestoreViewState(const ViewState& state) const {
+void TreeViewController::RestoreViewState(const ViewState& state, bool expand_visible_branches) const {
   if (!tree_) return;
   RestoreExpansionStates(state.expansion_states);
+  if (expand_visible_branches) ExpandVisibleBranches(TreeView_GetRoot(tree_));
   bool selection_restored = state.selected_name.empty() && state.selected_item_data == 0;
   if (!state.selected_name.empty()) {
     if (const HTREEITEM item = FindItemInBranch(state.selected_name, state.selected_branch_data)) {
@@ -349,8 +366,9 @@ void TreeViewController::RestoreViewState(const ViewState& state) const {
       selection_restored = true;
     }
     // EnsureVisible can expand ancestors of the selected row.  Reapply the
-    // captured state so a refresh never changes a branch the user collapsed.
-    RestoreExpansionStates(state.expansion_states);
+    // captured state so a refresh never changes a branch the user collapsed,
+    // except while search deliberately exposes matching branches.
+    if (!expand_visible_branches) RestoreExpansionStates(state.expansion_states);
   } else if (state.selected_item_data != 0) {
     if (const HTREEITEM item = FindTopLevelItem(state.selected_item_data)) {
       TreeView_SelectItem(tree_, item);
@@ -370,6 +388,18 @@ void TreeViewController::RestoreViewState(const ViewState& state) const {
     if (const HTREEITEM item = FindTopLevelItem(state.first_visible_data)) {
       SendMessageW(tree_, TVM_SELECTITEM, TVGN_FIRSTVISIBLE, reinterpret_cast<LPARAM>(item));
     }
+  }
+}
+
+void TreeViewController::ExpandVisibleBranches(HTREEITEM item) const {
+  if (!tree_) return;
+  // FilterTreeItems leaves only matching rows and their ancestor groups in
+  // the control, so every child-bearing row here is part of a search result.
+  for (auto current = item; current; current = TreeView_GetNextSibling(tree_, current)) {
+    const HTREEITEM child = TreeView_GetChild(tree_, current);
+    if (!child) continue;
+    TreeView_Expand(tree_, current, TVE_EXPAND);
+    ExpandVisibleBranches(child);
   }
 }
 
@@ -411,7 +441,7 @@ HTREEITEM TreeViewController::InsertCatalogRoot() const {
 }
 
 void TreeViewController::AddItems(const catalog::Catalog& database_catalog,
-    const std::vector<catalog::TreeItem>& items, HTREEITEM parent, bool expand_for_search) const {
+    const std::vector<catalog::TreeItem>& items, HTREEITEM parent) const {
   for (const auto& item : items) {
     TVINSERTSTRUCTW row{};
     row.hParent = parent;
@@ -423,14 +453,13 @@ void TreeViewController::AddItems(const catalog::Catalog& database_catalog,
     row.item.iImage = row.item.iSelectedImage = item.database ? DatabaseImage(entry) : kFolderImage;
     const HTREEITEM handle = TreeView_InsertItem(tree_, &row);
     if (handle && !item.database) {
-      AddItems(database_catalog, item.children, handle, expand_for_search);
-      if (expand_for_search) TreeView_Expand(tree_, handle, TVE_EXPAND);
+      AddItems(database_catalog, item.children, handle);
     }
   }
 }
 
 void TreeViewController::ReconcileChildren(const catalog::Catalog& database_catalog,
-    const std::vector<catalog::TreeItem>& items, HTREEITEM parent, bool expand_for_search) const {
+    const std::vector<catalog::TreeItem>& items, HTREEITEM parent) const {
   if (!tree_ || !parent) return;
 
   std::vector<const catalog::TreeItem*> visible;
@@ -461,7 +490,7 @@ void TreeViewController::ReconcileChildren(const catalog::Catalog& database_cata
   }
   if (!std::is_sorted(existing_positions.begin(), existing_positions.end())) {
     DeleteChildren(parent);
-    AddItems(database_catalog, items, parent, expand_for_search);
+    AddItems(database_catalog, items, parent);
     return;
   }
 
@@ -494,8 +523,7 @@ void TreeViewController::ReconcileChildren(const catalog::Catalog& database_cata
     if (item->database) {
       DeleteChildren(handle);
     } else {
-      ReconcileChildren(database_catalog, item->children, handle, expand_for_search);
-      if (expand_for_search) TreeView_Expand(tree_, handle, TVE_EXPAND);
+      ReconcileChildren(database_catalog, item->children, handle);
     }
     previous = handle;
   }
@@ -540,7 +568,7 @@ void TreeViewController::ReconcileSpecialRoot(const catalog::Catalog& database_c
     root.item.iImage = root.item.iSelectedImage = image;
     root_handle = TreeView_InsertItem(tree_, &root);
     if (!root_handle) return;
-    ReconcileChildren(database_catalog, items, root_handle, !search_filter.empty());
+    ReconcileChildren(database_catalog, items, root_handle);
     TreeView_Expand(tree_, root_handle, TVE_EXPAND);
     return;
   }
@@ -553,7 +581,7 @@ void TreeViewController::ReconcileSpecialRoot(const catalog::Catalog& database_c
   root.lParam = item_data;
   root.iImage = root.iSelectedImage = image;
   TreeView_SetItem(tree_, &root);
-  ReconcileChildren(database_catalog, items, root_handle, !search_filter.empty());
+  ReconcileChildren(database_catalog, items, root_handle);
 }
 
 HTREEITEM TreeViewController::FindTopLevelItem(LPARAM item_data) const {
