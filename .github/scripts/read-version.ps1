@@ -11,7 +11,11 @@ if ($matches.Count -ne 1) {
 }
 
 $version = $matches[0].Groups[1].Value
-$semver = '^(0|[1-9]\d*)\.(0|[1-9]\d*)\.(0|[1-9]\d*)(?:-((?:0|[1-9]\d*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(?:\.(?:0|[1-9]\d*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?$'
+$semverPath = Resolve-Path -LiteralPath (Join-Path $PSScriptRoot "..\..\cmake\IBStartSemVer.regex")
+$semver = (Get-Content -Raw -LiteralPath $semverPath).Trim()
+if ([string]::IsNullOrWhiteSpace($semver)) {
+  throw "The shared SemVer regular expression is empty: $semverPath."
+}
 if ($version -notmatch $semver) {
   throw "IBSTART_VERSION '$version' is not valid SemVer without build metadata."
 }

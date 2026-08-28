@@ -1,7 +1,9 @@
 cmake_minimum_required(VERSION 3.24)
 
 include("${CMAKE_CURRENT_SOURCE_DIR}/cmake/IBStartVersion.cmake")
-if(NOT IBSTART_VERSION MATCHES "^([0-9]+)\\.([0-9]+)\\.([0-9]+)(-([0-9A-Za-z]+)(\\.([0-9A-Za-z.-]+))?)?$")
+file(READ "${CMAKE_CURRENT_SOURCE_DIR}/cmake/IBStartSemVer.regex" IBSTART_SEMVER_REGEX)
+string(STRIP "${IBSTART_SEMVER_REGEX}" IBSTART_SEMVER_REGEX)
+if(NOT "${IBSTART_VERSION}" MATCHES "${IBSTART_SEMVER_REGEX}")
   message(FATAL_ERROR "IBSTART_VERSION must be SemVer without build metadata: ${IBSTART_VERSION}")
 endif()
 set(IBSTART_VERSION_MAJOR "${CMAKE_MATCH_1}")
@@ -136,5 +138,7 @@ if(BUILD_TESTING)
     UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
   target_compile_options(ibstart_tests PRIVATE /W4 /WX /permissive- /EHsc /Zc:__cplusplus /utf-8)
   add_test(NAME ibstart.unit COMMAND ibstart_tests)
+  add_test(NAME ibstart.version_validation COMMAND "${CMAKE_COMMAND}" -P
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/test-version-validation.cmake")
   set_tests_properties(ibstart.unit PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()
