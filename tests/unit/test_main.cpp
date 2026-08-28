@@ -1412,12 +1412,12 @@ void TestStorageRepositoryMergesStaleSnapshots() {
   ibstart::storage::SettingsRepository secondSettings(layout);
   const auto firstSnapshot = firstSettings.Read();
   const auto secondSnapshot = secondSettings.Read();
-  auto firstUpdate = firstSnapshot;
-  firstUpdate.simple_mode = true;
-  firstSettings.Save(firstUpdate);
-  auto secondUpdate = secondSnapshot;
-  secondUpdate.show_tags_in_list = false;
-  secondSettings.Save(secondUpdate);
+  auto firstSettingsUpdate = firstSnapshot;
+  firstSettingsUpdate.simple_mode = true;
+  firstSettings.Save(firstSettingsUpdate);
+  auto secondSettingsUpdate = secondSnapshot;
+  secondSettingsUpdate.show_tags_in_list = false;
+  secondSettings.Save(secondSettingsUpdate);
 
   const auto mergedSettings = ibstart::storage::LoadSettings(layout);
   CHECK(mergedSettings.simple_mode);
