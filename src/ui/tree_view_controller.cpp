@@ -304,6 +304,14 @@ std::optional<size_t> TreeViewController::SelectedSectionIndex() const {
   return SectionIndex(tree_ ? TreeView_GetSelection(tree_) : nullptr);
 }
 
+std::optional<size_t> TreeViewController::SelectedSectionIndex(const catalog::Catalog& database_catalog) const {
+  const auto selected_index = SelectedSectionIndex();
+  if (!selected_index) return std::nullopt;
+  const auto* entry = database_catalog.FindBySectionIndex(*selected_index);
+  if (!entry || !EqualNoCase(SelectedName(), entry->name)) return std::nullopt;
+  return selected_index;
+}
+
 bool TreeViewController::SelectedItemIsRecentRoot() const {
   return tree_ && ItemData(TreeView_GetSelection(tree_)) == kRecentRootItemData;
 }
