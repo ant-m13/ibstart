@@ -1,6 +1,68 @@
 #include "ui/dialog_support.hpp"
 
+#include <ShObjIdl.h>
+
 #include <algorithm>
+#include <string>
+
+namespace {
+
+template <typename Interface>
+class ComPtr final {
+ public:
+  explicit ComPtr(Interface* value = nullptr) : value_(value) {}
+  ~ComPtr() { if (value_) value_->Release(); }
+
+  ComPtr(const ComPtr&) = delete;
+  ComPtr& operator=(const ComPtr&) = delete;
+
+  [[nodiscard]] Interface* get() const noexcept { return value_; }
+  [[nodiscard]] Interface* operator->() const noexcept { return value_; }
+
+ private:
+  Interface* value_{};
+};
+
+std::optional<std::filesystem::path> DialogResultPath(IFileDialog* dialog) {
+  IShellItem* raw_item{};
+  if (FAILED(dialog->GetResult(&raw_item))) return std::nullopt;
+  ComPtr<IShellItem> item(raw_item);
+
+  PWSTR raw_path{};
+  if (FAILED(item->GetDisplayName(SIGDN_FILESYSPATH, &raw_path)) || !raw_path) return std::nullopt;
+  std::filesystem::path path(raw_path);
+  CoTaskMemFree(raw_path);
+  return path;
+}
+
+std::optional<std::filesystem::path> ShowCatalogFileDialog(HWND owner, bool save) {
+  IFileDialog* raw_dialog{};
+  const CLSID class_id = save ? CLSID_FileSaveDialog : CLSID_FileOpenDialog;
+  if (FAILED(CoCreateInstance(class_id, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&raw_dialog)))) {
+    return std::nullopt;
+  }
+  ComPtr<IFileDialog> dialog(raw_dialog);
+
+  const std::wstring title = save ? L"Сохранить список баз" : L"Открыть список баз";
+  const COMDLG_FILTERSPEC filters[] = {
+      {L"Списки баз 1С (*.v8i)", L"*.v8i"},
+      {L"Все файлы (*.*)", L"*.*"},
+  };
+  if (FAILED(dialog->SetTitle(title.c_str())) || FAILED(dialog->SetFileTypes(2, filters)) ||
+      FAILED(dialog->SetDefaultExtension(L"v8i"))) {
+    return std::nullopt;
+  }
+  if (save && FAILED(dialog->SetFileName(L"ibases.v8i"))) return std::nullopt;
+
+  DWORD options{};
+  if (FAILED(dialog->GetOptions(&options))) return std::nullopt;
+  options |= FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST;
+  options |= save ? FOS_OVERWRITEPROMPT : FOS_FILEMUSTEXIST;
+  if (FAILED(dialog->SetOptions(options)) || FAILED(dialog->Show(owner))) return std::nullopt;
+  return DialogResultPath(dialog.get());
+}
+
+}  // namespace
 
 namespace ibstart::ui::dialog {
 
@@ -70,6 +132,31 @@ void RestoreModalOwner(HWND owner) {
   if (!owner || !IsWindow(owner)) return;
   EnableWindow(owner, TRUE);
   SetActiveWindow(owner);
+}
+
+std::optional<std::filesystem::path> OpenCatalogFile(HWND owner) {
+  return ShowCatalogFileDialog(owner, false);
+}
+
+std::optional<std::filesystem::path> SaveCatalogFile(HWND owner) {
+  return ShowCatalogFileDialog(owner, true);
+}
+
+std::optional<std::filesystem::path> PickFolder(HWND owner, std::wstring_view title) {
+  IFileOpenDialog* raw_dialog{};
+  if (FAILED(CoCreateInstance(CLSID_FileOpenDialog, nullptr, CLSCTX_INPROC_SERVER,
+          IID_PPV_ARGS(&raw_dialog)))) {
+    return std::nullopt;
+  }
+  ComPtr<IFileOpenDialog> dialog(raw_dialog);
+  const std::wstring dialog_title(title);
+  if (FAILED(dialog->SetTitle(dialog_title.c_str()))) return std::nullopt;
+
+  DWORD options{};
+  if (FAILED(dialog->GetOptions(&options))) return std::nullopt;
+  options |= FOS_FORCEFILESYSTEM | FOS_PATHMUSTEXIST | FOS_PICKFOLDERS;
+  if (FAILED(dialog->SetOptions(options)) || FAILED(dialog->Show(owner))) return std::nullopt;
+  return DialogResultPath(dialog.get());
 }
 
 }  // namespace ibstart::ui::dialog

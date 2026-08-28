@@ -5,9 +5,9 @@
 
 #include "core/catalog/catalog.hpp"
 #include "core/connection/connection_string.hpp"
+#include "core/windows_path.hpp"
 
 #include <CommCtrl.h>
-#include <ShlObj.h>
 
 #include <algorithm>
 #include <cwctype>
@@ -201,15 +201,18 @@ void UpdateConnectionControls(DatabaseEditorState& state) {
 }
 
 void BrowseForFileBase(HWND window, DatabaseEditorState& state) {
-  BROWSEINFOW info{};
-  info.hwndOwner = window;
-  info.lpszTitle = L"Выберите каталог файловой информационной базы";
-  const PIDLIST_ABSOLUTE id = SHBrowseForFolderW(&info);
-  if (!id) return;
-  wchar_t path[MAX_PATH]{};
-  const bool valid = SHGetPathFromIDListW(id, path);
-  CoTaskMemFree(id);
-  if (valid) SetWindowTextW(state.file, path);
+  const auto path = PickFolder(window, L"Выберите каталог файловой информационной базы");
+  if (!path) return;
+  if (!windows_path::IsWithinLimit(*path)) {
+    Message(window, windows_path::LengthError(*path), L"Слишком длинный путь", MB_OK | MB_ICONWARNING);
+    return;
+  }
+  const auto database_file = *path / L"1Cv8.1CD";
+  if (!windows_path::IsWithinLimit(database_file)) {
+    Message(window, windows_path::LengthError(database_file), L"Слишком длинный путь", MB_OK | MB_ICONWARNING);
+    return;
+  }
+  SetWindowTextW(state.file, path->c_str());
 }
 
 std::optional<std::wstring> CollectDatabaseEditorResult(DatabaseEditorState& state) {
@@ -223,7 +226,12 @@ std::optional<std::wstring> CollectDatabaseEditorResult(DatabaseEditorState& sta
   const auto reference = TrimText(ReadControlText(state.reference));
   if (state.kind == DatabaseConnectionKind::file && file.empty()) return L"Укажите путь к файловой базе.";
   if (state.kind == DatabaseConnectionKind::file) {
-    const auto path_status = catalog::CheckFileDatabasePath(std::filesystem::path(file));
+    const std::filesystem::path database_path(file);
+    if (!windows_path::IsWithinLimit(database_path)) return windows_path::LengthError(database_path);
+    const auto database_file = database_path / L"1Cv8.1CD";
+    if (!windows_path::IsWithinLimit(database_file)) return windows_path::LengthError(database_file);
+    const auto path_status = catalog::CheckFileDatabasePath(database_path);
+    if (path_status == catalog::FileDatabasePathStatus::too_long) return windows_path::LengthError(database_file);
     if (path_status == catalog::FileDatabasePathStatus::missing) {
       return IsUncPath(file)
           ? L"UNC-каталог файловой базы не содержит файл 1Cv8.1CD. Сохранение заблокировано; проверьте сетевой путь и содержимое базы."

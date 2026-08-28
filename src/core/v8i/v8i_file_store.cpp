@@ -1,6 +1,7 @@
 #include "core/v8i/v8i_file_store.hpp"
 
 #include "core/domain/utf.hpp"
+#include "core/windows_path.hpp"
 
 #include <Windows.h>
 
@@ -29,6 +30,11 @@ std::string FileSizeLimitFailure(std::string_view action, const std::filesystem:
     std::uintmax_t size, std::uintmax_t limit) {
   return std::string(action) + ": " + PathText(path) + " is " + std::to_string(size) +
       " bytes, exceeding the " + std::to_string(limit / (1024ULL * 1024ULL)) + " MiB safety limit.";
+}
+
+void EnsureSupportedPath(const std::filesystem::path& path, std::string_view action) {
+  if (windows_path::IsWithinLimit(path)) return;
+  throw std::runtime_error(std::string(action) + ": " + utf::ToUtf8(windows_path::LengthError(path)));
 }
 
 std::wstring Timestamp() {
@@ -60,9 +66,11 @@ bool IsManagedBackupName(std::wstring_view filename, std::wstring_view prefix) {
 }
 
 std::filesystem::path UniqueTemporaryPath(const std::filesystem::path& target) {
+  EnsureSupportedPath(target, "ibases.v8i path is too long");
   const auto base = target.filename().wstring() + L".ibstart.tmp." + std::to_wstring(GetCurrentProcessId());
   for (unsigned attempt = 0; attempt != 100; ++attempt) {
     const auto candidate = target.parent_path() / (base + L"." + std::to_wstring(attempt));
+    EnsureSupportedPath(candidate, "Temporary ibases.v8i path is too long");
     std::error_code error;
     if (!std::filesystem::exists(candidate, error)) {
       if (error) throw std::runtime_error(FilesystemFailure("Cannot inspect temporary ibases.v8i path", candidate, error));
@@ -126,9 +134,12 @@ class SaveMutex final {
 
 }  // namespace
 
-V8iFileStore::V8iFileStore(std::filesystem::path path) : path_(std::move(path)) {}
+V8iFileStore::V8iFileStore(std::filesystem::path path) : path_(std::move(path)) {
+  EnsureSupportedPath(path_, "ibases.v8i path is too long");
+}
 
 std::optional<V8iFileStore::Fingerprint> V8iFileStore::FingerprintOf(const std::filesystem::path& path) {
+  EnsureSupportedPath(path, "ibases.v8i path is too long");
   std::error_code error;
   const bool exists = std::filesystem::exists(path, error);
   if (error) throw std::runtime_error(FilesystemFailure("Cannot inspect ibases.v8i", path, error));
@@ -188,6 +199,7 @@ void V8iFileStore::AcceptCurrentContentsForOverwrite() {
 }
 
 void V8iFileStore::CreateBackup() const {
+  EnsureSupportedPath(path_, "ibases.v8i path is too long");
   std::error_code error;
   if (!std::filesystem::exists(path_, error)) {
     if (error) throw std::runtime_error(FilesystemFailure("Cannot inspect ibases.v8i before backup", path_, error));
@@ -196,6 +208,7 @@ void V8iFileStore::CreateBackup() const {
   const auto prefix = path_.filename().wstring() + L".bak_" + Timestamp();
   auto backup = path_.parent_path() / prefix;
   for (unsigned suffix = 1;; ++suffix) {
+    EnsureSupportedPath(backup, "ibases.v8i backup path is too long");
     const bool exists = std::filesystem::exists(backup, error);
     if (error) throw std::runtime_error(FilesystemFailure("Cannot allocate ibases.v8i backup path", backup, error));
     if (!exists) break;

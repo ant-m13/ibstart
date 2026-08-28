@@ -2,6 +2,7 @@
 
 #include "core/connection/connection_string.hpp"
 #include "core/domain/utf.hpp"
+#include "core/windows_path.hpp"
 
 #include <Windows.h>
 #include <objbase.h>
@@ -192,8 +193,11 @@ domain::Database MakeDatabase(const domain::Entry& entry) {
 
 FileDatabasePathStatus CheckFileDatabasePath(const std::filesystem::path& directory) {
   if (directory.empty()) return FileDatabasePathStatus::missing;
+  if (!windows_path::IsWithinLimit(directory)) return FileDatabasePathStatus::too_long;
+  const auto database_file = directory / L"1Cv8.1CD";
+  if (!windows_path::IsWithinLimit(database_file)) return FileDatabasePathStatus::too_long;
   std::error_code error;
-  if (std::filesystem::is_regular_file(directory / L"1Cv8.1CD", error)) return FileDatabasePathStatus::valid;
+  if (std::filesystem::is_regular_file(database_file, error)) return FileDatabasePathStatus::valid;
   return !error || IsMissingPathError(error) ? FileDatabasePathStatus::missing : FileDatabasePathStatus::inaccessible;
 }
 
@@ -248,6 +252,15 @@ void Catalog::EnsureLookup() const {
     if (entry.IsDatabase()) {
       if (entry.ValueOr(L"Connect").empty()) {
         add_warning(position, L"Пустая строка подключения Connect у базы: " + entry.name);
+      }
+      const auto file_directory = std::filesystem::path(connection::ValueOrEmpty(entry.ValueOr(L"Connect"), L"File"));
+      if (!file_directory.empty()) {
+        const auto database_file = file_directory / L"1Cv8.1CD";
+        if (!windows_path::IsWithinLimit(file_directory)) {
+          add_diagnostic(position, windows_path::LengthError(file_directory));
+        } else if (!windows_path::IsWithinLimit(database_file)) {
+          add_diagnostic(position, windows_path::LengthError(database_file));
+        }
       }
       if (const auto* id_field = entry.Find(L"ID"); id_field && id_field->value.empty()) {
         add_warning(position, L"Пустой ID базы; для внутренних связей используется имя: " + entry.name);

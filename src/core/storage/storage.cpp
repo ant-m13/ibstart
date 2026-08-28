@@ -2,6 +2,7 @@
 
 #include "core/domain/utf.hpp"
 #include "core/storage/json_codec.hpp"
+#include "core/windows_path.hpp"
 
 #include <Windows.h>
 
@@ -23,7 +24,11 @@ namespace ibstart::storage {
 namespace {
 
 std::filesystem::path PathFor(const StorageLayout& layout, std::wstring_view name) {
-  return layout.root / std::wstring(name);
+  const auto path = layout.root / std::wstring(name);
+  if (!windows_path::IsWithinLimit(path)) {
+    throw std::runtime_error("Application data path is too long: " + utf::ToUtf8(windows_path::LengthError(path)));
+  }
+  return path;
 }
 
 std::wstring NormalizedStoragePath(const std::filesystem::path& path) {
@@ -48,6 +53,9 @@ std::string FileSizeLimitFailure(std::string_view action, const std::filesystem:
 }
 
 std::optional<StorageFingerprint> FingerprintOf(const std::filesystem::path& path) {
+  if (!windows_path::IsWithinLimit(path)) {
+    throw std::runtime_error("Application data path is too long: " + utf::ToUtf8(windows_path::LengthError(path)));
+  }
   std::error_code error;
   const bool exists = std::filesystem::exists(path, error);
   if (error) throw std::runtime_error("Cannot inspect application data file: " + utf::ToUtf8(path.wstring()) + ": " + error.message());
@@ -120,6 +128,9 @@ void VerifyFingerprint(const std::filesystem::path& path,
 
 void WriteAtomically(const std::filesystem::path& path, std::string_view contents,
     const std::optional<StorageFingerprint>& expected) {
+  if (!windows_path::IsWithinLimit(path)) {
+    throw std::runtime_error("Application data path is too long: " + utf::ToUtf8(windows_path::LengthError(path)));
+  }
   if (contents.size() > kMaxStorageFileSize) {
     throw std::runtime_error(FileSizeLimitFailure("Cannot save application data file", path,
         contents.size(), kMaxStorageFileSize));
@@ -129,12 +140,20 @@ void WriteAtomically(const std::filesystem::path& path, std::string_view content
   if (error) throw std::runtime_error("Cannot create application data directory: " + error.message());
   VerifyFingerprint(path, expected);
   const auto temporary_base = path.wstring() + L".tmp." + std::to_wstring(GetCurrentProcessId());
+  if (!windows_path::IsWithinLimit(std::filesystem::path(temporary_base))) {
+    throw std::runtime_error("Temporary application data path is too long: " +
+        utf::ToUtf8(windows_path::LengthError(std::filesystem::path(temporary_base))));
+  }
   std::filesystem::path temporary;
   bool allocated = false;
   for (unsigned suffix = 0; suffix != 1000; ++suffix) {
     auto candidate = temporary_base;
     if (suffix != 0) candidate += L"." + std::to_wstring(suffix);
     temporary = std::filesystem::path(std::move(candidate));
+    if (!windows_path::IsWithinLimit(temporary)) {
+      throw std::runtime_error("Temporary application data path is too long: " +
+          utf::ToUtf8(windows_path::LengthError(temporary)));
+    }
     error.clear();
     const bool exists = std::filesystem::exists(temporary, error);
     if (error) throw std::runtime_error("Cannot inspect temporary application data path: " + error.message());
