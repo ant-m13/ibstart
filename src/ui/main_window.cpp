@@ -519,7 +519,10 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
 
 void MainWindow::CreateControls() {
   HWND searchLabel = CreateWindowW(L"STATIC", L"Поиск:", WS_CHILD | WS_VISIBLE, 8, 10, 50, 20, window_, nullptr, instance_, nullptr);
-  search_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | ES_AUTOHSCROLL, 58, 7, 600, 25, window_, nullptr, instance_, nullptr);
+  // The clear button overlaps the edit's right edge. Keep the edit from
+  // painting over that sibling when it repaints after mouse or focus changes.
+  search_ = CreateWindowExW(WS_EX_CLIENTEDGE, L"EDIT", L"", WS_CHILD | WS_VISIBLE | WS_TABSTOP | WS_CLIPSIBLINGS | ES_AUTOHSCROLL,
+      58, 7, 600, 25, window_, nullptr, instance_, nullptr);
   search_clear_ = CreateWindowW(L"BUTTON", L"Очистить поиск", WS_CHILD | WS_VISIBLE | WS_TABSTOP | BS_OWNERDRAW,
       0, 0, kSearchClearButtonWidth, kSearchClearButtonHeight, window_,
       reinterpret_cast<HMENU>(kClearSearch), instance_, nullptr);
