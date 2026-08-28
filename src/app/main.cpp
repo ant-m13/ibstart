@@ -44,8 +44,20 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     MessageBoxW(nullptr, L"Не удалось инициализировать системные элементы управления.", L"ИБ Старт", MB_OK | MB_ICONERROR);
     return 1;
   }
+  std::filesystem::path executable;
+  ibstart::storage::StorageLayout layout;
+  try {
+    executable = ExecutablePath();
+    layout = ibstart::storage::ResolveLayout(executable);
+  } catch (const std::exception& error) {
+    MessageBoxW(nullptr, (L"Не удалось определить профиль ИБ Старт.\n" + ErrorText(error)).c_str(),
+        L"ИБ Старт", MB_OK | MB_ICONERROR);
+    return 1;
+  }
+
+  const auto mutex_name = ibstart::storage::InstanceMutexName(layout);
   SetLastError(ERROR_SUCCESS);
-  HANDLE mutex = CreateMutexW(nullptr, TRUE, L"Local\\IBStart.SingleInstance.0.1");
+  HANDLE mutex = CreateMutexW(nullptr, TRUE, mutex_name.c_str());
   if (!mutex) {
     MessageBoxW(nullptr, L"Не удалось включить защиту от запуска нескольких экземпляров.", L"ИБ Старт", MB_OK | MB_ICONERROR);
     return 1;
@@ -81,8 +93,12 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
     return 1;
   }
   try {
-    const auto executable = ExecutablePath(); const auto layout = ibstart::storage::ResolveLayout(executable); ibstart::storage::EnsureWritable(layout); const auto settings = ibstart::storage::LoadSettings(layout);
-    ibstart::ui::MainWindow window(instance, executable, layout, settings, launchId); const int result = window.Show(show_command); if (SUCCEEDED(apartment)) CoUninitialize(); CloseHandle(mutex); return result;
+    ibstart::storage::EnsureWritable(layout);
+    ibstart::ui::MainWindow window(instance, executable, layout, launchId);
+    const int result = window.Show(show_command);
+    if (SUCCEEDED(apartment)) CoUninitialize();
+    CloseHandle(mutex);
+    return result;
   } catch (const std::exception& error) { MessageBoxW(nullptr, (L"Не удалось запустить ИБ Старт.\n" + ErrorText(error)).c_str(), L"ИБ Старт", MB_OK | MB_ICONERROR); if (SUCCEEDED(apartment)) CoUninitialize(); CloseHandle(mutex); return 1; }
   catch (...) { MessageBoxW(nullptr, L"Не удалось запустить ИБ Старт из-за неизвестной ошибки.", L"ИБ Старт", MB_OK | MB_ICONERROR); if (SUCCEEDED(apartment)) CoUninitialize(); CloseHandle(mutex); return 1; }
 }

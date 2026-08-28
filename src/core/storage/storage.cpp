@@ -8,8 +8,12 @@
 #include <algorithm>
 #include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <ctime>
+#include <cwctype>
 #include <fstream>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 #include <string_view>
 #include <system_error>
@@ -22,10 +26,83 @@ std::filesystem::path PathFor(const StorageLayout& layout, std::wstring_view nam
   return layout.root / std::wstring(name);
 }
 
-void WriteAtomically(const std::filesystem::path& path, std::string_view contents) {
+std::wstring NormalizedStoragePath(const std::filesystem::path& path) {
+  std::error_code error;
+  auto normalized = std::filesystem::weakly_canonical(path, error);
+  if (error) {
+    error.clear();
+    normalized = std::filesystem::absolute(path, error);
+    if (error) normalized = path.lexically_normal();
+  }
+  auto result = normalized.wstring();
+  std::transform(result.begin(), result.end(), result.begin(), [](wchar_t character) {
+    return static_cast<wchar_t>(std::towlower(character));
+  });
+  return result;
+}
+
+std::optional<StorageFingerprint> FingerprintOf(const std::filesystem::path& path) {
+  std::error_code error;
+  const bool exists = std::filesystem::exists(path, error);
+  if (error) throw std::runtime_error("Cannot inspect application data file: " + utf::ToUtf8(path.wstring()) + ": " + error.message());
+  if (!exists) return std::nullopt;
+  if (!std::filesystem::is_regular_file(path, error)) {
+    if (error) throw std::runtime_error("Cannot inspect application data file: " + utf::ToUtf8(path.wstring()) + ": " + error.message());
+    throw std::runtime_error("Application data path is not a regular file: " + utf::ToUtf8(path.wstring()));
+  }
+  const auto size = std::filesystem::file_size(path, error);
+  if (error) throw std::runtime_error("Cannot inspect application data file: " + utf::ToUtf8(path.wstring()) + ": " + error.message());
+  const auto write_time = std::filesystem::last_write_time(path, error);
+  if (error) throw std::runtime_error("Cannot inspect application data file: " + utf::ToUtf8(path.wstring()) + ": " + error.message());
+
+  std::ifstream input(path, std::ios::binary);
+  if (!input) throw std::runtime_error("Cannot open application data file: " + utf::ToUtf8(path.wstring()));
+  std::uint64_t hash = 1469598103934665603ULL;
+  char buffer[8192];
+  while (input.read(buffer, sizeof(buffer)) || input.gcount() > 0) {
+    for (std::streamsize index = 0; index < input.gcount(); ++index) {
+      hash ^= static_cast<unsigned char>(buffer[index]);
+      hash *= 1099511628211ULL;
+    }
+  }
+  if (!input.eof()) throw std::runtime_error("Cannot read application data file completely: " + utf::ToUtf8(path.wstring()));
+  return StorageFingerprint{size, write_time, hash};
+}
+
+struct FileSnapshot {
+  std::string contents;
+  std::optional<StorageFingerprint> fingerprint;
+};
+
+FileSnapshot ReadFileSnapshot(const std::filesystem::path& path) {
+  const auto before = FingerprintOf(path);
+  if (!before) return {{}, std::nullopt};
+
+  std::ifstream input(path, std::ios::binary);
+  if (!input) throw std::runtime_error("Cannot open application data file: " + utf::ToUtf8(path.wstring()));
+  std::string contents((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+  if (!input.good() && !input.eof()) throw std::runtime_error("Cannot read application data file completely: " + utf::ToUtf8(path.wstring()));
+
+  const auto after = FingerprintOf(path);
+  if (before != after) {
+    throw StorageConflictError("Application data file changed while it was being read: " + utf::ToUtf8(path.wstring()));
+  }
+  return {std::move(contents), after};
+}
+
+void VerifyFingerprint(const std::filesystem::path& path,
+    const std::optional<StorageFingerprint>& expected) {
+  if (FingerprintOf(path) != expected) {
+    throw StorageConflictError("Application data file was changed by another process: " + utf::ToUtf8(path.wstring()));
+  }
+}
+
+void WriteAtomically(const std::filesystem::path& path, std::string_view contents,
+    const std::optional<StorageFingerprint>& expected) {
   std::error_code error;
   if (!path.parent_path().empty()) std::filesystem::create_directories(path.parent_path(), error);
   if (error) throw std::runtime_error("Cannot create application data directory: " + error.message());
+  VerifyFingerprint(path, expected);
   const auto temporary_base = path.wstring() + L".tmp." + std::to_wstring(GetCurrentProcessId());
   std::filesystem::path temporary;
   bool allocated = false;
@@ -50,6 +127,10 @@ void WriteAtomically(const std::filesystem::path& path, std::string_view content
       output.flush();
       if (!output) throw std::runtime_error("Cannot write application data.");
     }
+    // The profile mutex serializes cooperating writers; this check also
+    // rejects an external writer that changed the file while the temporary
+    // contents were built.
+    VerifyFingerprint(path, expected);
     if (!MoveFileExW(temporary.c_str(), path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH)) {
       throw std::runtime_error("Cannot save application data: " + utf::ToUtf8(utf::LastErrorMessage()));
     }
@@ -59,21 +140,38 @@ void WriteAtomically(const std::filesystem::path& path, std::string_view content
   }
 }
 
-std::string ReadFile(const std::filesystem::path& path) {
-  std::error_code error;
-  const bool exists = std::filesystem::exists(path, error);
-  if (error) throw std::runtime_error("Cannot inspect application data file: " + utf::ToUtf8(path.wstring()) + ": " + error.message());
-  if (!exists) return {};
-  if (!std::filesystem::is_regular_file(path, error)) {
-    if (error) throw std::runtime_error("Cannot inspect application data file: " + utf::ToUtf8(path.wstring()) + ": " + error.message());
-    throw std::runtime_error("Application data path is not a regular file: " + utf::ToUtf8(path.wstring()));
+class StorageMutex final {
+ public:
+  explicit StorageMutex(const StorageLayout& layout) {
+    const auto name = StorageMutexName(layout);
+    handle_ = CreateMutexW(nullptr, FALSE, name.c_str());
+    if (!handle_) {
+      const DWORD last_error = GetLastError();
+      throw std::runtime_error("Cannot create application data mutex: " + utf::ToUtf8(utf::LastErrorMessage(last_error)));
+    }
+    const DWORD wait = WaitForSingleObject(handle_, INFINITE);
+    if (wait == WAIT_OBJECT_0 || wait == WAIT_ABANDONED) {
+      acquired_ = true;
+      return;
+    }
+    const DWORD last_error = wait == WAIT_FAILED ? GetLastError() : ERROR_GEN_FAILURE;
+    CloseHandle(handle_);
+    handle_ = nullptr;
+    throw std::runtime_error("Cannot acquire application data mutex: " + utf::ToUtf8(utf::LastErrorMessage(last_error)));
   }
-  std::ifstream input(path, std::ios::binary);
-  if (!input) throw std::runtime_error("Cannot open application data file: " + utf::ToUtf8(path.wstring()));
-  const std::string contents((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
-  if (!input.good() && !input.eof()) throw std::runtime_error("Cannot read application data file completely: " + utf::ToUtf8(path.wstring()));
-  return contents;
-}
+
+  ~StorageMutex() {
+    if (acquired_) ReleaseMutex(handle_);
+    if (handle_) CloseHandle(handle_);
+  }
+
+  StorageMutex(const StorageMutex&) = delete;
+  StorageMutex& operator=(const StorageMutex&) = delete;
+
+ private:
+  HANDLE handle_{};
+  bool acquired_{false};
+};
 
 bool IsValidHistoryItem(const domain::HistoryItem& item) noexcept {
   const auto mode = static_cast<int>(item.mode);
@@ -138,6 +236,34 @@ void AddTagAssignment(DatabaseTags& tags, std::wstring id, std::vector<std::wstr
 
 }  // namespace
 
+namespace {
+
+std::uint64_t StoragePathHash(const StorageLayout& layout) {
+  const auto key = NormalizedStoragePath(layout.root);
+  std::uint64_t hash = 1469598103934665603ULL;
+  for (const wchar_t character : key) {
+    hash ^= static_cast<std::uint16_t>(character);
+    hash *= 1099511628211ULL;
+  }
+  return hash;
+}
+
+std::wstring ProfileMutexName(std::wstring_view kind, const StorageLayout& layout) {
+  std::wostringstream name;
+  name << L"Global\\IBStart." << kind << L"." << std::hex << std::setw(16) << std::setfill(L'0') << StoragePathHash(layout);
+  return name.str();
+}
+
+}  // namespace
+
+std::wstring StorageMutexName(const StorageLayout& layout) {
+  return ProfileMutexName(L"Storage", layout);
+}
+
+std::wstring InstanceMutexName(const StorageLayout& layout) {
+  return ProfileMutexName(L"Instance", layout);
+}
+
 void NormalizeCatalogState(CatalogState& state) {
   std::vector<std::wstring> favorites;
   favorites.reserve(std::min(state.favorites.size(), kMaxFavorites));
@@ -169,9 +295,10 @@ void NormalizeCatalogState(CatalogState& state) {
   state.history = std::move(history);
 }
 
-Settings LoadSettings(const StorageLayout& layout) {
+namespace {
+
+Settings ParseSettings(std::string_view contents) {
   Settings result;
-  const auto contents = ReadFile(PathFor(layout, L"settings.json"));
   if (const auto root = json::RootObject(contents)) {
     if (const auto active = json::ObjectString(*root, "active_ibases")) result.active_ibases = *active;
     if (const auto selected = json::ObjectString(*root, "selected_entry")) result.selected_entry = *selected;
@@ -192,7 +319,7 @@ Settings LoadSettings(const StorageLayout& layout) {
   return result;
 }
 
-void SaveSettings(const StorageLayout& layout, const Settings& settings) {
+std::string SerializeSettings(const Settings& settings) {
   std::string json = "{\n  \"active_ibases\": \"" + ::ibstart::storage::json::Escape(settings.active_ibases.wstring()) + "\",\n";
   json += "  \"selected_entry\": \"" + ::ibstart::storage::json::Escape(settings.selected_entry) + "\",\n";
   json += "  \"simple_mode\": " + std::string(settings.simple_mode ? "1" : "0") + ",\n";
@@ -210,12 +337,11 @@ void SaveSettings(const StorageLayout& layout, const Settings& settings) {
     json += "{\"platform_path\": \"" + ::ibstart::storage::json::Escape(settings.platform_search_paths[index].wstring()) + "\"}";
   }
   json += "]\n}\n";
-  WriteAtomically(PathFor(layout, L"settings.json"), json);
+  return json;
 }
 
-CatalogState LoadCatalogState(const StorageLayout& layout) {
+CatalogState ParseCatalogState(std::string_view contents) {
   CatalogState result;
-  const auto contents = ReadFile(PathFor(layout, L"catalog-state.json"));
   if (const auto root = json::RootObject(contents)) {
     json::ForEachArrayObject(*root, "favorites", [&](const json::Object& object) {
       if (const auto favorite = json::ObjectString(object, "favorite")) AddFavorite(result, *favorite);
@@ -262,7 +388,7 @@ CatalogState LoadCatalogState(const StorageLayout& layout) {
   return result;
 }
 
-void SaveCatalogState(const StorageLayout& layout, const CatalogState& state) {
+std::string SerializeCatalogState(const CatalogState& state) {
   CatalogState normalized = state;
   NormalizeCatalogState(normalized);
   std::string json = "{\n  \"schema_version\": 1,\n  \"favorites\": [";
@@ -307,26 +433,136 @@ void SaveCatalogState(const StorageLayout& layout, const CatalogState& state) {
         std::to_string(style.background) + ", \"text\": " + std::to_string(style.text) + "}";
   }
   json += "]\n}\n";
-  WriteAtomically(PathFor(layout, L"catalog-state.json"), json);
+  return json;
+}
+
+void SaveFile(const StorageLayout& layout, const std::filesystem::path& path, std::string_view contents) {
+  StorageMutex mutex(layout);
+  const auto expected = FingerprintOf(path);
+  WriteAtomically(path, contents, expected);
+}
+
+std::optional<StorageFingerprint> TryFingerprintOf(const std::filesystem::path& path) noexcept {
+  try {
+    return FingerprintOf(path);
+  } catch (...) {
+    return std::nullopt;
+  }
+}
+
+void MergeChangedSettings(Settings& target, const Settings& baseline, const Settings& requested) {
+  if (requested.active_ibases != baseline.active_ibases) target.active_ibases = requested.active_ibases;
+  if (requested.selected_entry != baseline.selected_entry) target.selected_entry = requested.selected_entry;
+  if (requested.simple_mode != baseline.simple_mode) target.simple_mode = requested.simple_mode;
+  if (requested.show_tags_in_list != baseline.show_tags_in_list) target.show_tags_in_list = requested.show_tags_in_list;
+  if (requested.folders_first_when_sorting != baseline.folders_first_when_sorting) {
+    target.folders_first_when_sorting = requested.folders_first_when_sorting;
+  }
+  if (requested.recent_ibases != baseline.recent_ibases) target.recent_ibases = requested.recent_ibases;
+  if (requested.platform_search_paths != baseline.platform_search_paths) {
+    target.platform_search_paths = requested.platform_search_paths;
+  }
+  if (requested.window_x != baseline.window_x) target.window_x = requested.window_x;
+  if (requested.window_y != baseline.window_y) target.window_y = requested.window_y;
+  if (requested.window_width != baseline.window_width) target.window_width = requested.window_width;
+  if (requested.window_height != baseline.window_height) target.window_height = requested.window_height;
+}
+
+}  // namespace
+
+Settings LoadSettings(const StorageLayout& layout) {
+  StorageMutex mutex(layout);
+  const auto snapshot = ReadFileSnapshot(PathFor(layout, L"settings.json"));
+  return ParseSettings(snapshot.contents);
+}
+
+void SaveSettings(const StorageLayout& layout, const Settings& settings) {
+  SaveFile(layout, PathFor(layout, L"settings.json"), SerializeSettings(settings));
+}
+
+CatalogState LoadCatalogState(const StorageLayout& layout) {
+  StorageMutex mutex(layout);
+  const auto snapshot = ReadFileSnapshot(PathFor(layout, L"catalog-state.json"));
+  return ParseCatalogState(snapshot.contents);
+}
+
+void SaveCatalogState(const StorageLayout& layout, const CatalogState& state) {
+  SaveFile(layout, PathFor(layout, L"catalog-state.json"), SerializeCatalogState(state));
+}
+
+SettingsRepository::SettingsRepository(StorageLayout layout) : layout_(std::move(layout)) {}
+
+const Settings& SettingsRepository::Read() {
+  if (!settings_) {
+    StorageMutex mutex(layout_);
+    const auto snapshot = ReadFileSnapshot(PathFor(layout_, L"settings.json"));
+    settings_ = ParseSettings(snapshot.contents);
+    fingerprint_ = snapshot.fingerprint;
+  }
+  return *settings_;
+}
+
+const Settings& SettingsRepository::Reload() {
+  StorageMutex mutex(layout_);
+  const auto snapshot = ReadFileSnapshot(PathFor(layout_, L"settings.json"));
+  settings_ = ParseSettings(snapshot.contents);
+  fingerprint_ = snapshot.fingerprint;
+  return *settings_;
+}
+
+void SettingsRepository::Update(const std::function<void(Settings&)>& mutation) {
+  StorageMutex mutex(layout_);
+  const auto path = PathFor(layout_, L"settings.json");
+  const auto snapshot = ReadFileSnapshot(path);
+  Settings updated = ParseSettings(snapshot.contents);
+  mutation(updated);
+  WriteAtomically(path, SerializeSettings(updated), snapshot.fingerprint);
+  settings_ = std::move(updated);
+  fingerprint_ = TryFingerprintOf(path);
+}
+
+void SettingsRepository::Save(const Settings& settings) {
+  const auto baseline = settings_;
+  const auto cached_fingerprint = fingerprint_;
+  StorageMutex mutex(layout_);
+  const auto path = PathFor(layout_, L"settings.json");
+  const auto snapshot = ReadFileSnapshot(path);
+  Settings updated = ParseSettings(snapshot.contents);
+  if (!baseline || cached_fingerprint == snapshot.fingerprint) updated = settings;
+  else MergeChangedSettings(updated, *baseline, settings);
+  WriteAtomically(path, SerializeSettings(updated), snapshot.fingerprint);
+  settings_ = std::move(updated);
+  fingerprint_ = TryFingerprintOf(path);
 }
 
 CatalogStateRepository::CatalogStateRepository(StorageLayout layout) : layout_(std::move(layout)) {}
 
 const CatalogState& CatalogStateRepository::Read() {
-  if (!state_) state_ = LoadCatalogState(layout_);
+  if (!state_) {
+    StorageMutex mutex(layout_);
+    const auto snapshot = ReadFileSnapshot(PathFor(layout_, L"catalog-state.json"));
+    state_ = ParseCatalogState(snapshot.contents);
+  }
   return *state_;
 }
 
 const CatalogState& CatalogStateRepository::Reload() {
-  state_ = LoadCatalogState(layout_);
+  StorageMutex mutex(layout_);
+  const auto snapshot = ReadFileSnapshot(PathFor(layout_, L"catalog-state.json"));
+  state_ = ParseCatalogState(snapshot.contents);
   return *state_;
 }
 
 void CatalogStateRepository::Update(const std::function<void(CatalogState&)>& mutation) {
-  CatalogState updated = Read();
+  StorageMutex mutex(layout_);
+  const auto path = PathFor(layout_, L"catalog-state.json");
+  const auto snapshot = ReadFileSnapshot(path);
+  // state_ is a UI cache and may predate a transaction committed by another
+  // process. Always mutate the snapshot read while holding the mutex.
+  CatalogState updated = ParseCatalogState(snapshot.contents);
   mutation(updated);
   NormalizeCatalogState(updated);
-  SaveCatalogState(layout_, updated);
+  WriteAtomically(path, SerializeCatalogState(updated), snapshot.fingerprint);
   state_ = std::move(updated);
 }
 
