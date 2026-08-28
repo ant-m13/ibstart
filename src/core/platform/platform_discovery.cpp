@@ -1,5 +1,7 @@
 #include "core/platform/platform_discovery.hpp"
 #include "core/platform/platform_version.hpp"
+#include "core/domain/utf.hpp"
+#include "core/windows_path.hpp"
 
 #include <Windows.h>
 
@@ -8,6 +10,7 @@
 #include <cwctype>
 #include <optional>
 #include <set>
+#include <stdexcept>
 #include <vector>
 
 namespace ibstart::platform {
@@ -165,7 +168,12 @@ std::vector<domain::PlatformInstallation> Discover(
   std::set<std::wstring> known;
   auto roots = include_system_sources ? StandardSearchRoots() : std::vector<std::filesystem::path>{};
   roots.insert(roots.end(), user_roots.begin(), user_roots.end());
-  for (const auto& root : roots) ScanRoot(root, result, known);
+  for (const auto& root : roots) {
+    if (!windows_path::IsWithinLimit(root)) {
+      throw std::invalid_argument(utf::ToUtf8(windows_path::LengthError(root)));
+    }
+    ScanRoot(root, result, known);
+  }
   if (include_system_sources) {
     ScanRegistry(HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY, result, known);
     ScanRegistry(HKEY_LOCAL_MACHINE, KEY_WOW64_32KEY, result, known);

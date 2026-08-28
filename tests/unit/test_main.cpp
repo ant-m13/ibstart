@@ -16,6 +16,7 @@
 #include "core/update/github_release_client.hpp"
 #include "core/update/update_service.hpp"
 #include "core/v8i/v8i_file_store.hpp"
+#include "core/windows_path.hpp"
 #include "ui/tree_presentation.hpp"
 #include "ui/tree_view_controller.hpp"
 
@@ -1889,6 +1890,37 @@ void TestPortableMode() {
   std::error_code error; std::filesystem::remove_all(directory, error);
 }
 
+void TestWindowsPathLimit() {
+  constexpr auto limit = ibstart::windows_path::kMaximumPathCharacters;
+  const std::wstring prefix = L"C:\\";
+  const auto supported = std::filesystem::path(prefix + std::wstring(limit - 1 - prefix.size(), L'x'));
+  const auto tooLong = std::filesystem::path(prefix + std::wstring(limit - prefix.size(), L'x'));
+
+  CHECK(supported.native().size() == limit - 1);
+  CHECK(ibstart::windows_path::IsWithinLimit(supported));
+  CHECK(tooLong.native().size() == limit);
+  CHECK(!ibstart::windows_path::IsWithinLimit(tooLong));
+  CHECK(ibstart::windows_path::LengthError(tooLong).find(L"32766") != std::wstring::npos);
+  CHECK(ibstart::catalog::CheckFileDatabasePath(tooLong) ==
+      ibstart::catalog::FileDatabasePathStatus::too_long);
+
+  bool v8iPathRejected = false;
+  try {
+    ibstart::v8i::V8iFileStore store(tooLong);
+  } catch (const std::runtime_error&) {
+    v8iPathRejected = true;
+  }
+  CHECK(v8iPathRejected);
+
+  bool portablePathRejected = false;
+  try {
+    static_cast<void>(ibstart::storage::ResolveLayout(tooLong));
+  } catch (const std::runtime_error&) {
+    portablePathRejected = true;
+  }
+  CHECK(portablePathRejected);
+}
+
 void TestCatalogStateRepository() {
   const auto directory = Temp(L"catalog-state-repository");
   const ibstart::storage::StorageLayout layout{directory, true};
@@ -2662,6 +2694,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"CacheContinuesWithActiveOneCProcess", TestCacheContinuesWithActiveOneCProcess);
   run(L"CacheIdentifiersDoNotCollide", TestCacheIdentifiersDoNotCollide);
   run(L"PortableMode", TestPortableMode);
+  run(L"WindowsPathLimit", TestWindowsPathLimit);
   run(L"StorageFileSizeLimit", TestStorageFileSizeLimit);
   run(L"CatalogStateRepository", TestCatalogStateRepository);
   run(L"StorageRepositoryMergesStaleSnapshots", TestStorageRepositoryMergesStaleSnapshots);

@@ -34,7 +34,7 @@ struct ValidationDiagnostic {
 
 enum class SortDirection { ascending, descending };
 
-enum class FileDatabasePathStatus { valid, missing, inaccessible };
+enum class FileDatabasePathStatus { valid, missing, inaccessible, too_long };
 
 // Checks that a file database directory contains the native 1C marker file.
 // The check never creates or changes anything in the selected directory.

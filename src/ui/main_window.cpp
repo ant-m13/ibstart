@@ -16,9 +16,9 @@
 #include "core/launcher/process_launcher.hpp"
 #include "core/shell/shortcut.hpp"
 #include "core/update/update_service.hpp"
+#include "core/windows_path.hpp"
 
 #include <CommCtrl.h>
-#include <commdlg.h>
 #include <shellapi.h>
 #include <windowsx.h>
 
@@ -64,6 +64,11 @@ constexpr int kSearchClearButtonHeight = 21;
 constexpr int kSearchClearButtonInset = 2;
 constexpr int kSearchClearTextGap = 4;
 void Message(HWND owner, std::wstring_view text, std::wstring_view title = L"ИБ Старт", UINT type = MB_OK | MB_ICONINFORMATION) { MessageBoxW(owner, std::wstring(text).c_str(), std::wstring(title).c_str(), type); }
+bool EnsurePathLength(HWND owner, const std::filesystem::path& path) {
+  if (windows_path::IsWithinLimit(path)) return true;
+  Message(owner, windows_path::LengthError(path), L"Слишком длинный путь", MB_OK | MB_ICONWARNING);
+  return false;
+}
 std::wstring WideErrorText(std::string_view message) noexcept {
   try { return utf::FromUtf8(message); }
   catch (...) { return std::wstring(message.begin(), message.end()); }
@@ -802,7 +807,11 @@ void MainWindow::LoadCatalog(bool report_error) {
       const std::wstring& restore = selected.empty() ? settings_.selected_entry : selected;
       if (!restore.empty()) static_cast<void>(tree_view_.SelectItem(restore));
     }
-  } catch (const std::exception& error) { logger_.Error(L"Ошибка загрузки: " + ibstart::utf::FromUtf8(error.what())); if (report_error) Message(window_, L"Не удалось загрузить список баз. Проверьте путь и кодировку UTF-8.", L"ИБ Старт", MB_OK | MB_ICONERROR); }
+  } catch (const std::exception& error) {
+    const auto detail = WideErrorText(error.what());
+    logger_.Error(L"Ошибка загрузки: " + detail);
+    if (report_error) Message(window_, L"Не удалось загрузить список баз.\n\n" + detail, L"ИБ Старт", MB_OK | MB_ICONERROR);
+  }
 }
 
 bool MainWindow::EnsureCatalogValid(const catalog::Catalog& value, std::wstring_view operation) const {
@@ -830,20 +839,14 @@ bool MainWindow::SaveCatalog(catalog::Catalog candidate) {
   auto target = store_ ? store_->path() : settings_.active_ibases;
   bool overwriteConfirmed = false;
   if (!store_ && target.empty()) {
-    wchar_t filename[MAX_PATH] = L"ibases.v8i";
-    OPENFILENAMEW dialog{};
-    dialog.lStructSize = sizeof(dialog);
-    dialog.hwndOwner = window_;
-    dialog.lpstrFilter = L"ibases.v8i\0ibases.v8i\0Все файлы\0*.*\0";
-    dialog.lpstrFile = filename;
-    dialog.nMaxFile = MAX_PATH;
-    dialog.lpstrDefExt = L"v8i";
-    dialog.Flags = OFN_OVERWRITEPROMPT | OFN_PATHMUSTEXIST;
-    if (!GetSaveFileNameW(&dialog)) return false;
-    target = filename;
+    const auto selected = dialog::SaveCatalogFile(window_);
+    if (!selected) return false;
+    target = *selected;
+    if (!EnsurePathLength(window_, target)) return false;
     std::error_code error;
     overwriteConfirmed = std::filesystem::is_regular_file(target, error) && !error;
   }
+  if (!EnsurePathLength(window_, target)) return false;
 
   auto updatedSettings = settings_;
   updatedSettings.active_ibases = target;
@@ -869,8 +872,10 @@ bool MainWindow::SaveCatalog(catalog::Catalog candidate) {
     return false;
   } catch (const std::exception& error) {
     logMaintenanceWarnings();
-    logger_.Error(L"Ошибка записи: " + ibstart::utf::FromUtf8(error.what()));
-    Message(window_, L"Не удалось сохранить ibases.v8i. Исходный файл не изменён.", L"ИБ Старт", MB_OK | MB_ICONERROR);
+    const auto detail = WideErrorText(error.what());
+    logger_.Error(L"Ошибка записи: " + detail);
+    Message(window_, L"Не удалось сохранить ibases.v8i. Исходный файл не изменён.\n\n" + detail,
+        L"ИБ Старт", MB_OK | MB_ICONERROR);
     return false;
   }
 
@@ -1322,6 +1327,9 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
     const auto database = catalog_->DatabaseFor(name);
     const auto connection_spec = launcher::ParseConnectionSpec(database.connect);
     const bool webConnection = connection_spec.kind == launcher::ConnectionSpec::Kind::web;
+    if (connection_spec.kind == launcher::ConnectionSpec::Kind::file) {
+      if (!EnsurePathLength(window_, std::filesystem::path(connection_spec.value))) return;
+    }
     if (webConnection && mode == domain::LaunchMode::designer) {
       Message(window_, L"Конфигуратор недоступен для веб-базы. Запустите её в режиме Предприятие тонким клиентом или в браузере.", L"ИБ Старт", MB_OK | MB_ICONINFORMATION);
       return;
@@ -1410,8 +1418,9 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
       SetStatus(L"База запущена, но историю запуска или список обновить не удалось.");
       Message(window_, L"База запущена, но сохранить историю запуска или обновить список не удалось.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
     } else {
-      logger_.Error(L"Ошибка запуска: " + ibstart::utf::FromUtf8(error.what()));
-      Message(window_, L"Не удалось запустить базу. Подробности — в последнем логе.", L"ИБ Старт", MB_OK | MB_ICONERROR);
+      const auto detail = WideErrorText(error.what());
+      logger_.Error(L"Ошибка запуска: " + detail);
+      Message(window_, L"Не удалось запустить базу.\n\n" + detail, L"ИБ Старт", MB_OK | MB_ICONERROR);
     }
   }
 }
@@ -1427,6 +1436,7 @@ void MainWindow::OpenSelectedFolder() {
   if (!entry->IsDatabase()) return;
   const auto folder = connection::ValueOrEmpty(entry->ValueOr(L"Connect"), L"File");
   if (folder.empty()) return;
+  if (!EnsurePathLength(window_, std::filesystem::path(folder))) return;
   std::error_code error;
   if (!std::filesystem::is_directory(folder, error) || error) { Message(window_, L"Каталог файловой базы не найден.", L"ИБ Старт", MB_OK | MB_ICONWARNING); return; }
   const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", folder.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
@@ -1721,7 +1731,13 @@ void MainWindow::CreateShortcut() {
     const auto database = catalog_->DatabaseFor(entry->name);
     shell::CreateDesktopShortcut(executable_, database.id, database.name);
     Message(window_, L"Ярлык создан на рабочем столе.");
-  } catch (...) { Message(window_, L"Не удалось создать ярлык.", L"ИБ Старт", MB_OK | MB_ICONERROR); }
+  } catch (const std::exception& error) {
+    const auto detail = WideErrorText(error.what());
+    logger_.Error(L"Ошибка создания ярлыка: " + detail);
+    Message(window_, L"Не удалось создать ярлык.\n\n" + detail, L"ИБ Старт", MB_OK | MB_ICONERROR);
+  } catch (...) {
+    Message(window_, L"Не удалось создать ярлык.", L"ИБ Старт", MB_OK | MB_ICONERROR);
+  }
 }
 void MainWindow::RefreshFileMenu() {
   menus_.RefreshFile(settings_);
@@ -1743,6 +1759,7 @@ void MainWindow::PersistSettings(const storage::Settings& settings) {
   settings_ = settings_repository_.Read();
 }
 bool MainWindow::ActivateCatalog(const std::filesystem::path& path) {
+  if (!EnsurePathLength(window_, path)) return false;
   auto loadedSettings = settings_;
   std::optional<catalog::CatalogSession> loadedSession;
   try {
@@ -1752,8 +1769,9 @@ bool MainWindow::ActivateCatalog(const std::filesystem::path& path) {
     loadedSettings.selected_entry.clear();
     RememberRecentList(loadedSettings, path);
   } catch (const std::exception& error) {
-    logger_.Error(L"Ошибка загрузки списка " + path.wstring() + L": " + ibstart::utf::FromUtf8(error.what()));
-    Message(window_, L"Не удалось открыть выбранный список баз. Текущий список и активный путь не изменены. Проверьте формат и кодировку UTF-8.",
+    const auto detail = WideErrorText(error.what());
+    logger_.Error(L"Ошибка загрузки списка " + path.wstring() + L": " + detail);
+    Message(window_, L"Не удалось открыть выбранный список баз. Текущий список и активный путь не изменены.\n\n" + detail,
         L"ИБ Старт", MB_OK | MB_ICONERROR);
     return false;
   }
@@ -1786,28 +1804,29 @@ bool MainWindow::ActivateCatalog(const std::filesystem::path& path) {
 }
 void MainWindow::OpenList() {
   if (settings_.simple_mode) return;
-  wchar_t filename[MAX_PATH]{};
-  OPENFILENAMEW dialog{};
-  dialog.lStructSize = sizeof(dialog);
-  dialog.hwndOwner = window_;
-  dialog.lpstrFilter = L"ibases.v8i\0ibases.v8i\0Все файлы\0*.*\0";
-  dialog.lpstrFile = filename;
-  dialog.nMaxFile = MAX_PATH;
-  dialog.Flags = OFN_FILEMUSTEXIST | OFN_PATHMUSTEXIST;
-  if (!GetOpenFileNameW(&dialog)) return;
-  static_cast<void>(ActivateCatalog(filename));
+  const auto selected = dialog::OpenCatalogFile(window_);
+  if (!selected) return;
+  static_cast<void>(ActivateCatalog(*selected));
 }
 void MainWindow::OpenStandardList() {
-  const auto standard = storage::FindStandardIbases();
-  if (!standard) {
-    Message(window_, L"Стандартный файл ibases.v8i не найден. Откройте список вручную.", L"Список баз", MB_OK | MB_ICONINFORMATION);
-    return;
+  try {
+    const auto standard = storage::FindStandardIbases();
+    if (!standard) {
+      Message(window_, L"Стандартный файл ibases.v8i не найден. Откройте список вручную.", L"Список баз", MB_OK | MB_ICONINFORMATION);
+      return;
+    }
+    static_cast<void>(ActivateCatalog(*standard));
+  } catch (const std::exception& error) {
+    const auto detail = WideErrorText(error.what());
+    logger_.Error(L"Ошибка поиска стандартного списка: " + detail);
+    Message(window_, L"Не удалось найти стандартный список ibases.v8i.\n\n" + detail,
+        L"Список баз", MB_OK | MB_ICONERROR);
   }
-  static_cast<void>(ActivateCatalog(*standard));
 }
 void MainWindow::OpenRecentList(size_t index) {
   if (index >= settings_.recent_ibases.size()) return;
   const auto path = settings_.recent_ibases[index];
+  if (!EnsurePathLength(window_, path)) return;
   std::error_code error;
   if (!std::filesystem::is_regular_file(path, error) || error) {
     auto updatedSettings = settings_;

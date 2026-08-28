@@ -2,6 +2,7 @@
 
 #include "core/domain/utf.hpp"
 #include "core/launcher/command_builder.hpp"
+#include "core/windows_path.hpp"
 
 #include <Windows.h>
 #include <ShlObj.h>
@@ -23,10 +24,18 @@ std::wstring SafeShortcutName(std::wstring_view displayName) {
 }
 
 void CreateDesktopShortcut(const std::filesystem::path& executable, std::wstring_view database_id, std::wstring_view display_name) {
+  if (!windows_path::IsWithinLimit(executable)) {
+    throw std::runtime_error("IBStart executable path is too long: " +
+        utf::ToUtf8(windows_path::LengthError(executable)));
+  }
   PWSTR desktop{};
   if (FAILED(SHGetKnownFolderPath(FOLDERID_Desktop, 0, nullptr, &desktop))) throw std::runtime_error("Cannot find Desktop folder.");
   const std::filesystem::path target = std::filesystem::path(desktop) / (SafeShortcutName(display_name) + L" — IBStart.lnk");
   CoTaskMemFree(desktop);
+  if (!windows_path::IsWithinLimit(target)) {
+    throw std::runtime_error("Desktop shortcut path is too long: " +
+        utf::ToUtf8(windows_path::LengthError(target)));
+  }
   IShellLinkW* link{};
   if (FAILED(CoCreateInstance(CLSID_ShellLink, nullptr, CLSCTX_INPROC_SERVER, IID_PPV_ARGS(&link)))) throw std::runtime_error("Cannot create Windows shortcut.");
   const std::wstring arguments = L"--launch-id " + launcher::QuoteWindowsArgument(database_id);
