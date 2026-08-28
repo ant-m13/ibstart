@@ -1,3 +1,5 @@
+#include <winsock2.h>
+
 #include "app/instance_activation.hpp"
 #include "core/catalog/catalog.hpp"
 #include "core/catalog/catalog_metadata_service.hpp"
@@ -11,6 +13,7 @@
 #include "core/platform/platform_version.hpp"
 #include "core/scanner/file_base_scanner.hpp"
 #include "core/storage/storage.hpp"
+#include "core/update/github_release_client.hpp"
 #include "core/update/update_service.hpp"
 #include "core/v8i/v8i_file_store.hpp"
 #include "ui/tree_presentation.hpp"
@@ -22,10 +25,14 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <condition_variable>
 #include <filesystem>
 #include <fstream>
 #include <functional>
 #include <iostream>
+#include <exception>
+#include <cstdint>
+#include <mutex>
 #include <string_view>
 #include <stop_token>
 #include <stdexcept>
@@ -42,6 +49,137 @@ std::string ReadBytes(const std::filesystem::path& path) { std::ifstream input(p
 void WriteBytes(const std::filesystem::path& path, std::string_view text) { std::ofstream output(path, std::ios::binary | std::ios::trunc); output.write(text.data(), static_cast<std::streamsize>(text.size())); }
 std::filesystem::path Fixture(const wchar_t* name) { return std::filesystem::current_path() / L"tests" / L"fixtures" / name; }
 std::filesystem::path Temp(const wchar_t* suffix) { auto path = std::filesystem::temp_directory_path() / (std::wstring(L"ibstart-tests-") + suffix + L"-" + std::to_wstring(GetCurrentProcessId())); std::error_code error; std::filesystem::remove_all(path, error); std::filesystem::create_directories(path); return path; }
+
+class LoopbackHttpServer {
+ public:
+  explicit LoopbackHttpServer(std::string response = {}) : response_(std::move(response)) {
+    WSADATA data{};
+    const int startup_error = WSAStartup(MAKEWORD(2, 2), &data);
+    if (startup_error != 0) {
+      throw std::runtime_error("WSAStartup failed (Windows error " + std::to_string(startup_error) + ").");
+    }
+    winsock_started_ = true;
+    try {
+      listener_.store(socket(AF_INET, SOCK_STREAM, IPPROTO_TCP));
+      if (listener_.load() == INVALID_SOCKET) Fail("socket");
+
+      sockaddr_in address{};
+      address.sin_family = AF_INET;
+      address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+      address.sin_port = 0;
+      if (bind(listener_.load(), reinterpret_cast<const sockaddr*>(&address), sizeof(address)) == SOCKET_ERROR) {
+        Fail("bind");
+      }
+      if (listen(listener_.load(), 1) == SOCKET_ERROR) Fail("listen");
+
+      sockaddr_in bound{};
+      int bound_size = sizeof(bound);
+      if (getsockname(listener_.load(), reinterpret_cast<sockaddr*>(&bound), &bound_size) == SOCKET_ERROR) {
+        Fail("getsockname");
+      }
+      port_ = ntohs(bound.sin_port);
+      accept_thread_ = std::thread([this] { AcceptConnection(); });
+    } catch (...) {
+      Shutdown();
+      throw;
+    }
+  }
+
+  ~LoopbackHttpServer() { Shutdown(); }
+
+  LoopbackHttpServer(const LoopbackHttpServer&) = delete;
+  LoopbackHttpServer& operator=(const LoopbackHttpServer&) = delete;
+
+  [[nodiscard]] std::uint16_t port() const noexcept { return port_; }
+
+  [[nodiscard]] bool WaitForClient(std::chrono::milliseconds timeout) {
+    std::unique_lock lock(mutex_);
+    return condition_.wait_for(lock, timeout, [this] { return client_accepted_ || accept_failed_; });
+  }
+
+ private:
+  static void CloseSocket(SOCKET socket) noexcept {
+    if (socket == INVALID_SOCKET) return;
+    shutdown(socket, SD_BOTH);
+    closesocket(socket);
+  }
+
+  [[noreturn]] void Fail(const char* operation) {
+    const int error = WSAGetLastError();
+    Shutdown();
+    throw std::runtime_error(std::string(operation) + " failed (Windows error " + std::to_string(error) + ").");
+  }
+
+  void AcceptConnection() noexcept {
+    const SOCKET listener = listener_.load();
+    const SOCKET client = accept(listener, nullptr, nullptr);
+    if (client == INVALID_SOCKET) {
+      std::lock_guard lock(mutex_);
+      accept_failed_ = true;
+      condition_.notify_all();
+      return;
+    }
+
+    bool keep_client = false;
+    {
+      std::lock_guard lock(mutex_);
+      if (!stopping_) {
+        client_ = client;
+        client_accepted_ = true;
+        keep_client = true;
+      }
+      condition_.notify_all();
+    }
+    if (!keep_client) {
+      CloseSocket(client);
+      return;
+    }
+
+    if (!response_.empty()) {
+      size_t offset = 0;
+      while (offset < response_.size()) {
+        const int sent = send(client, response_.data() + offset,
+            static_cast<int>(response_.size() - offset), 0);
+        if (sent == SOCKET_ERROR || sent == 0) break;
+        offset += static_cast<size_t>(sent);
+      }
+      return;
+    }
+
+    std::unique_lock lock(mutex_);
+    condition_.wait(lock, [this] { return stopping_; });
+  }
+
+  void Shutdown() noexcept {
+    SOCKET listener = listener_.exchange(INVALID_SOCKET);
+    SOCKET client = INVALID_SOCKET;
+    {
+      std::lock_guard lock(mutex_);
+      stopping_ = true;
+      client = std::exchange(client_, INVALID_SOCKET);
+    }
+    CloseSocket(listener);
+    CloseSocket(client);
+    condition_.notify_all();
+    if (accept_thread_.joinable()) accept_thread_.join();
+    if (winsock_started_) {
+      WSACleanup();
+      winsock_started_ = false;
+    }
+  }
+
+  std::atomic<SOCKET> listener_{INVALID_SOCKET};
+  SOCKET client_{INVALID_SOCKET};
+  std::uint16_t port_{};
+  std::mutex mutex_;
+  std::condition_variable condition_;
+  bool stopping_{false};
+  bool client_accepted_{false};
+  bool accept_failed_{false};
+  bool winsock_started_{false};
+  std::string response_;
+  std::thread accept_thread_;
+};
 
 std::filesystem::path SystemExecutable(const wchar_t* name) {
   wchar_t systemDirectory[MAX_PATH]{};
@@ -883,6 +1021,54 @@ void TestUpdateVersionsAndVersionFile() {
   std::stop_source cancelledUpdate;
   CHECK(cancelledUpdate.request_stop());
   CHECK(!ibstart::update::FetchLatestRelease(cancelledUpdate.get_token()));
+}
+
+void TestUpdateCancellationOnHangingConnection() {
+  LoopbackHttpServer server;
+  std::stop_source stop;
+  std::optional<std::string> response;
+  std::exception_ptr client_exception;
+  const ibstart::update::transport::VersionAssetEndpoint endpoint{
+      L"127.0.0.1", server.port(), L"/hang", false, false};
+  std::thread client([&] {
+    try {
+      response = ibstart::update::transport::FetchVersionAsset(endpoint, stop.get_token());
+    } catch (...) {
+      client_exception = std::current_exception();
+    }
+  });
+
+  CHECK(server.WaitForClient(std::chrono::seconds(2)));
+  const auto cancellation_started = std::chrono::steady_clock::now();
+  CHECK(stop.request_stop());
+  client.join();
+  const auto cancellation_time = std::chrono::steady_clock::now() - cancellation_started;
+
+  CHECK(!client_exception);
+  CHECK(!response.has_value());
+  CHECK(cancellation_time < std::chrono::seconds(2));
+}
+
+void TestUpdateTransportReadsAsyncResponse() {
+  LoopbackHttpServer server(
+      "HTTP/1.1 200 OK\r\nContent-Length: 6\r\nConnection: close\r\n\r\nv0.7.4");
+  const ibstart::update::transport::VersionAssetEndpoint endpoint{
+      L"127.0.0.1", server.port(), L"/version", false, false};
+  std::optional<std::string> response;
+  std::exception_ptr client_exception;
+  std::thread client([&] {
+    try {
+      response = ibstart::update::transport::FetchVersionAsset(endpoint);
+    } catch (...) {
+      client_exception = std::current_exception();
+    }
+  });
+
+  CHECK(server.WaitForClient(std::chrono::seconds(2)));
+  client.join();
+
+  CHECK(!client_exception);
+  CHECK(response == std::optional<std::string>("v0.7.4"));
 }
 
 void TestCatalogSearch() {
@@ -2261,6 +2447,8 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"DemoCatalogFixture", TestDemoCatalogFixture);
   run(L"ProductVersion", TestProductVersion);
   run(L"UpdateVersionsAndVersionFile", TestUpdateVersionsAndVersionFile);
+  run(L"UpdateCancellationOnHangingConnection", TestUpdateCancellationOnHangingConnection);
+  run(L"UpdateTransportReadsAsyncResponse", TestUpdateTransportReadsAsyncResponse);
   run(L"UnicodeCaseInsensitiveSearch", TestUnicodeCaseInsensitiveSearch);
   run(L"ConnectionStringParsing", TestConnectionStringParsing);
   run(L"InstanceActivationPayload", TestInstanceActivationPayload);
