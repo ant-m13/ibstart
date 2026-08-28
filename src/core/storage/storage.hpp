@@ -6,11 +6,13 @@
 #include <Windows.h>
 
 #include <cstddef>
+#include <cstdint>
 #include <filesystem>
 #include <functional>
 #include <map>
 #include <optional>
 #include <string>
+#include <stdexcept>
 #include <vector>
 
 namespace ibstart::storage {
@@ -22,6 +24,29 @@ struct StorageLayout {
   std::filesystem::path root;
   bool portable{false};
 };
+
+struct StorageFingerprint {
+  std::uintmax_t size{};
+  std::filesystem::file_time_type write_time{};
+  std::uint64_t content_hash{};
+
+  bool operator==(const StorageFingerprint&) const = default;
+};
+
+class StorageConflictError final : public std::runtime_error {
+ public:
+  using std::runtime_error::runtime_error;
+};
+
+// Returns the system-wide mutex name used to serialize access to this profile.
+// The name is derived from the normalized storage path rather than from the
+// executable, so all copies of a portable profile coordinate with one another.
+[[nodiscard]] std::wstring StorageMutexName(const StorageLayout& layout);
+// Returns the system-wide mutex name used to enforce one visible IBStart
+// instance per profile. It intentionally uses a separate object from the
+// transaction mutex so a short external storage operation cannot look like a
+// running application to the instance-forwarding code.
+[[nodiscard]] std::wstring InstanceMutexName(const StorageLayout& layout);
 
 struct Settings {
   std::filesystem::path active_ibases;
@@ -56,6 +81,23 @@ struct CatalogState {
   LastLaunchTimes last_launches;
   DatabaseTags tags;
   TagStyles tag_styles;
+};
+
+class SettingsRepository {
+ public:
+  explicit SettingsRepository(StorageLayout layout);
+
+  [[nodiscard]] const Settings& Read();
+  [[nodiscard]] const Settings& Reload();
+  void Update(const std::function<void(Settings&)>& mutation);
+  // Saves the requested values while preserving settings changed by another
+  // process since this repository last read the file.
+  void Save(const Settings& settings);
+
+ private:
+  StorageLayout layout_;
+  std::optional<Settings> settings_;
+  std::optional<StorageFingerprint> fingerprint_;
 };
 
 class CatalogStateRepository {

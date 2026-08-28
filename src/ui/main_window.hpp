@@ -32,6 +32,8 @@ struct TreeTagFilter;
 class MainWindow {
  public:
   MainWindow(HINSTANCE instance, std::filesystem::path executable, storage::StorageLayout layout,
+      std::optional<std::wstring> launch_id = std::nullopt);
+  MainWindow(HINSTANCE instance, std::filesystem::path executable, storage::StorageLayout layout,
       storage::Settings settings, std::optional<std::wstring> launch_id = std::nullopt);
   ~MainWindow();
   int Show(int show_command);
@@ -87,6 +89,7 @@ class MainWindow {
   void OpenRecentList(size_t index);
   bool ActivateCatalog(const std::filesystem::path& path);
   static void RememberRecentList(storage::Settings& settings, const std::filesystem::path& path);
+  void PersistSettings(const storage::Settings& settings);
   void RefreshFileMenu();
   void RefreshMainMenuBar();
   void ToggleTagDisplay();
@@ -138,6 +141,7 @@ class MainWindow {
   MenuController menus_;
   std::filesystem::path executable_;
   storage::StorageLayout layout_;
+  storage::SettingsRepository settings_repository_;
   storage::Settings settings_;
   catalog::CatalogMetadataService catalog_state_;
   logging::Logger logger_;

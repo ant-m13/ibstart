@@ -84,7 +84,7 @@ std::wstring SaveMutexName(const std::filesystem::path& path) {
     hash *= 1099511628211ULL;
   }
   std::wostringstream name;
-  name << L"Local\\IBStart.V8iSave." << std::hex << std::setw(16) << std::setfill(L'0') << hash;
+  name << L"Global\\IBStart.V8iSave." << std::hex << std::setw(16) << std::setfill(L'0') << hash;
   return name.str();
 }
 

@@ -106,13 +106,7 @@ const storage::CatalogState& CatalogMetadataService::Reload() { return repositor
 
 bool CatalogMetadataService::ToggleFavorite(std::wstring database_id, std::wstring legacy_database_name) {
   if (database_id.empty()) return false;
-  const auto& favorites = Read().favorites;
-  const auto existing_id = std::find_if(favorites.begin(), favorites.end(), [&](const auto& value) {
-    return EqualNoCase(value, database_id);
-  });
-  const auto existing_legacy = existing_id == favorites.end() && !legacy_database_name.empty() ?
-      std::find_if(favorites.begin(), favorites.end(), [&](const auto& value) { return EqualNoCase(value, legacy_database_name); }) : favorites.end();
-  const bool added = existing_id == favorites.end() && existing_legacy == favorites.end();
+  bool added = false;
   repository_.Update([&](storage::CatalogState& state) {
     auto favorite = std::find_if(state.favorites.begin(), state.favorites.end(), [&](const auto& value) {
       return EqualNoCase(value, database_id);
@@ -123,6 +117,7 @@ bool CatalogMetadataService::ToggleFavorite(std::wstring database_id, std::wstri
       });
     }
     if (favorite == state.favorites.end()) {
+      added = true;
       state.favorites.insert(state.favorites.begin(), std::move(database_id));
       if (state.favorites.size() > kMaxFavorites) state.favorites.resize(kMaxFavorites);
     } else {
@@ -167,21 +162,24 @@ void CatalogMetadataService::SetTags(std::wstring database_id, std::vector<std::
 
 bool CatalogMetadataService::AddTag(std::wstring database_id, std::wstring tag) {
   if (database_id.empty() || tag.empty()) return false;
-  const auto& savedTags = Read().tags;
-  if (const auto assigned = savedTags.find(database_id); assigned != savedTags.end() &&
-      std::any_of(assigned->second.begin(), assigned->second.end(), [&](const auto& existing) { return EqualNoCase(existing, tag); })) {
-    return false;
-  }
-  repository_.Update([&](storage::CatalogState& state) { state.tags[database_id].push_back(std::move(tag)); });
-  return true;
+  bool added = false;
+  repository_.Update([&](storage::CatalogState& state) {
+    if (const auto assigned = state.tags.find(database_id); assigned != state.tags.end() &&
+        std::any_of(assigned->second.begin(), assigned->second.end(), [&](const auto& existing) { return EqualNoCase(existing, tag); })) {
+      return;
+    }
+    state.tags[database_id].push_back(std::move(tag));
+    added = true;
+  });
+  return added;
 }
 
 bool CatalogMetadataService::RemoveTags(std::wstring_view database_id) {
   if (database_id.empty()) return false;
   const std::wstring id(database_id);
-  if (!Read().tags.contains(id)) return false;
-  repository_.Update([&](storage::CatalogState& state) { state.tags.erase(id); });
-  return true;
+  bool removed = false;
+  repository_.Update([&](storage::CatalogState& state) { removed = state.tags.erase(id) != 0; });
+  return removed;
 }
 
 void CatalogMetadataService::ReplaceTagConfiguration(storage::DatabaseTags tags, storage::TagStyles styles) {

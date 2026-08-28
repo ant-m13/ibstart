@@ -1208,6 +1208,81 @@ void TestCatalogStateRepository() {
   std::filesystem::remove_all(directory, error);
 }
 
+void TestStorageRepositoryMergesStaleSnapshots() {
+  const auto directory = Temp(L"storage-repository-merge");
+  const ibstart::storage::StorageLayout layout{directory, true};
+  ibstart::storage::EnsureWritable(layout);
+  CHECK(ibstart::storage::StorageMutexName(layout).starts_with(L"Global\\IBStart.Storage."));
+  CHECK(ibstart::storage::InstanceMutexName(layout).starts_with(L"Global\\IBStart.Instance."));
+  CHECK(ibstart::storage::StorageMutexName(layout) != ibstart::storage::StorageMutexName({directory / L"other", true}));
+
+  ibstart::storage::CatalogStateRepository firstState(layout);
+  ibstart::storage::CatalogStateRepository secondState(layout);
+  static_cast<void>(firstState.Read());
+  static_cast<void>(secondState.Read());
+  std::atomic<bool> firstEntered{false};
+  std::atomic<bool> updateFailed{false};
+  std::thread firstUpdate([&] {
+    try {
+      firstState.Update([&](ibstart::storage::CatalogState& state) {
+        firstEntered = true;
+        Sleep(100);
+        state.favorites = {L"Из первого репозитория"};
+      });
+    } catch (...) {
+      updateFailed = true;
+    }
+  });
+  while (!firstEntered && !updateFailed) Sleep(1);
+  std::thread secondUpdate([&] {
+    try {
+      secondState.Update([](ibstart::storage::CatalogState& state) {
+        state.tags[L"database-id"] = {L"Из второго репозитория"};
+      });
+    } catch (...) {
+      updateFailed = true;
+    }
+  });
+  firstUpdate.join();
+  secondUpdate.join();
+  CHECK(!updateFailed);
+
+  const auto mergedState = ibstart::storage::LoadCatalogState(layout);
+  CHECK(mergedState.favorites == std::vector<std::wstring>{L"Из первого репозитория"});
+  CHECK(mergedState.tags.contains(L"database-id"));
+  CHECK(mergedState.tags.at(L"database-id") == std::vector<std::wstring>{L"Из второго репозитория"});
+
+  bool conflictRejected = false;
+  try {
+    firstState.Update([&](ibstart::storage::CatalogState& state) {
+      WriteBytes(layout.root / L"catalog-state.json", R"({"favorites":[{"favorite":"Внешний процесс"}]})");
+      state.favorites = {L"Устаревшая запись"};
+    });
+  } catch (const ibstart::storage::StorageConflictError&) {
+    conflictRejected = true;
+  }
+  CHECK(conflictRejected);
+  CHECK(ibstart::storage::LoadCatalogState(layout).favorites == std::vector<std::wstring>{L"Внешний процесс"});
+
+  ibstart::storage::SettingsRepository firstSettings(layout);
+  ibstart::storage::SettingsRepository secondSettings(layout);
+  const auto firstSnapshot = firstSettings.Read();
+  const auto secondSnapshot = secondSettings.Read();
+  auto firstUpdate = firstSnapshot;
+  firstUpdate.simple_mode = true;
+  firstSettings.Save(firstUpdate);
+  auto secondUpdate = secondSnapshot;
+  secondUpdate.show_tags_in_list = false;
+  secondSettings.Save(secondUpdate);
+
+  const auto mergedSettings = ibstart::storage::LoadSettings(layout);
+  CHECK(mergedSettings.simple_mode);
+  CHECK(!mergedSettings.show_tags_in_list);
+
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
 void TestCatalogMetadataService() {
   const auto directory = Temp(L"catalog-metadata-service");
   const ibstart::storage::StorageLayout layout{directory, true};
@@ -1800,6 +1875,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"CacheIdentifiersDoNotCollide", TestCacheIdentifiersDoNotCollide);
   run(L"PortableMode", TestPortableMode);
   run(L"CatalogStateRepository", TestCatalogStateRepository);
+  run(L"StorageRepositoryMergesStaleSnapshots", TestStorageRepositoryMergesStaleSnapshots);
   run(L"CatalogMetadataService", TestCatalogMetadataService);
   run(L"CatalogMetadataRenamePreservesFallbackHistory", TestCatalogMetadataRenamePreservesFallbackHistory);
   run(L"CatalogMetadataExplicitIdChangeKeepsHistoryKey", TestCatalogMetadataExplicitIdChangeKeepsHistoryKey);

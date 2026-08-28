@@ -142,11 +142,18 @@ bool CopyTextToClipboard(HWND owner, std::wstring_view text) {
 }  // namespace
 
 MainWindow::MainWindow(HINSTANCE instance, std::filesystem::path executable, storage::StorageLayout layout,
-    storage::Settings settings, std::optional<std::wstring> launch_id)
-    : instance_(instance), executable_(std::move(executable)), layout_(std::move(layout)), settings_(std::move(settings)),
-      catalog_state_(layout_), logger_(layout_.root / L"logs"), tag_manager_(catalog_state_, logger_),
+    std::optional<std::wstring> launch_id)
+    : instance_(instance), executable_(std::move(executable)), layout_(std::move(layout)), settings_repository_(layout_),
+      settings_(settings_repository_.Read()), catalog_state_(layout_), logger_(layout_.root / L"logs"),
+      tag_manager_(catalog_state_, logger_),
       initial_launch_id_(std::move(launch_id)) {
   RegisterCommandHandlers();
+}
+
+MainWindow::MainWindow(HINSTANCE instance, std::filesystem::path executable, storage::StorageLayout layout,
+    storage::Settings settings, std::optional<std::wstring> launch_id)
+    : MainWindow(instance, std::move(executable), std::move(layout), std::move(launch_id)) {
+  settings_ = std::move(settings);
 }
 
 void MainWindow::RegisterCommandHandlers() {
@@ -481,7 +488,13 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
         const auto selected = tree_view_.SelectedName();
         settings_.selected_entry = catalog_ && catalog_->Find(selected) ? selected : std::wstring();
       }
-      try { storage::SaveSettings(layout_, settings_); } catch (...) {}
+      try {
+        PersistSettings(settings_);
+      } catch (const std::exception& error) {
+        logger_.Error(L"Не удалось сохранить настройки при закрытии: " + ibstart::utf::FromUtf8(error.what()));
+      } catch (...) {
+        logger_.Error(L"Не удалось сохранить настройки при закрытии из-за неизвестной ошибки.");
+      }
       window_ = nullptr;
       PostQuitMessage(0); return 0;
     }
@@ -779,7 +792,7 @@ bool MainWindow::SaveCatalog(catalog::Catalog candidate) {
   settings_ = std::move(updatedSettings);
   bool settingsSaved = true;
   try {
-    storage::SaveSettings(layout_, settings_);
+    PersistSettings(settings_);
   } catch (const std::exception& error) {
     settingsSaved = false;
     logger_.Error(L"Список баз сохранён, но настройки приложения записать не удалось: " + ibstart::utf::FromUtf8(error.what()));
@@ -856,7 +869,7 @@ void MainWindow::ToggleFoldersFirstWhenSorting() {
   const bool previous = settings_.folders_first_when_sorting;
   settings_.folders_first_when_sorting = !previous;
   try {
-    storage::SaveSettings(layout_, settings_);
+    PersistSettings(settings_);
     RefreshMainMenuBar();
     SetStatus(settings_.folders_first_when_sorting ? L"При сортировке папки будут размещаться сверху." : L"При сортировке папки будут участвовать в общем порядке по имени.");
   } catch (const std::exception& error) {
@@ -1544,6 +1557,10 @@ void MainWindow::RememberRecentList(storage::Settings& settings, const std::file
   settings.recent_ibases.insert(settings.recent_ibases.begin(), path);
   if (settings.recent_ibases.size() > 9) settings.recent_ibases.resize(9);
 }
+void MainWindow::PersistSettings(const storage::Settings& settings) {
+  settings_repository_.Save(settings);
+  settings_ = settings_repository_.Read();
+}
 bool MainWindow::ActivateCatalog(const std::filesystem::path& path) {
   auto loadedSettings = settings_;
   std::optional<catalog::CatalogSession> loadedSession;
@@ -1567,7 +1584,7 @@ bool MainWindow::ActivateCatalog(const std::filesystem::path& path) {
   TreeView_SelectItem(tree_, nullptr);
 
   try {
-    storage::SaveSettings(layout_, settings_);
+    PersistSettings(settings_);
   } catch (const std::exception& error) {
     logger_.Error(L"Список открыт, но активный путь не сохранён в настройках: " + ibstart::utf::FromUtf8(error.what()));
     Message(window_, L"Список открыт, но сохранить его как активный не удалось. После перезапуска может открыться предыдущий список.",
@@ -1615,13 +1632,12 @@ void MainWindow::OpenRecentList(size_t index) {
     auto updatedSettings = settings_;
     updatedSettings.recent_ibases.erase(updatedSettings.recent_ibases.begin() + static_cast<std::ptrdiff_t>(index));
     try {
-      storage::SaveSettings(layout_, updatedSettings);
+      PersistSettings(updatedSettings);
     } catch (const std::exception& exception) {
       logger_.Error(L"Недоступный список не удалось удалить из истории: " + ibstart::utf::FromUtf8(exception.what()));
       Message(window_, L"Список больше не доступен, но удалить его из истории не удалось.", L"Список баз", MB_OK | MB_ICONWARNING);
       return;
     }
-    settings_ = std::move(updatedSettings);
     RefreshFileMenu();
     DrawMenuBar(window_);
     Message(window_, L"Этот список больше не доступен. Он удалён из истории.", L"Список баз", MB_OK | MB_ICONWARNING);
@@ -1634,7 +1650,7 @@ void MainWindow::ToggleTagDisplay() {
   const bool previous = settings_.show_tags_in_list;
   settings_.show_tags_in_list = !settings_.show_tags_in_list;
   try {
-    storage::SaveSettings(layout_, settings_);
+    PersistSettings(settings_);
   } catch (const std::exception& error) {
     settings_.show_tags_in_list = previous;
     logger_.Error(L"Ошибка сохранения отображения тегов: " + ibstart::utf::FromUtf8(error.what()));
