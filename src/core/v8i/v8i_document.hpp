@@ -19,6 +19,12 @@ struct Section {
   // Fields are only updated or appended, so this preserves comments and blank
   // lines relative to every original known or unknown key.
   std::vector<size_t> opaque_field_positions;
+  // Each parsed line keeps the ending that followed that line in the source.
+  // Empty endings belong to newly created lines or to a source line at EOF.
+  std::wstring header_ending;
+  std::vector<std::wstring> leading_line_endings;
+  std::vector<std::wstring> field_line_endings;
+  std::vector<std::wstring> opaque_line_endings;
 };
 
 class V8iDocument {
@@ -34,12 +40,14 @@ class V8iDocument {
 
   Utf8Encoding encoding{Utf8Encoding::utf8_bom};
   std::wstring newline{L"\r\n"};
-  // One entry per physical line ending in the source, preserving mixed files.
-  // New lines created by an editor use newline when this sequence is exhausted.
+  // Source-level snapshot retained for diagnostics and compatibility. Parsed
+  // line objects below Section and preamble retain their own endings so that
+  // structural edits do not redistribute endings by output index.
   std::vector<std::wstring> line_endings;
   bool trailing_newline{true};
   std::vector<std::wstring> diagnostics;
   std::vector<std::wstring> preamble;
+  std::vector<std::wstring> preamble_line_endings;
   std::vector<Section> sections;
 };
 

@@ -2161,6 +2161,27 @@ void TestV8iLineEndingRoundTrips() {
   CHECK(mixed.SerializeUtf8() == "[Base]\r\nConnect=x\n[Other]\rConnect=y");
 }
 
+void TestV8iStructuralLineEndingOwnership() {
+  constexpr std::string_view source =
+      "[First]\r\nA=1\n[Second]\r\nB=2\n[Third]\nC=3\r\n[Fourth]\rD=4";
+  constexpr std::string_view after_insert =
+      "[First]\r\nA=1\n[Second]\r\nB=2\n[Inserted]\r\nConnect=x\r\n"
+      "[Third]\nC=3\r\n[Fourth]\rD=4";
+  constexpr std::string_view after_remove =
+      "[First]\r\nA=1\n[Third]\nC=3\r\n[Fourth]\rD=4";
+
+  auto inserted = ibstart::v8i::V8iDocument::ParseUtf8(source);
+  ibstart::v8i::Section new_section;
+  new_section.entry.name = L"Inserted";
+  new_section.entry.fields.push_back({L"Connect", L"x"});
+  inserted.sections.insert(inserted.sections.begin() + 2, std::move(new_section));
+  CHECK(inserted.SerializeUtf8() == after_insert);
+
+  auto removed = ibstart::v8i::V8iDocument::ParseUtf8(source);
+  CHECK(removed.Remove(L"Second"));
+  CHECK(removed.SerializeUtf8() == after_remove);
+}
+
 void TestCacheContinuesAfterCandidateError() {
   const auto directory = Temp(L"cache-continues-after-error");
   const auto local = directory / L"local";
@@ -2520,6 +2541,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"CaseInsensitiveDatabaseIdentifiers", TestCaseInsensitiveDatabaseIdentifiers);
   run(L"NoBomAndCatalog", TestNoBomAndCatalog);
   run(L"V8iLineEndingRoundTrips", TestV8iLineEndingRoundTrips);
+  run(L"V8iStructuralLineEndingOwnership", TestV8iStructuralLineEndingOwnership);
   run(L"SafeStore", TestSafeStore);
   run(L"V8iFileSizeLimit", TestV8iFileSizeLimit);
   run(L"ConfirmedV8iOverwrite", TestConfirmedV8iOverwrite);
