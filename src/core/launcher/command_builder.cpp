@@ -2,6 +2,7 @@
 
 #include "core/connection/connection_string.hpp"
 #include "core/domain/utf.hpp"
+#include "core/platform/platform_discovery.hpp"
 #include "core/platform/platform_version.hpp"
 
 #include <algorithm>
@@ -327,7 +328,7 @@ std::optional<domain::PlatformInstallation> SelectPlatform(
     const bool requiresThickClient = options.mode == domain::LaunchMode::designer ||
         options.client_type == domain::ClientType::thick;
     if (requiresThickClient && IsThinOnlyPlatform(candidate)) continue;
-    if (options.client_type == domain::ClientType::thin && !candidate.has_thin_client) continue;
+    if (options.client_type == domain::ClientType::thin && !platform::FindThinClient(candidate.executable)) continue;
     filtered.push_back(candidate);
   }
   std::sort(filtered.begin(), filtered.end(), [architecture](const auto& left, const auto& right) {
@@ -362,9 +363,9 @@ domain::LaunchCommand BuildCommand(const domain::Database& database,
   command.executable = platform.executable;
   if (options.client_type == domain::ClientType::thin) {
     if (options.mode == domain::LaunchMode::designer) throw std::invalid_argument("Designer cannot be launched with the thin client.");
-    const auto thin = platform.executable.parent_path() / L"1cv8c.exe";
-    if (!std::filesystem::exists(thin)) throw std::runtime_error("The selected platform has no thin client (1cv8c.exe).");
-    command.executable = thin;
+    const auto thin = platform::FindThinClient(platform.executable);
+    if (!thin) throw std::runtime_error("The selected platform has no thin client (1cv8c.exe).");
+    command.executable = *thin;
   }
   if (options.mode == domain::LaunchMode::designer) command.arguments.push_back(L"DESIGNER");
   else if (options.mode == domain::LaunchMode::enterprise) command.arguments.push_back(L"ENTERPRISE");

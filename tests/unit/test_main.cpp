@@ -42,6 +42,20 @@ void WriteBytes(const std::filesystem::path& path, std::string_view text) { std:
 std::filesystem::path Fixture(const wchar_t* name) { return std::filesystem::current_path() / L"tests" / L"fixtures" / name; }
 std::filesystem::path Temp(const wchar_t* suffix) { auto path = std::filesystem::temp_directory_path() / (std::wstring(L"ibstart-tests-") + suffix + L"-" + std::to_wstring(GetCurrentProcessId())); std::error_code error; std::filesystem::remove_all(path, error); std::filesystem::create_directories(path); return path; }
 
+std::filesystem::path SystemExecutable(const wchar_t* name) {
+  wchar_t systemDirectory[MAX_PATH]{};
+  const UINT length = GetSystemDirectoryW(systemDirectory, static_cast<UINT>(std::size(systemDirectory)));
+  if (length == 0 || length >= std::size(systemDirectory)) return {};
+  return std::filesystem::path(systemDirectory) / name;
+}
+
+bool CopySystemExecutable(const std::filesystem::path& target) {
+  const auto source = SystemExecutable(L"cmd.exe");
+  std::error_code error;
+  if (source.empty() || !std::filesystem::is_regular_file(source, error) || error) return false;
+  return std::filesystem::copy_file(source, target, std::filesystem::copy_options::overwrite_existing, error) && !error;
+}
+
 bool CreateJunction(const std::filesystem::path& junction, const std::filesystem::path& target) {
   std::wstring command_line = L"cmd.exe /d /c mklink /J \"" + junction.wstring() + L"\" \"" + target.wstring() + L"\"";
   std::vector<wchar_t> mutable_command_line(command_line.begin(), command_line.end());
@@ -342,9 +356,17 @@ void TestCommandBuilderAndSelection() {
   const auto preferredEquivalentVersion = ibstart::launcher::SelectPlatform(equivalentVersions, options);
   CHECK(preferredEquivalentVersion && preferredEquivalentVersion->bitness == ibstart::domain::ClientBitness::x64);
 
+  const auto mixedClientDirectory = Temp(L"mixed-client-selection");
+  const auto mixedThinExecutable = mixedClientDirectory / L"1cv8c.exe";
+  const auto mixedThickExecutable = mixedClientDirectory / L"1cv8.exe";
+  if (!CopySystemExecutable(mixedThinExecutable) || !CopySystemExecutable(mixedThickExecutable)) {
+    std::error_code cleanupError;
+    std::filesystem::remove_all(mixedClientDirectory, cleanupError);
+    return;
+  }
   const std::vector<ibstart::domain::PlatformInstallation> mixedClients = {
-      {L"C:\\1cv8\\8.3.30\\bin\\1cv8c.exe", L"8.3.30", ibstart::domain::ClientBitness::x64, true},
-      {L"C:\\1cv8\\8.3.29\\bin\\1cv8.exe", L"8.3.29", ibstart::domain::ClientBitness::x64, true}};
+      {mixedThinExecutable, L"8.3.30", ibstart::domain::ClientBitness::x64, true},
+      {mixedThickExecutable, L"8.3.29", ibstart::domain::ClientBitness::x64, true}};
   options.mode = ibstart::domain::LaunchMode::designer;
   options.client_type = ibstart::domain::ClientType::automatic;
   const auto designerPlatform = ibstart::launcher::SelectPlatform(mixedClients, options);
@@ -360,6 +382,8 @@ void TestCommandBuilderAndSelection() {
   CHECK(thinOnlyPlatform && thinOnlyPlatform->executable.filename() == L"1cv8c.exe");
   options.client_type = ibstart::domain::ClientType::automatic;
   options.mode = ibstart::domain::LaunchMode::designer;
+  std::error_code mixedCleanupError;
+  std::filesystem::remove_all(mixedClientDirectory, mixedCleanupError);
 
   CHECK(ibstart::launcher::ParseAppArchitecture(L"x86_64_prt") == ibstart::domain::ClientArchitecture::x64_priority);
   CHECK(ibstart::launcher::ParseAppArchitecture(L"x86") == ibstart::domain::ClientArchitecture::x86);
@@ -384,8 +408,11 @@ void TestCommandBuilderAndSelection() {
   const auto thinDirectory = Temp(L"thin-web-client");
   const auto thickExecutable = thinDirectory / L"1cv8.exe";
   const auto thinExecutable = thinDirectory / L"1cv8c.exe";
-  WriteBytes(thickExecutable, "");
-  WriteBytes(thinExecutable, "");
+  if (!CopySystemExecutable(thickExecutable) || !CopySystemExecutable(thinExecutable)) {
+    std::error_code cleanupError;
+    std::filesystem::remove_all(thinDirectory, cleanupError);
+    return;
+  }
   const ibstart::domain::PlatformInstallation thinPlatform{thickExecutable, L"8.3.27", ibstart::domain::ClientBitness::x64, true};
   ibstart::domain::Database web; web.connect = L"WS = \"https://example.test/base\" ; WA=1";
   options.mode = ibstart::domain::LaunchMode::enterprise;
@@ -521,8 +548,11 @@ void TestPlatformDiscoveryLargeVersions() {
   const auto larger = root / L"8.3.100000000000000000000" / L"bin";
   std::filesystem::create_directories(smaller);
   std::filesystem::create_directories(larger);
-  WriteBytes(smaller / L"1cv8.exe", "");
-  WriteBytes(larger / L"1cv8.exe", "");
+  if (!CopySystemExecutable(smaller / L"1cv8.exe") || !CopySystemExecutable(larger / L"1cv8.exe")) {
+    std::error_code cleanupError;
+    std::filesystem::remove_all(root, cleanupError);
+    return;
+  }
 
   const auto discovered = ibstart::platform::Discover({root}, false);
   const auto smallerPosition = std::find_if(discovered.begin(), discovered.end(), [&](const auto& item) { return item.executable == smaller / L"1cv8.exe"; });
@@ -541,7 +571,11 @@ void TestStandaloneThinClientDiscovery() {
   const auto bin = root / kVersion / L"bin";
   std::filesystem::create_directories(bin);
   const auto thin = bin / L"1cv8c.exe";
-  WriteBytes(thin, "");
+  if (!CopySystemExecutable(thin)) {
+    std::error_code cleanupError;
+    std::filesystem::remove_all(root, cleanupError);
+    return;
+  }
 
   const auto discovered = ibstart::platform::Discover({root}, false);
   const auto found = std::find_if(discovered.begin(), discovered.end(), [&](const auto& item) { return item.executable == thin; });
@@ -563,6 +597,54 @@ void TestStandaloneThinClientDiscovery() {
   CHECK(command.arguments == std::vector<std::wstring>{L"ENTERPRISE", L"/WS", L"https://example.test/base"});
 
   std::error_code error;
+  std::filesystem::remove_all(root, error);
+}
+
+void TestThinClientValidation() {
+  const auto root = Temp(L"thin-client-validation");
+  const auto bin = root / L"8.3.27.1688" / L"bin";
+  std::filesystem::create_directories(bin);
+  const auto thick = bin / L"1cv8.exe";
+  const auto thin = bin / L"1cv8c.exe";
+  if (!CopySystemExecutable(thick)) {
+    std::error_code cleanupError;
+    std::filesystem::remove_all(root, cleanupError);
+    return;
+  }
+
+  std::error_code error;
+  if (!std::filesystem::create_directory(thin, error) || error) {
+    std::filesystem::remove_all(root, error);
+    return;
+  }
+  CHECK(!ibstart::platform::FindThinClient(thick));
+  CHECK(!ibstart::platform::FindThinClient(thin));
+
+  const std::vector<ibstart::domain::PlatformInstallation> candidates = {
+      {thick, L"8.3.27.1688", ibstart::domain::ClientBitness::x64, true}};
+  ibstart::domain::LaunchOptions options;
+  options.mode = ibstart::domain::LaunchMode::enterprise;
+  options.client_type = ibstart::domain::ClientType::thin;
+  options.version = L"8.3.27.1688";
+  CHECK(!ibstart::launcher::SelectPlatform(candidates, options));
+
+  ibstart::domain::Database web;
+  web.connect = L"WS=\"https://example.test/base\"";
+  bool rejectedDirectory = false;
+  try { static_cast<void>(ibstart::launcher::BuildCommand(web, candidates.front(), options)); }
+  catch (const std::runtime_error&) { rejectedDirectory = true; }
+  CHECK(rejectedDirectory);
+
+  std::filesystem::remove_all(thin, error);
+  WriteBytes(thin, "not a PE executable");
+  CHECK(!ibstart::platform::FindThinClient(thick));
+  CHECK(!ibstart::platform::FindThinClient(thin));
+  CHECK(!ibstart::launcher::SelectPlatform(candidates, options));
+  bool rejectedCorruptedFile = false;
+  try { static_cast<void>(ibstart::launcher::BuildCommand(web, candidates.front(), options)); }
+  catch (const std::runtime_error&) { rejectedCorruptedFile = true; }
+  CHECK(rejectedCorruptedFile);
+
   std::filesystem::remove_all(root, error);
 }
 
@@ -2003,6 +2085,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"LaunchParameterConflicts", TestLaunchParameterConflicts);
   run(L"PlatformDiscoveryLargeVersions", TestPlatformDiscoveryLargeVersions);
   run(L"StandaloneThinClientDiscovery", TestStandaloneThinClientDiscovery);
+  run(L"ThinClientValidation", TestThinClientValidation);
   run(L"CustomX86PlatformDiscovery", TestCustomX86PlatformDiscovery);
   run(L"WindowsArgumentQuoting", TestWindowsArgumentQuoting);
   run(L"CatalogOrderingAndCycles", TestCatalogOrderingAndCycles);
