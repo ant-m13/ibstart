@@ -45,6 +45,8 @@ class MainWindow {
   void RegisterCommandHandlers();
   void CreateControls();
   void Layout(int width, int height);
+  void PositionSearchClearButton(int x, int y, int width, int height);
+  void RefreshSearchClearButton();
   void LoadCatalog(bool report_error = true);
   bool SaveCatalog(catalog::Catalog candidate);
   [[nodiscard]] bool EnsureCatalogValid(const catalog::Catalog& catalog, std::wstring_view operation) const;
@@ -56,6 +58,7 @@ class MainWindow {
   void RefreshTagFilter();
   [[nodiscard]] presentation::TreeTagFilter CurrentTagFilter() const;
   LRESULT DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const;
+  bool DrawSearchClearButton(const DRAWITEMSTRUCT* draw) const;
   bool MeasureContextMenuItem(MEASUREITEMSTRUCT* measure) const;
   bool DrawContextMenuItem(const DRAWITEMSTRUCT* draw) const;
   void BeginTreeDrag(HTREEITEM item, POINT tree_point);
@@ -93,6 +96,7 @@ class MainWindow {
   void RefreshFileMenu();
   void RefreshMainMenuBar();
   void ToggleTagDisplay();
+  void ClearSearch();
   void SetStatus(std::wstring text);
   [[nodiscard]] std::wstring CatalogStatistics() const;
   void SetSimpleMode(bool enabled);
@@ -114,6 +118,7 @@ class MainWindow {
   HINSTANCE instance_{};
   HWND window_{};
   HWND search_{};
+  HWND search_clear_{};
   HWND tag_filter_label_{};
   HWND tag_filter_{};
   HWND tree_{};
@@ -131,6 +136,7 @@ class MainWindow {
   HFONT controls_font_{};
   HFONT controls_bold_font_{};
   HFONT button_font_{};
+  HFONT search_clear_font_{};
   HFONT details_title_font_{};
   HFONT details_subtitle_font_{};
   HFONT details_key_font_{};
