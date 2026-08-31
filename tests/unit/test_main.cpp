@@ -1898,6 +1898,42 @@ void TestCacheRejectsJunctions() {
   std::filesystem::remove_all(directory, error);
 }
 
+void TestCacheAllowsJunctionedTrustedRoot() {
+  const auto directory = Temp(L"cache-junctioned-trusted-root");
+  const auto physical_local = directory / L"physical-local";
+  const auto aliased_local = directory / L"local-alias";
+  const auto physical_cache = physical_local / L"1C" / L"1Cv8" / L"valid-cache";
+  const auto aliased_cache = aliased_local / L"1C" / L"1Cv8" / L"valid-cache";
+  std::filesystem::create_directories(physical_cache);
+  WriteBytes(physical_cache / L"cache.dat", "remove");
+
+  const bool junction_created = CreateJunction(aliased_local, physical_local);
+  CHECK(junction_created);
+  if (!junction_created) {
+    std::error_code error;
+    std::filesystem::remove_all(directory, error);
+    return;
+  }
+
+  const DWORD required = GetEnvironmentVariableW(L"LOCALAPPDATA", nullptr, 0);
+  std::wstring previous(required, L'\0');
+  if (required != 0) {
+    const DWORD copied = GetEnvironmentVariableW(L"LOCALAPPDATA", previous.data(), required);
+    previous.resize(copied);
+  }
+  SetEnvironmentVariableW(L"LOCALAPPDATA", aliased_local.c_str());
+  const auto result = ibstart::cache::Clear({{aliased_cache, 0}});
+  SetEnvironmentVariableW(L"LOCALAPPDATA", required == 0 ? nullptr : previous.c_str());
+
+  CHECK(result.errors.empty());
+  CHECK(!std::filesystem::exists(aliased_cache));
+  CHECK(!std::filesystem::exists(physical_cache));
+
+  RemoveDirectoryLink(aliased_local);
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
 void TestCacheRejectsSymbolicReparsePoints() {
   const auto directory = Temp(L"cache-symbolic-link-safety");
   const auto local = directory / L"local";
@@ -2773,6 +2809,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"CacheReportsLocalizedWindowsError", TestCacheReportsLocalizedWindowsError);
   run(L"CacheRejectsLicenseDescendants", TestCacheRejectsLicenseDescendants);
   run(L"CacheRejectsJunctions", TestCacheRejectsJunctions);
+  run(L"CacheAllowsJunctionedTrustedRoot", TestCacheAllowsJunctionedTrustedRoot);
   run(L"CacheRejectsSymbolicReparsePoints", TestCacheRejectsSymbolicReparsePoints);
   run(L"CacheContinuesAfterCandidateError", TestCacheContinuesAfterCandidateError);
   run(L"CacheContinuesWithActiveOneCProcess", TestCacheContinuesWithActiveOneCProcess);
