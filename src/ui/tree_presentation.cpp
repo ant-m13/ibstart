@@ -3,9 +3,12 @@
 #include "core/domain/utf.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstddef>
+#include <cstdint>
 #include <cwctype>
 #include <limits>
+#include <optional>
 #include <unordered_map>
 #include <utility>
 
@@ -17,6 +20,25 @@ constexpr COLORREF kInactiveSearchSelectionText = RGB(0, 74, 84);
 
 bool EqualNoCase(std::wstring_view left, std::wstring_view right) {
   return domain::EqualIdentifier(left, right);
+}
+
+std::wstring DeclinedCount(std::int64_t count, std::wstring_view singular, std::wstring_view few,
+    std::wstring_view plural) {
+  const auto last_two_digits = count % 100;
+  const auto last_digit = count % 10;
+  const std::wstring_view form = last_two_digits >= 11 && last_two_digits <= 14 ? plural :
+      last_digit == 1 ? singular : last_digit >= 2 && last_digit <= 4 ? few : plural;
+  return std::to_wstring(count) + L" " + std::wstring(form) + L" назад";
+}
+
+std::optional<std::chrono::system_clock::time_point> RecentLaunchTime(
+    const std::vector<domain::HistoryItem>& history, const domain::Entry& entry) {
+  const auto database_id = catalog::StableDatabaseId(entry);
+  const auto found = std::find_if(history.begin(), history.end(), [&](const auto& launch) {
+    return EqualNoCase(launch.database_id, database_id);
+  });
+  if (found == history.end()) return std::nullopt;
+  return found->timestamp;
 }
 
 std::wstring TrimText(std::wstring_view value) {
@@ -33,6 +55,13 @@ LPARAM TreeItemData(HWND tree, HTREEITEM item) {
   data.mask = TVIF_PARAM;
   data.hItem = item;
   return TreeView_GetItem(tree, &data) ? data.lParam : 0;
+}
+
+bool IsInBranch(HWND tree, HTREEITEM item, LPARAM branch_item_data) {
+  for (auto current = item; current; current = TreeView_GetParent(tree, current)) {
+    if (TreeItemData(tree, current) == branch_item_data) return true;
+  }
+  return false;
 }
 
 std::wstring ReadTreeItemText(HWND tree, HTREEITEM item) {
@@ -164,6 +193,23 @@ std::vector<std::wstring> CollectRecentDatabaseNames(const catalog::Catalog& cat
   return result;
 }
 
+std::wstring FormatRelativeLaunchTime(std::chrono::system_clock::time_point timestamp,
+    std::chrono::system_clock::time_point now) {
+  using namespace std::chrono;
+  if (timestamp >= now) return L"только что";
+  const auto elapsed = duration_cast<seconds>(now - timestamp);
+  if (elapsed < minutes(1)) return L"только что";
+
+  const auto minute_count = duration_cast<minutes>(elapsed).count();
+  if (minute_count < 60) return DeclinedCount(minute_count, L"минуту", L"минуты", L"минут");
+
+  const auto hour_count = duration_cast<hours>(elapsed).count();
+  if (hour_count < 24) return DeclinedCount(hour_count, L"час", L"часа", L"часов");
+
+  const auto day_count = duration_cast<hours>(elapsed).count() / 24;
+  return DeclinedCount(day_count, L"день", L"дня", L"дней");
+}
+
 std::vector<catalog::TreeItem> FilterTreeItems(const catalog::Catalog& catalog,
     const std::vector<catalog::TreeItem>& items, std::wstring_view search_filter,
     const TreeTagFilter& filter, const storage::DatabaseTags& tags,
@@ -252,13 +298,18 @@ bool MatchesTagFilter(const catalog::Catalog& catalog, const catalog::TreeItem& 
 
 LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Catalog* catalog,
     const storage::Settings& settings, const storage::DatabaseTags& tags_by_database,
-    const storage::TagStyles& styles, std::wstring_view search_filter, HFONT controls_font, HFONT controls_bold_font) {
+    const storage::TagStyles& styles, const std::vector<domain::HistoryItem>& history,
+    LPARAM recent_root_item_data, std::wstring_view search_filter, HFONT controls_font, HFONT controls_bold_font) {
+  const bool show_recent_launch_times = !settings.simple_mode && !history.empty();
   if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) {
-    if ((settings.simple_mode || !settings.show_tags_in_list) && search_filter.empty()) return CDRF_DODEFAULT;
+    if ((settings.simple_mode || !settings.show_tags_in_list) && search_filter.empty() && !show_recent_launch_times) {
+      return CDRF_DODEFAULT;
+    }
     return CDRF_NOTIFYITEMDRAW;
   }
   if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
-    const bool needs_postpaint = (!settings.simple_mode && settings.show_tags_in_list) || !search_filter.empty();
+    const bool needs_postpaint = (!settings.simple_mode && settings.show_tags_in_list) || !search_filter.empty() ||
+        show_recent_launch_times;
     if (!needs_postpaint) return CDRF_DODEFAULT;
 
     if (!search_filter.empty()) {
@@ -298,6 +349,31 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
   if (!TreeView_GetItemRect(tree, item, &label_rect, TRUE)) return CDRF_DODEFAULT;
   if (catalog) {
     if (const auto* entry = EntryForTreeRow(*catalog, TreeItemData(tree, item), label); entry && entry->IsDatabase()) {
+      int trailing_x = label_rect.right + 8;
+      const auto launch_time = show_recent_launch_times && IsInBranch(tree, item, recent_root_item_data) ?
+          RecentLaunchTime(history, *entry) : std::nullopt;
+      if (launch_time) {
+        RECT client{};
+        GetClientRect(tree, &client);
+        if (trailing_x < client.right - 4) {
+          const int saved = SaveDC(draw->nmcd.hdc);
+          const HFONT font = controls_font ? controls_font :
+              reinterpret_cast<HFONT>(SendMessageW(tree, WM_GETFONT, 0, 0));
+          if (font) SelectObject(draw->nmcd.hdc, font);
+          SetBkMode(draw->nmcd.hdc, TRANSPARENT);
+          const std::wstring text = FormatRelativeLaunchTime(*launch_time, std::chrono::system_clock::now());
+          SIZE size{};
+          GetTextExtentPoint32W(draw->nmcd.hdc, text.data(), static_cast<int>(text.size()), &size);
+          if (trailing_x + size.cx <= client.right - 4) {
+            SetTextColor(draw->nmcd.hdc, GetSysColor(COLOR_GRAYTEXT));
+            RECT text_rect{trailing_x, label_rect.top, client.right - 4, label_rect.bottom};
+            DrawTextW(draw->nmcd.hdc, text.data(), static_cast<int>(text.size()), &text_rect,
+                DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+            trailing_x += size.cx + 8;
+          }
+          RestoreDC(draw->nmcd.hdc, saved);
+        }
+      }
       const auto& tags = TagsFor(tags_by_database, *entry);
       const bool tag_matches_search = !search_filter.empty() && std::any_of(tags.begin(), tags.end(), [&](const auto& tag) {
         return utf::FindNoCaseOrdinal(tag, search_filter) != std::wstring_view::npos;
@@ -317,7 +393,7 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
         }
         if (font) SelectObject(draw->nmcd.hdc, font);
         SetBkMode(draw->nmcd.hdc, TRANSPARENT);
-        int x = label_rect.right + 8;
+        int x = trailing_x;
         const int label_height = static_cast<int>(label_rect.bottom - label_rect.top);
         const int height = std::max(16, label_height - 2);
         const int y = static_cast<int>(label_rect.top) + (label_height - height) / 2;

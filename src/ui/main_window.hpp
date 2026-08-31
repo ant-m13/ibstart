@@ -40,6 +40,11 @@ class MainWindow {
   void Activate();
 
  private:
+  struct DatabaseSelectionAnchor {
+    std::wstring id;
+    LPARAM branch_data{};
+  };
+
   static LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
   LRESULT Handle(HWND window, UINT message, WPARAM wparam, LPARAM lparam);
   void RegisterCommandHandlers();
@@ -54,6 +59,8 @@ class MainWindow {
   void PopulateTreeWithoutFlicker(std::wstring_view selected = {}, bool select_catalog_root = false);
   void RefreshRecentTreeBranch(std::optional<size_t> selected_recent_section_index = std::nullopt);
   [[nodiscard]] std::optional<domain::Entry> SelectedCatalogEntry() const;
+  [[nodiscard]] std::optional<DatabaseSelectionAnchor> CaptureDatabaseSelection() const;
+  [[nodiscard]] bool RestoreDatabaseSelection(const DatabaseSelectionAnchor& selection);
   bool ResetStaleSelectionIfNeeded();
   [[nodiscard]] std::wstring SelectedCatalogName() const;
   void SortFolder(std::wstring_view folder, catalog::SortDirection direction);

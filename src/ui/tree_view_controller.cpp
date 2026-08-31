@@ -334,6 +334,15 @@ bool TreeViewController::SelectItem(size_t section_index) const {
   return true;
 }
 
+bool TreeViewController::SelectItemInBranch(std::wstring_view name, LPARAM branch_data) const {
+  if (!tree_ || name.empty()) return false;
+  const HTREEITEM item = FindItemInBranch(name, branch_data);
+  if (!item) return false;
+  TreeView_SelectItem(tree_, item);
+  TreeView_EnsureVisible(tree_, item);
+  return true;
+}
+
 bool TreeViewController::SelectCatalogRoot() const {
   const HTREEITEM item = FindTopLevelItem(kCatalogRootItemData);
   if (!item) return false;
@@ -395,37 +404,56 @@ void TreeViewController::RestoreViewState(const ViewState& state, bool expand_vi
   if (!tree_) return;
   RestoreExpansionStates(state.expansion_states);
   if (expand_visible_branches) ExpandVisibleBranches(TreeView_GetRoot(tree_));
+  const auto matches_saved_name = [&](HTREEITEM item) {
+    return item && (state.selected_name.empty() ||
+        (IsCatalogItemData(ItemData(item)) && EqualNoCase(ItemName(item), state.selected_name)));
+  };
+  const auto select = [&](HTREEITEM item) {
+    if (!matches_saved_name(item)) return false;
+    TreeView_SelectItem(tree_, item);
+    TreeView_EnsureVisible(tree_, item);
+    return true;
+  };
+
   bool selection_restored = state.selected_name.empty() && state.selected_item_data == 0;
-  if (!state.selected_name.empty()) {
-    if (const HTREEITEM item = FindItemInBranch(state.selected_name, state.selected_branch_data)) {
-      TreeView_SelectItem(tree_, item);
-      TreeView_EnsureVisible(tree_, item);
-      selection_restored = true;
-    }
-    // EnsureVisible can expand ancestors of the selected row.  Reapply the
-    // captured state so a refresh never changes a branch the user collapsed,
-    // except while search deliberately exposes matching branches.
-    if (!expand_visible_branches) RestoreExpansionStates(state.expansion_states);
-  } else if (state.selected_item_data != 0) {
-    if (const HTREEITEM item = FindTopLevelItem(state.selected_item_data)) {
-      TreeView_SelectItem(tree_, item);
-      TreeView_EnsureVisible(tree_, item);
-      selection_restored = true;
+  if (state.selected_item_data != 0) {
+    selection_restored = select(FindItemInBranch(state.selected_item_data, state.selected_branch_data));
+  }
+  if (!selection_restored && !state.selected_name.empty()) {
+    selection_restored = select(FindItemInBranch(state.selected_name, state.selected_branch_data));
+  }
+  // A database can disappear from a virtual branch because it was removed
+  // from favorites or recent launches.  Keep the same database selected in
+  // the ordinary catalog when it is still visible instead of leaving the
+  // native control to choose an unrelated neighbor.
+  if (!selection_restored && IsCatalogItemData(state.selected_item_data) &&
+      (state.selected_branch_data == kRecentRootItemData || state.selected_branch_data == kFavoritesRootItemData)) {
+    selection_restored = select(FindItemInBranch(state.selected_item_data, kCatalogRootItemData));
+    if (!selection_restored && !state.selected_name.empty()) {
+      selection_restored = select(FindItemInBranch(state.selected_name, kCatalogRootItemData));
     }
   }
+  // EnsureVisible can expand ancestors of the selected row.  Reapply the
+  // captured state so a refresh never changes a branch the user collapsed,
+  // except while search deliberately exposes matching branches.
+  if (selection_restored && !expand_visible_branches) RestoreExpansionStates(state.expansion_states);
   if (!selection_restored) TreeView_SelectItem(tree_, nullptr);
 
   // Keep the vertical viewport anchored to the same row where possible. This
   // prevents an update from looking like a jump in a large tree.
-  if (!state.first_visible_name.empty()) {
-    if (const HTREEITEM item = FindItemInBranch(state.first_visible_name, state.first_visible_branch_data)) {
-      SendMessageW(tree_, TVM_SELECTITEM, TVGN_FIRSTVISIBLE, reinterpret_cast<LPARAM>(item));
-    }
-  } else if (state.first_visible_data != 0) {
-    if (const HTREEITEM item = FindTopLevelItem(state.first_visible_data)) {
-      SendMessageW(tree_, TVM_SELECTITEM, TVGN_FIRSTVISIBLE, reinterpret_cast<LPARAM>(item));
-    }
+  const auto matches_first_visible_name = [&](HTREEITEM item) {
+    return item && (state.first_visible_name.empty() ||
+        (IsCatalogItemData(ItemData(item)) && EqualNoCase(ItemName(item), state.first_visible_name)));
+  };
+  HTREEITEM first_visible{};
+  if (state.first_visible_data != 0) {
+    const HTREEITEM item = FindItemInBranch(state.first_visible_data, state.first_visible_branch_data);
+    if (matches_first_visible_name(item)) first_visible = item;
   }
+  if (!first_visible && !state.first_visible_name.empty()) {
+    first_visible = FindItemInBranch(state.first_visible_name, state.first_visible_branch_data);
+  }
+  if (first_visible) SendMessageW(tree_, TVM_SELECTITEM, TVGN_FIRSTVISIBLE, reinterpret_cast<LPARAM>(first_visible));
 }
 
 void TreeViewController::ExpandVisibleBranches(HTREEITEM item) const {
