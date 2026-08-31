@@ -61,14 +61,26 @@ std::wstring NormalizedLower(const std::filesystem::path& path) {
   return normalized;
 }
 
-std::vector<std::filesystem::path> AllowedCacheRoots() {
-  std::vector<std::filesystem::path> roots;
+struct AllowedCacheRoot {
+  std::filesystem::path root;
+  // APPDATA and LOCALAPPDATA are Windows-owned configuration anchors. They
+  // may themselves be mounted through an alias or junction, but every path
+  // component below the anchor must remain a real directory.
+  std::filesystem::path trusted_base;
+};
+
+std::vector<AllowedCacheRoot> AllowedCacheRoots() {
+  std::vector<AllowedCacheRoot> roots;
   const auto roaming = Env(L"APPDATA");
   const auto local = Env(L"LOCALAPPDATA");
-  if (!roaming.empty()) roots.push_back(std::filesystem::path(roaming) / L"1C" / L"1Cv8");
+  if (!roaming.empty()) {
+    const std::filesystem::path base(roaming);
+    roots.push_back({base / L"1C" / L"1Cv8", base});
+  }
   if (!local.empty()) {
-    roots.push_back(std::filesystem::path(local) / L"1C" / L"1Cv8");
-    roots.push_back(std::filesystem::path(local) / L"IBStart" / L"cache");
+    const std::filesystem::path base(local);
+    roots.push_back({base / L"1C" / L"1Cv8", base});
+    roots.push_back({base / L"IBStart" / L"cache", base});
   }
   return roots;
 }
@@ -92,8 +104,8 @@ bool ContainsReservedCacheFolder(std::wstring_view relative) {
 
 bool IsSafeCachePath(const std::filesystem::path& path) {
   const auto candidate = NormalizedLower(path);
-  for (const auto& rootPath : AllowedCacheRoots()) {
-    auto root = NormalizedLower(rootPath);
+  for (const auto& allowed : AllowedCacheRoots()) {
+    auto root = NormalizedLower(allowed.root);
     if (!root.ends_with(L'\\')) root.push_back(L'\\');
     if (candidate.starts_with(root) && candidate.size() > root.size()) {
       return !ContainsReservedCacheFolder(std::wstring_view(candidate).substr(root.size()));
@@ -229,22 +241,60 @@ std::optional<std::wstring> FinalPath(HANDLE handle, const std::filesystem::path
   return value;
 }
 
+std::optional<std::filesystem::path> RelativePathUnder(const std::filesystem::path& path,
+                                                        const std::filesystem::path& root_path) {
+  const auto candidate = NormalizeWindowsPath(path.lexically_normal().wstring());
+  auto root = NormalizeWindowsPath(root_path.lexically_normal().wstring());
+  if (!root.ends_with(L'\\')) root.push_back(L'\\');
+  if (!candidate.starts_with(root) || candidate.size() <= root.size()) return std::nullopt;
+  return std::filesystem::path(candidate.substr(root.size()));
+}
+
+bool HasReparsePointBelowTrustedBase(const std::filesystem::path& path, const AllowedCacheRoot& allowed,
+                                     std::wstring& failure) {
+  const auto relative_to_root = RelativePathUnder(path, allowed.root);
+  const auto relative_to_base = RelativePathUnder(path, allowed.trusted_base);
+  if (!relative_to_root || !relative_to_base) return false;
+
+  std::filesystem::path current = allowed.trusted_base;
+  for (const auto& component : *relative_to_base) {
+    const auto name = component.wstring();
+    if (name.empty() || name == L".") continue;
+    if (name == L"..") return false;
+    current /= component;
+    const DWORD attributes = GetFileAttributesW(current.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES) {
+      failure = WindowsFailure(L"Не удалось проверить путь очистки", current, GetLastError());
+      return false;
+    }
+    if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+      failure = L"Отказ от очистки пути с reparse point: " + current.wstring();
+      return false;
+    }
+  }
+  return true;
+}
+
 bool IsHandleInAllowedCacheRoot(HANDLE handle, const std::filesystem::path& path, std::wstring& failure) {
   const auto final_path = FinalPath(handle, path, failure);
   if (!final_path) return false;
 
   const auto candidate = NormalizeWindowsPath(*final_path);
-  const auto expected = NormalizeWindowsPath(path.lexically_normal().wstring());
+  const auto expected = NormalizeWindowsPath(NormalizedLower(path));
   if (candidate != expected) {
     failure = L"Отказ от очистки пути с reparse point: " + path.wstring();
     return false;
   }
-  for (const auto& root_path : AllowedCacheRoots()) {
-    // Use the lexical allowlist root here. Resolving it with weakly_canonical would
-    // make a junction in the allowlist itself look like an approved physical root.
-    auto root = NormalizeWindowsPath(root_path.lexically_normal().wstring());
+  for (const auto& allowed : AllowedCacheRoots()) {
+    auto root = NormalizeWindowsPath(NormalizedLower(allowed.root));
     if (!root.ends_with(L'\\')) root.push_back(L'\\');
-    if (candidate.starts_with(root) && candidate.size() > root.size()) return true;
+    if (!candidate.starts_with(root) || candidate.size() <= root.size()) continue;
+    if (!RelativePathUnder(path, allowed.root)) continue;
+    if (!HasReparsePointBelowTrustedBase(path, allowed, failure)) {
+      if (failure.empty()) failure = L"Отказ от очистки каталога вне allowlist: " + path.wstring();
+      return false;
+    }
+    return true;
   }
   failure = L"Отказ от очистки каталога вне allowlist: " + path.wstring();
   return false;
@@ -318,11 +368,11 @@ bool HandleStillNames(HANDLE handle, const std::filesystem::path& path, const Fi
   }
   const auto final_path = FinalPath(handle, path, failure);
   if (!final_path) return false;
-  if (NormalizeWindowsPath(*final_path) != NormalizeWindowsPath(path.lexically_normal().wstring())) {
+  if (NormalizeWindowsPath(*final_path) != NormalizeWindowsPath(NormalizedLower(path))) {
     failure = L"Путь изменился во время очистки: " + path.wstring();
     return false;
   }
-  return true;
+  return IsHandleInAllowedCacheRoot(handle, path, failure);
 }
 
 bool PathStillNames(const OpenDirectory& directory, std::wstring& failure) {
