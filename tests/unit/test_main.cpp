@@ -1192,6 +1192,13 @@ bool IsTreeItemExpanded(HWND tree, HTREEITEM item) {
   return item && (TreeView_GetItemState(tree, item, TVIS_EXPANDED) & TVIS_EXPANDED) != 0;
 }
 
+HTREEITEM FindTopLevelTreeItemByData(const ibstart::ui::TreeViewController& controller, HWND tree, LPARAM data) {
+  for (auto item = TreeView_GetRoot(tree); item; item = TreeView_GetNextSibling(tree, item)) {
+    if (controller.ItemData(item) == data) return item;
+  }
+  return nullptr;
+}
+
 void TestSearchExpandsAndRestoresGroups() {
   INITCOMMONCONTROLSEX common_controls{sizeof(common_controls), ICC_TREEVIEW_CLASSES};
   CHECK(InitCommonControlsEx(&common_controls) != FALSE);
@@ -1282,6 +1289,62 @@ void TestCatalogRefreshRejectsStaleSelection() {
   DestroyWindow(tree);
 }
 
+void TestVirtualBranchSelectionSurvivesRefresh() {
+  INITCOMMONCONTROLSEX common_controls{sizeof(common_controls), ICC_TREEVIEW_CLASSES};
+  CHECK(InitCommonControlsEx(&common_controls) != FALSE);
+  const HWND tree = CreateWindowExW(0, WC_TREEVIEWW, L"",
+      WS_CHILD | TVS_HASBUTTONS | TVS_HASLINES | TVS_LINESATROOT,
+      0, 0, 640, 480, GetDesktopWindow(), nullptr, GetModuleHandleW(nullptr), nullptr);
+  CHECK(tree != nullptr);
+  if (!tree) return;
+
+  {
+    ibstart::ui::TreeViewController controller;
+    controller.Attach(tree, GetModuleHandleW(nullptr));
+    auto document = ibstart::v8i::V8iDocument::ParseUtf8(
+        "[Alpha]\nConnect=File=\"C:\\\\alpha\"\nID=alpha-id\n"
+        "[Beta]\nConnect=File=\"C:\\\\beta\"\nID=beta-id\n");
+    ibstart::catalog::Catalog catalog(std::move(document));
+    ibstart::storage::CatalogState state;
+    state.favorites = {L"alpha-id", L"beta-id"};
+    state.history = {
+        {L"alpha-id", std::chrono::system_clock::from_time_t(200), ibstart::domain::LaunchMode::enterprise},
+        {L"beta-id", std::chrono::system_clock::from_time_t(100), ibstart::domain::LaunchMode::designer},
+    };
+    const ibstart::ui::presentation::TreeTagFilter tag_filter;
+
+    controller.Populate(catalog, state, {}, L"", tag_filter, false);
+    CHECK(controller.SelectItemInBranch(L"Alpha", ibstart::ui::TreeViewController::kFavoritesRootItemData));
+    controller.Populate(catalog, state, {}, L"", tag_filter, false);
+    HTREEITEM selected = TreeView_GetSelection(tree);
+    CHECK(selected != nullptr && controller.ItemName(selected) == L"Alpha");
+    CHECK(controller.BranchData(selected) == ibstart::ui::TreeViewController::kFavoritesRootItemData);
+
+    state.favorites = {L"beta-id"};
+    controller.Populate(catalog, state, {}, L"", tag_filter, false);
+    selected = TreeView_GetSelection(tree);
+    CHECK(selected != nullptr && controller.ItemName(selected) == L"Alpha");
+    CHECK(controller.BranchData(selected) == ibstart::ui::TreeViewController::kCatalogRootItemData);
+
+    const HTREEITEM recent_root = FindTopLevelTreeItemByData(controller, tree,
+        ibstart::ui::TreeViewController::kRecentRootItemData);
+    CHECK(recent_root != nullptr);
+    CHECK(controller.SelectItemInBranch(L"Alpha", ibstart::ui::TreeViewController::kRecentRootItemData));
+    std::swap(state.history[0], state.history[1]);
+    controller.Populate(catalog, state, {}, L"", tag_filter, false);
+    selected = TreeView_GetSelection(tree);
+    CHECK(selected != nullptr && controller.ItemName(selected) == L"Alpha");
+    CHECK(controller.BranchData(selected) == ibstart::ui::TreeViewController::kRecentRootItemData);
+
+    state.history.erase(state.history.begin() + 1);
+    controller.Populate(catalog, state, {}, L"", tag_filter, false);
+    selected = TreeView_GetSelection(tree);
+    CHECK(selected != nullptr && controller.ItemName(selected) == L"Alpha");
+    CHECK(controller.BranchData(selected) == ibstart::ui::TreeViewController::kCatalogRootItemData);
+  }
+  DestroyWindow(tree);
+}
+
 void TestLongCatalogNamesUseFullIdentity() {
   const std::wstring name = std::wstring(600, L'N') + L" — база";
   const std::wstring contents = L"[" + name + L"]\nConnect=File=\"C:\\\\long\"\nID=long-id\n";
@@ -1335,6 +1398,25 @@ void TestRecentDatabaseNames() {
   };
   CHECK(ibstart::ui::presentation::CollectRecentDatabaseNames(catalog, history) ==
       std::vector<std::wstring>{L"Beta", L"Alpha", L"Fallback"});
+}
+
+void TestRelativeLaunchTimeFormatting() {
+  using Clock = std::chrono::system_clock;
+  const auto now = Clock::from_time_t(1'700'000'000);
+  using namespace std::chrono;
+
+  CHECK(ibstart::ui::presentation::FormatRelativeLaunchTime(now, now) == L"только что");
+  CHECK(ibstart::ui::presentation::FormatRelativeLaunchTime(now - seconds(59), now) == L"только что");
+  CHECK(ibstart::ui::presentation::FormatRelativeLaunchTime(now - minutes(1), now) == L"1 минуту назад");
+  CHECK(ibstart::ui::presentation::FormatRelativeLaunchTime(now - minutes(2), now) == L"2 минуты назад");
+  CHECK(ibstart::ui::presentation::FormatRelativeLaunchTime(now - minutes(5), now) == L"5 минут назад");
+  CHECK(ibstart::ui::presentation::FormatRelativeLaunchTime(now - hours(1), now) == L"1 час назад");
+  CHECK(ibstart::ui::presentation::FormatRelativeLaunchTime(now - hours(2), now) == L"2 часа назад");
+  CHECK(ibstart::ui::presentation::FormatRelativeLaunchTime(now - hours(5), now) == L"5 часов назад");
+  CHECK(ibstart::ui::presentation::FormatRelativeLaunchTime(now - hours(24), now) == L"1 день назад");
+  CHECK(ibstart::ui::presentation::FormatRelativeLaunchTime(now - hours(48), now) == L"2 дня назад");
+  CHECK(ibstart::ui::presentation::FormatRelativeLaunchTime(now - hours(24 * 5), now) == L"5 дней назад");
+  CHECK(ibstart::ui::presentation::FormatRelativeLaunchTime(now + seconds(1), now) == L"только что");
 }
 
 void TestStableDatabaseId() {
@@ -2654,8 +2736,10 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"TreeFilters", TestTreeFilters);
   run(L"SearchExpandsAndRestoresGroups", TestSearchExpandsAndRestoresGroups);
   run(L"CatalogRefreshRejectsStaleSelection", TestCatalogRefreshRejectsStaleSelection);
+  run(L"VirtualBranchSelectionSurvivesRefresh", TestVirtualBranchSelectionSurvivesRefresh);
   run(L"LongCatalogNamesUseFullIdentity", TestLongCatalogNamesUseFullIdentity);
   run(L"RecentDatabaseNames", TestRecentDatabaseNames);
+  run(L"RelativeLaunchTimeFormatting", TestRelativeLaunchTimeFormatting);
   run(L"StableDatabaseId", TestStableDatabaseId);
   run(L"CaseInsensitiveDatabaseIdentifiers", TestCaseInsensitiveDatabaseIdentifiers);
   run(L"NoBomAndCatalog", TestNoBomAndCatalog);

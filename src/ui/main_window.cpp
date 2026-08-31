@@ -54,8 +54,10 @@ constexpr UINT kFocusShortcutSelectionMessage = WM_APP + 25;
 constexpr UINT kCacheOperationFinishedMessage = WM_APP + 26;
 constexpr UINT_PTR kBackgroundPollTimer = 1;
 constexpr UINT_PTR kSearchRefreshTimer = 2;
+constexpr UINT_PTR kRecentLaunchRefreshTimer = 3;
 constexpr UINT kBackgroundPollIntervalMilliseconds = 100;
 constexpr UINT kSearchRefreshDelayMilliseconds = 180;
+constexpr UINT kRecentLaunchRefreshIntervalMilliseconds = 60 * 1000;
 constexpr int kMinimumWindowWidth = 940;
 constexpr int kMinimumSimpleWindowWidth = 520;
 constexpr int kMinimumWindowHeight = 460;
@@ -186,11 +188,7 @@ void MainWindow::RegisterCommandHandlers() {
   command_dispatcher_.Register(kAddGroup, [this] { AddGroup(); });
   command_dispatcher_.Register(kOpenList, [this] { OpenList(); });
   command_dispatcher_.Register(kOpenStandardList, [this] { OpenStandardList(); });
-  command_dispatcher_.Register(kRefresh, [this] {
-    const std::wstring selected = SelectedCatalogName();
-    LoadCatalog();
-    if (!selected.empty()) static_cast<void>(tree_view_.SelectItem(selected));
-  });
+  command_dispatcher_.Register(kRefresh, [this] { LoadCatalog(); });
   command_dispatcher_.Register(kEdit, [this] { EditSelected(); });
   command_dispatcher_.Register(kCache, [this] { ClearSelectedCache(); });
   command_dispatcher_.Register(kClearRecent, [this] { ClearRecentBases(); });
@@ -338,7 +336,11 @@ LRESULT CALLBACK MainWindow::WindowProc(HWND window, UINT message, WPARAM wparam
 
 LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lparam) {
   switch (message) {
-    case WM_CREATE: CreateControls(); LoadCatalog(); return 0;
+    case WM_CREATE:
+      CreateControls();
+      LoadCatalog();
+      static_cast<void>(SetTimer(window, kRecentLaunchRefreshTimer, kRecentLaunchRefreshIntervalMilliseconds, nullptr));
+      return 0;
     case WM_SIZE: Layout(LOWORD(lparam), HIWORD(lparam)); return 0;
     case WM_GETMINMAXINFO: {
       auto* limits = reinterpret_cast<MINMAXINFO*>(lparam);
@@ -358,6 +360,13 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       if (wparam == kSearchRefreshTimer) {
         KillTimer(window, kSearchRefreshTimer);
         if (!closing_ && !suppress_search_refresh_) PopulateTree();
+        return 0;
+      }
+      if (wparam == kRecentLaunchRefreshTimer) {
+        if (!closing_ && !settings_.simple_mode && tree_ && IsWindow(tree_) &&
+            !catalog_state_.Read().history.empty()) {
+          InvalidateRect(tree_, nullptr, FALSE);
+        }
         return 0;
       }
       break;
@@ -513,6 +522,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
     case WM_DESTROY: {
       KillTimer(window, kBackgroundPollTimer);
       KillTimer(window, kSearchRefreshTimer);
+      KillTimer(window, kRecentLaunchRefreshTimer);
       WINDOWPLACEMENT placement{sizeof(placement)};
       if (GetWindowPlacement(window, &placement)) { const RECT& rect = placement.rcNormalPosition; settings_.window_x = rect.left; settings_.window_y = rect.top; settings_.window_width = rect.right - rect.left; settings_.window_height = rect.bottom - rect.top; }
       if (tree_ && IsWindow(tree_)) {
@@ -771,7 +781,8 @@ bool MainWindow::DrawSearchClearButton(const DRAWITEMSTRUCT* draw) const {
 }
 
 void MainWindow::LoadCatalog(bool report_error) {
-  const std::wstring selected = SelectedCatalogName();
+  const auto selected_database = CaptureDatabaseSelection();
+  const bool had_tree_selection = tree_ && TreeView_GetSelection(tree_);
   const bool hasInitialLaunch = initial_launch_id_.has_value();
   try {
     if (settings_.active_ibases.empty()) { if (const auto standard = storage::FindStandardIbases()) settings_.active_ibases = *standard; }
@@ -804,8 +815,12 @@ void MainWindow::LoadCatalog(bool report_error) {
     RefreshTagFilter();
     PopulateTree();
     if (!hasInitialLaunch) {
-      const std::wstring& restore = selected.empty() ? settings_.selected_entry : selected;
-      if (!restore.empty()) static_cast<void>(tree_view_.SelectItem(restore));
+      if (selected_database) {
+        if (!RestoreDatabaseSelection(*selected_database)) TreeView_SelectItem(tree_, nullptr);
+      } else if (!had_tree_selection && !settings_.selected_entry.empty()) {
+        static_cast<void>(tree_view_.SelectItemInBranch(settings_.selected_entry,
+            TreeViewController::kCatalogRootItemData));
+      }
     }
   } catch (const std::exception& error) {
     const auto detail = WideErrorText(error.what());
@@ -1015,6 +1030,25 @@ std::optional<domain::Entry> MainWindow::SelectedCatalogEntry() const {
   return entry ? std::optional<domain::Entry>(*entry) : std::nullopt;
 }
 
+std::optional<MainWindow::DatabaseSelectionAnchor> MainWindow::CaptureDatabaseSelection() const {
+  const auto entry = SelectedCatalogEntry();
+  if (!tree_ || !entry || !entry->IsDatabase()) return std::nullopt;
+  const auto id = TagId(*entry);
+  if (id.empty()) return std::nullopt;
+  return DatabaseSelectionAnchor{id, tree_view_.BranchData(TreeView_GetSelection(tree_))};
+}
+
+bool MainWindow::RestoreDatabaseSelection(const DatabaseSelectionAnchor& selection) {
+  if (!catalog_) return false;
+  const auto* entry = catalog_->FindById(selection.id);
+  if (!entry || !entry->IsDatabase()) return false;
+  if (tree_view_.SelectItemInBranch(entry->name, selection.branch_data)) return true;
+  if (selection.branch_data != TreeViewController::kCatalogRootItemData) {
+    return tree_view_.SelectItemInBranch(entry->name, TreeViewController::kCatalogRootItemData);
+  }
+  return false;
+}
+
 bool MainWindow::ResetStaleSelectionIfNeeded() {
   if (!tree_view_.SelectedSectionIndex()) return false;
   if (tree_) {
@@ -1030,8 +1064,10 @@ std::wstring MainWindow::SelectedCatalogName() const {
   return tree_view_.SelectedName();
 }
 LRESULT MainWindow::DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const {
+  const auto& state = catalog_state_.Read();
   return presentation::DrawTreeSearchMatches(tree_, draw, catalog_ ? &*catalog_ : nullptr, settings_,
-      catalog_state_.Read().tags, catalog_state_.Read().tag_styles, search_filter_, controls_font_, controls_bold_font_);
+      state.tags, state.tag_styles, state.history, TreeViewController::kRecentRootItemData,
+      search_filter_, controls_font_, controls_bold_font_);
 }
 bool MainWindow::MeasureContextMenuItem(MEASUREITEMSTRUCT* measure) const {
   return context_menus_.Measure(window_, controls_font_, measure) ||

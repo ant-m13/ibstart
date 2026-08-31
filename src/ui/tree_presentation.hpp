@@ -5,6 +5,7 @@
 
 #include <CommCtrl.h>
 
+#include <chrono>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -29,6 +30,11 @@ void EraseTagStyle(storage::TagStyles& styles, std::wstring_view name);
 [[nodiscard]] std::vector<std::wstring> CollectFilterTags(const catalog::Catalog& catalog, const storage::DatabaseTags& tags);
 [[nodiscard]] std::vector<std::wstring> CollectRecentDatabaseNames(const catalog::Catalog& catalog,
     const std::vector<domain::HistoryItem>& history);
+// Produces the compact, human-readable launch age used beside an entry in
+// the virtual "Recent" branch.  Supplying `now` keeps callers and tests
+// deterministic while the UI can pass the current system time.
+[[nodiscard]] std::wstring FormatRelativeLaunchTime(std::chrono::system_clock::time_point timestamp,
+    std::chrono::system_clock::time_point now);
 [[nodiscard]] std::vector<catalog::TreeItem> FilterTreeItems(const catalog::Catalog& catalog,
     const std::vector<catalog::TreeItem>& items, std::wstring_view search_filter,
     const TreeTagFilter& tag_filter, const storage::DatabaseTags& tags,
@@ -40,6 +46,7 @@ void EraseTagStyle(storage::TagStyles& styles, std::wstring_view name);
 
 [[nodiscard]] LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Catalog* catalog,
     const storage::Settings& settings, const storage::DatabaseTags& tags, const storage::TagStyles& styles,
+    const std::vector<domain::HistoryItem>& history, LPARAM recent_root_item_data,
     std::wstring_view search_filter, HFONT controls_font, HFONT controls_bold_font);
 
 }  // namespace ibstart::ui::presentation

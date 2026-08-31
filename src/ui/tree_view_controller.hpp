@@ -50,6 +50,7 @@ class TreeViewController final {
   [[nodiscard]] bool SelectedItemIsRecentRoot() const;
   [[nodiscard]] bool SelectItem(std::wstring_view name) const;
   [[nodiscard]] bool SelectItem(size_t section_index) const;
+  [[nodiscard]] bool SelectItemInBranch(std::wstring_view name, LPARAM branch_data) const;
   [[nodiscard]] bool SelectCatalogRoot() const;
   [[nodiscard]] ExpansionStates CaptureExpansionStates() const;
   void RestoreExpansionStates(const ExpansionStates& states) const;
