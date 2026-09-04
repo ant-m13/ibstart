@@ -81,6 +81,7 @@ class MainWindow {
   void CopySelectedDetail(bool include_name);
   void DisplaySelected();
   void LaunchSelected(domain::LaunchMode mode);
+  void LaunchWithParameters();
   void AddDatabase(std::wstring parent = {});
   void AddGroup(std::wstring parent = {});
   void EditSelected();

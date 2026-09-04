@@ -83,6 +83,7 @@ add_executable(IBStart WIN32
   src/ui/dialog_support.cpp
   src/ui/folder_picker.cpp
   src/ui/input_box.cpp
+  src/ui/launch_options_dialog.cpp
   src/ui/main_window.cpp
   src/ui/menu_controller.cpp
   src/ui/owner_draw_menu.cpp

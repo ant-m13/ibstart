@@ -19,6 +19,7 @@ OwnerDrawMenuIcon MenuIconForCommand(UINT command) {
     case kEditTags:
     case kConfigureTagColors:
     case kShowTagsInList: return OwnerDrawMenuIcon::tag;
+    case kLaunchWithParameters: return OwnerDrawMenuIcon::launch_parameters;
     case kSortAscending: return OwnerDrawMenuIcon::sort_ascending;
     case kSortDescending: return OwnerDrawMenuIcon::sort_descending;
     default: return OwnerDrawMenuIcon::standard;
@@ -89,6 +90,8 @@ UINT ContextMenuController::ShowTree(HWND owner, POINT screen, const TreeContext
     if (state.database) {
       append(state.launch_available, false, kEnterprise, IDI_ACTION_ENTERPRISE, L"Предприятие", L"F3");
       append(state.launch_available && !state.web, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор", L"F4");
+      append(state.launch_available, false, kLaunchWithParameters, 0,
+          L"Запуск с параметрами…");
       separator();
       append(true, false, kEdit, IDI_ACTION_EDIT, L"Изменить…", L"F2");
       append(true, false, kDelete, IDI_ACTION_DELETE, L"Удалить…", L"Alt+Shift+Del");
@@ -107,6 +110,8 @@ UINT ContextMenuController::ShowTree(HWND owner, POINT screen, const TreeContext
   if (!state.catalog_root) {
     append(state.launch_available, false, kEnterprise, IDI_ACTION_ENTERPRISE, L"Предприятие", L"F3");
     append(state.launch_available && !state.web, false, kDesigner, IDI_ACTION_DESIGNER, L"Конфигуратор", L"F4");
+    append(state.launch_available, false, kLaunchWithParameters, 0,
+        L"Запуск с параметрами…");
     separator();
     append(state.database, state.favorite, kToggleFavorite, IDI_ACTION_FAVORITE,
         state.favorite ? L"Убрать из избранного" : L"Добавить в избранное", L"Ctrl+Alt+I");
