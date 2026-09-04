@@ -62,6 +62,10 @@ bool IsThinOnlyPlatform(const domain::PlatformInstallation& platform) {
   return EqualNoCase(platform.executable.filename().wstring(), L"1cv8c.exe");
 }
 
+bool IsSamePath(const std::filesystem::path& left, const std::filesystem::path& right) {
+  return EqualNoCase(left.lexically_normal().wstring(), right.lexically_normal().wstring());
+}
+
 std::wstring SwitchName(std::wstring_view argument) {
   if (argument.empty() || (argument.front() != L'/' && argument.front() != L'-')) return {};
   size_t start = 1;
@@ -98,7 +102,7 @@ void ValidateParameterText(std::wstring_view text, std::map<std::wstring, size_t
     const bool tracked_parameter = connection_parameter ||
         EqualNoCase(name, L"AppArch") || EqualNoCase(name, L"Proxy") ||
         EqualNoCase(name, L"NoProxy") || EqualNoCase(name, L"Execute") ||
-        EqualNoCase(name, L"ExecuteAfter");
+        EqualNoCase(name, L"ExecuteAfter") || EqualNoCase(name, L"N") || EqualNoCase(name, L"P");
     if (!tracked_parameter) continue;
 
     const bool inserted = occurrences.emplace(name, index).second;
@@ -292,13 +296,19 @@ std::vector<std::wstring> ValidateLaunchParameters(const domain::Database& datab
   }
 
   std::map<std::wstring, size_t, CaseInsensitiveLess> occurrences;
-  const auto individual_parameters = options.individual_parameters.empty() ? database.additional_parameters :
-      options.individual_parameters;
+  const auto individual_parameters = options.override_individual_parameters ? options.individual_parameters :
+      database.additional_parameters;
   try {
     ValidateParameterText(options.common_parameters, occurrences, errors);
     ValidateParameterText(individual_parameters, occurrences, errors);
   } catch (const std::exception& error) {
     AddParameterConflict(errors, utf::FromUtf8(error.what()));
+  }
+  if (!options.user_name.empty() && occurrences.contains(std::wstring_view(L"N"))) {
+    AddParameterConflict(errors, L"Пользователь задан одновременно отдельным полем и параметром /N.");
+  }
+  if (!options.password.empty() && occurrences.contains(std::wstring_view(L"P"))) {
+    AddParameterConflict(errors, L"Пароль задан одновременно отдельным полем и параметром /P.");
   }
   const auto app_architecture = Trim(database.app_arch);
   if (!app_architecture.empty() && !ParseAppArchitecture(app_architecture)) {
@@ -321,6 +331,7 @@ std::optional<domain::PlatformInstallation> SelectPlatform(
   std::vector<domain::PlatformInstallation> filtered;
   const auto architecture = options.architecture;
   for (const auto& candidate : candidates) {
+    if (options.platform_executable && !IsSamePath(candidate.executable, *options.platform_executable)) continue;
     if (options.version != L"" && options.version != L"Авто" && !VersionMatches(candidate.version, options.version)) continue;
     if (options.bitness != domain::ClientBitness::automatic && candidate.bitness != options.bitness) continue;
     if ((architecture == domain::ClientArchitecture::x86 && candidate.bitness != domain::ClientBitness::x86) ||
@@ -385,8 +396,10 @@ domain::LaunchCommand BuildCommand(const domain::Database& database,
   } else {
     command.arguments.insert(command.arguments.end(), {L"/IBConnection", database.connect});
   }
+  if (!options.user_name.empty()) command.arguments.insert(command.arguments.end(), {L"/N", options.user_name});
+  if (!options.password.empty()) command.arguments.insert(command.arguments.end(), {L"/P", options.password});
   const auto common = SplitCommandArguments(options.common_parameters);
-  const auto individual = SplitCommandArguments(options.individual_parameters.empty() ? database.additional_parameters : options.individual_parameters);
+  const auto individual = SplitCommandArguments(options.override_individual_parameters ? options.individual_parameters : database.additional_parameters);
   command.arguments.insert(command.arguments.end(), common.begin(), common.end());
   command.arguments.insert(command.arguments.end(), individual.begin(), individual.end());
   return command;

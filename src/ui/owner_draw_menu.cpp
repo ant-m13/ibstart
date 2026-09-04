@@ -1,6 +1,7 @@
 #include "ui/owner_draw_menu.hpp"
 
 #include <algorithm>
+#include <iterator>
 #include <utility>
 
 namespace ibstart::ui {
@@ -66,6 +67,30 @@ void DrawTagIcon(HDC context, int icon_x, int icon_y, bool disabled, bool select
   DeleteObject(brush);
   DeleteObject(pen);
   DeleteObject(hole_pen);
+}
+
+void DrawLaunchParametersIcon(HDC context, int icon_x, int icon_y, bool disabled, bool selected) {
+  const COLORREF color = disabled ? GetSysColor(COLOR_GRAYTEXT) : selected ? RGB(218, 242, 255) : RGB(0, 144, 162);
+  const COLORREF accent = disabled ? GetSysColor(COLOR_GRAYTEXT) : selected ? RGB(255, 255, 255) : RGB(242, 167, 52);
+  const HPEN pen = CreatePen(PS_SOLID, 2, color);
+  const auto previous_pen = SelectObject(context, pen);
+  for (const int offset : {5, 10, 15}) {
+    MoveToEx(context, icon_x + 2, icon_y + offset, nullptr);
+    LineTo(context, icon_x + 14, icon_y + offset);
+  }
+  SelectObject(context, previous_pen);
+  DeleteObject(pen);
+  const HBRUSH brush = CreateSolidBrush(accent);
+  const HPEN accent_pen = CreatePen(PS_SOLID, 1, accent);
+  const auto previous_brush = SelectObject(context, brush);
+  const auto previous_accent_pen = SelectObject(context, accent_pen);
+  POINT arrow[] = {{icon_x + 11, icon_y + 2}, {icon_x + 19, icon_y + 10}, {icon_x + 11, icon_y + 18},
+      {icon_x + 11, icon_y + 13}, {icon_x + 7, icon_y + 13}, {icon_x + 7, icon_y + 7}, {icon_x + 11, icon_y + 7}};
+  Polygon(context, arrow, static_cast<int>(std::size(arrow)));
+  SelectObject(context, previous_brush);
+  SelectObject(context, previous_accent_pen);
+  DeleteObject(brush);
+  DeleteObject(accent_pen);
 }
 
 void DrawSortIcon(HDC context, const OwnerDrawMenuItem& item, int icon_x, int icon_y, bool disabled, bool selected) {
@@ -184,6 +209,7 @@ bool OwnerDrawMenu::Draw(HFONT font, const OwnerDrawMenuItem& item, const DRAWIT
     case OwnerDrawMenuIcon::move_down: DrawMoveArrow(draw->hDC, item, icon_x, icon_y, disabled); break;
     case OwnerDrawMenuIcon::compact_mode: DrawCompactModeIcon(draw->hDC, icon_x, icon_y, disabled, selected); break;
     case OwnerDrawMenuIcon::tag: DrawTagIcon(draw->hDC, icon_x, icon_y, disabled, selected); break;
+    case OwnerDrawMenuIcon::launch_parameters: DrawLaunchParametersIcon(draw->hDC, icon_x, icon_y, disabled, selected); break;
     case OwnerDrawMenuIcon::sort_ascending:
     case OwnerDrawMenuIcon::sort_descending: DrawSortIcon(draw->hDC, item, icon_x, icon_y, disabled, selected); break;
     case OwnerDrawMenuIcon::standard:

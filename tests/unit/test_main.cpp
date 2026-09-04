@@ -614,6 +614,44 @@ void TestCommandBuilderAndSelection() {
   std::filesystem::remove_all(thinDirectory, thinCleanupError);
 }
 
+void TestOneOffLaunchOptions() {
+  const std::vector<ibstart::domain::PlatformInstallation> platforms = {
+      {L"C:\\Program Files\\1cv8\\8.3.27\\bin\\1cv8.exe", L"8.3.27", ibstart::domain::ClientBitness::x64, true},
+      {L"C:\\Program Files (x86)\\1cv8\\8.3.27\\bin\\1cv8.exe", L"8.3.27", ibstart::domain::ClientBitness::x86, true}};
+  ibstart::domain::LaunchOptions options;
+  options.mode = ibstart::domain::LaunchMode::enterprise;
+  options.platform_executable = platforms[1].executable;
+  const auto selected = ibstart::launcher::SelectPlatform(platforms, options);
+  CHECK(selected && selected->executable == platforms[1].executable);
+
+  ibstart::domain::Database database;
+  database.connect = L"File=\"C:\\Bases\\Demo\"";
+  database.additional_parameters = L"/N OldUser";
+  options.user_name = L"Administrator";
+  options.password = L"secret value";
+  options.override_individual_parameters = true;
+  options.individual_parameters.clear();
+  const auto command = ibstart::launcher::BuildCommand(database, *selected, options);
+  CHECK(command.arguments.size() == 7);
+  CHECK(command.arguments[0] == L"ENTERPRISE");
+  CHECK(command.arguments[1] == L"/F");
+  CHECK(command.arguments[2] == L"C:\\Bases\\Demo");
+  CHECK(command.arguments[3] == L"/N");
+  CHECK(command.arguments[4] == L"Administrator");
+  CHECK(command.arguments[5] == L"/P");
+  CHECK(command.arguments[6] == L"secret value");
+  CHECK(ibstart::logging::ContainsSecretArguments(command));
+  CHECK(ibstart::logging::RedactedCommandLine(command).find(L"secret value") == std::wstring::npos);
+
+  options.password.clear();
+  options.user_name.clear();
+  options.individual_parameters = L"/AppArch x86";
+  const auto overrideCommand = ibstart::launcher::BuildCommand(database, *selected, options);
+  CHECK(overrideCommand.arguments.size() == 5);
+  CHECK(overrideCommand.arguments[3] == L"/AppArch");
+  CHECK(overrideCommand.arguments[4] == L"x86");
+}
+
 void TestLaunchParameterConflicts() {
   ibstart::domain::Database database;
   database.connect = L"File=\"C:\\base\"";
@@ -2789,6 +2827,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"V8iExternalWriterRaceAtCommitBoundary", TestV8iExternalWriterRaceAtCommitBoundary);
   run(L"V8iConcurrentSaveAtCommitBoundary", TestV8iConcurrentSaveAtCommitBoundary);
   run(L"CommandBuilderAndSelection", TestCommandBuilderAndSelection);
+  run(L"OneOffLaunchOptions", TestOneOffLaunchOptions);
   run(L"LaunchParameterConflicts", TestLaunchParameterConflicts);
   run(L"PlatformDiscoveryLargeVersions", TestPlatformDiscoveryLargeVersions);
   run(L"StandaloneThinClientDiscovery", TestStandaloneThinClientDiscovery);

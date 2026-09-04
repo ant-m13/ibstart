@@ -7,6 +7,7 @@ namespace ibstart::ui::commands {
 enum Id : int {
   kEnterprise = 100,
   kDesigner,
+  kLaunchWithParameters,
   kEdit,
   kCache,
   kShortcut,

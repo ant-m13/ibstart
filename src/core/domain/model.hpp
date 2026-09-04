@@ -64,8 +64,16 @@ struct LaunchOptions {
   ClientArchitecture architecture{ClientArchitecture::automatic};
   ClientType client_type{ClientType::automatic};
   std::wstring version{L"Авто"};
+  // A one-off launch may restrict selection to one discovered installation.
+  // This is deliberately not a field of Database and is never persisted to
+  // ibases.v8i.
+  std::optional<std::filesystem::path> platform_executable;
+  // Credentials are transient input for the current launch only.
+  std::wstring user_name;
+  std::wstring password;
   std::wstring common_parameters;
   std::wstring individual_parameters;
+  bool override_individual_parameters{false};
 };
 
 struct LaunchCommand {

@@ -4,6 +4,7 @@
 #include "ui/dialog_support.hpp"
 #include "ui/folder_picker.hpp"
 #include "ui/input_box.hpp"
+#include "ui/launch_options_dialog.hpp"
 #include "ui/tree_presentation.hpp"
 
 #include "app/instance_activation.hpp"
@@ -184,6 +185,7 @@ MainWindow::MainWindow(HINSTANCE instance, std::filesystem::path executable, sto
 void MainWindow::RegisterCommandHandlers() {
   command_dispatcher_.Register(kEnterprise, [this] { LaunchSelected(domain::LaunchMode::enterprise); });
   command_dispatcher_.Register(kDesigner, [this] { LaunchSelected(domain::LaunchMode::designer); });
+  command_dispatcher_.Register(kLaunchWithParameters, [this] { LaunchWithParameters(); });
   command_dispatcher_.Register(kAddDatabase, [this] { AddDatabase(); });
   command_dispatcher_.Register(kAddGroup, [this] { AddGroup(); });
   command_dispatcher_.Register(kOpenList, [this] { OpenList(); });
@@ -1457,6 +1459,97 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
       const auto detail = WideErrorText(error.what());
       logger_.Error(L"Ошибка запуска: " + detail);
       Message(window_, L"Не удалось запустить базу.\n\n" + detail, L"ИБ Старт", MB_OK | MB_ICONERROR);
+    }
+  }
+}
+
+void MainWindow::LaunchWithParameters() {
+  if (cache_operation_.active()) {
+    SetStatus(L"Запуск базы недоступен до завершения операции с кэшем.");
+    return;
+  }
+  if (!catalog_) return;
+  const auto entry = SelectedCatalogEntry();
+  if (!entry) {
+    if (ResetStaleSelectionIfNeeded()) return;
+    Message(window_, L"Выберите информационную базу.");
+    return;
+  }
+  if (!entry->IsDatabase()) {
+    Message(window_, L"Выберите информационную базу.");
+    return;
+  }
+  const std::wstring name = entry->name;
+  const bool selectedFromRecent = tree_view_.BranchData(TreeView_GetSelection(tree_)) ==
+      TreeViewController::kRecentRootItemData;
+  bool launchSucceeded = false;
+  try {
+    const auto database = catalog_->DatabaseFor(name);
+    const auto connection_spec = launcher::ParseConnectionSpec(database.connect);
+    if (connection_spec.kind == launcher::ConnectionSpec::Kind::file &&
+        !EnsurePathLength(window_, std::filesystem::path(connection_spec.value))) return;
+    const bool webConnection = connection_spec.kind == launcher::ConnectionSpec::Kind::web;
+
+    domain::LaunchOptions initial;
+    initial.mode = domain::LaunchMode::enterprise;
+    initial.client_type = webConnection ? domain::ClientType::thin : ClientTypeFromApplication(database.app);
+    if (initial.client_type == domain::ClientType::automatic) {
+      initial.client_type = ClientTypeFromApplication(database.default_app);
+    }
+    const auto validation = launcher::ValidateLaunchParameters(database, initial);
+    if (!validation.empty()) throw std::invalid_argument(utf::ToUtf8(validation.front()));
+    if (const auto fromParameters = launcher::AppArchitectureFromParameters(database.additional_parameters)) {
+      initial.architecture = *fromParameters;
+    } else if (const auto fromDatabase = launcher::ParseAppArchitecture(database.app_arch)) {
+      initial.architecture = *fromDatabase;
+    }
+    const auto& selectedVersion = database.version.empty() ? database.default_version : database.version;
+    if (selectedVersion != L"" && selectedVersion != L"Авто") initial.version = selectedVersion;
+    initial.individual_parameters = database.additional_parameters;
+    initial.override_individual_parameters = true;
+
+    const auto options = dialog::EditLaunchOptions(window_, database, platforms_, std::move(initial));
+    if (!options) return;
+    const auto selected = launcher::SelectPlatform(platforms_, *options);
+    if (!selected) {
+      Message(window_, L"Подходящая установленная платформа 1С не найдена. Выберите другую платформу или установите необходимый клиент.",
+          L"Проверка запуска", MB_OK | MB_ICONWARNING);
+      return;
+    }
+    const auto command = launcher::BuildCommand(database, *selected, *options);
+    launcher::Launch(command);
+    launchSucceeded = true;
+    logger_.Info(L"Запуск с параметрами: " + logging::RedactedCommandLine(command));
+    SetStatus(L"Запущена база: " + database.name);
+    const auto timestamp = std::chrono::system_clock::now();
+    catalog_state_.RecordLaunch({database.id, timestamp, options->mode});
+    if (selectedFromRecent) {
+      const auto current_index = catalog_ ? tree_view_.SelectedSectionIndex(*catalog_) : std::nullopt;
+      RefreshRecentTreeBranch(current_index);
+    } else {
+      RefreshRecentTreeBranch();
+    }
+  } catch (const std::invalid_argument& error) {
+    const auto detail = ibstart::utf::FromUtf8(error.what());
+    logger_.Error(L"Проверка параметров специального запуска: " + detail);
+    if (launchSucceeded) {
+      SetStatus(L"База запущена, но сохранить историю запуска не удалось.");
+      Message(window_, L"База запущена, но сохранить историю запуска не удалось.\n\n" + detail,
+          L"Запуск базы", MB_OK | MB_ICONWARNING);
+    } else {
+      Message(window_, L"Параметры запуска противоречат друг другу:\n\n" + detail,
+          L"Проверка запуска", MB_OK | MB_ICONWARNING);
+    }
+  } catch (const std::exception& error) {
+    const auto detail = WideErrorText(error.what());
+    logger_.Error(L"Ошибка специального запуска: " + detail);
+    if (launchSucceeded) {
+      SetStatus(L"База запущена, но сохранить историю запуска не удалось.");
+      Message(window_, L"База запущена, но сохранить историю запуска не удалось.\n\n" + detail,
+          L"Запуск базы", MB_OK | MB_ICONWARNING);
+    } else {
+      Message(window_, L"Не удалось запустить базу с выбранными параметрами.\n\n" + detail,
+          L"Ошибка запуска", MB_OK | MB_ICONERROR);
     }
   }
 }
