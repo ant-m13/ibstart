@@ -2,6 +2,7 @@
 
 #include "core/domain/identifier.hpp"
 #include "core/domain/model.hpp"
+#include "core/credentials/credentials.hpp"
 
 #include <Windows.h>
 
@@ -63,6 +64,7 @@ struct Settings {
   int window_y{CW_USEDEFAULT};
   int window_width{900};
   int window_height{560};
+  std::vector<credentials::Credential> credentials;
 };
 
 using DatabaseTags = std::map<std::wstring, std::vector<std::wstring>, domain::IdentifierLess>;

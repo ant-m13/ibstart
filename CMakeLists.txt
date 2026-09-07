@@ -48,6 +48,7 @@ file(WRITE "${CMAKE_CURRENT_BINARY_DIR}/IBStart.portable" "")
 message(STATUS "IBStart product version: ${IBSTART_VERSION} (file version ${IBSTART_FILE_VERSION})")
 
 add_library(ibstart_core STATIC
+  src/core/credentials/credentials.cpp
   src/core/connection/connection_string.cpp
   src/core/catalog/catalog.cpp
   src/core/catalog/catalog_metadata_service.cpp
@@ -73,6 +74,7 @@ target_compile_options(ibstart_core PRIVATE /W4 /WX /permissive- /EHsc /Zc:__cpl
 target_link_libraries(ibstart_core PUBLIC Advapi32 Shell32 Ole32 Winhttp Ws2_32)
 
 add_executable(IBStart WIN32
+  src/ui/credential_manager_dialog.cpp
   src/app/main.cpp
   src/ui/advanced_database_options_dialog.cpp
   src/ui/cache_clear_operation.cpp

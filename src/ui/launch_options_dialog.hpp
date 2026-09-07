@@ -1,11 +1,13 @@
 #pragma once
 
 #include "core/domain/model.hpp"
+#include "core/credentials/credentials.hpp"
 
 #include <Windows.h>
 
 #include <optional>
 #include <vector>
+#include <functional>
 
 namespace ibstart::ui::dialog {
 
@@ -15,6 +17,7 @@ namespace ibstart::ui::dialog {
 [[nodiscard]] std::optional<domain::LaunchOptions> EditLaunchOptions(
     HWND owner, const domain::Database& database,
     const std::vector<domain::PlatformInstallation>& platforms,
-    domain::LaunchOptions initial);
+    domain::LaunchOptions initial, std::vector<credentials::Credential> credentials = {},
+    std::function<std::vector<credentials::Credential>(HWND)> manage_credentials = {});
 
 }  // namespace ibstart::ui::dialog

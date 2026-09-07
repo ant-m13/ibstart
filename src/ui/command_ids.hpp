@@ -38,6 +38,7 @@ enum Id : int {
   kShowTagsInList,
   kNewTagForSelected,
   kExit,
+  kConfigureCredentials,
   kFavorite1 = 200,
 };
 

@@ -5,12 +5,14 @@
 #include "ui/folder_picker.hpp"
 #include "ui/input_box.hpp"
 #include "ui/launch_options_dialog.hpp"
+#include "ui/credential_manager_dialog.hpp"
 #include "ui/tree_presentation.hpp"
 
 #include "app/instance_activation.hpp"
 #include "app/resource.h"
 #include "core/cache/cache_service.hpp"
 #include "core/connection/connection_string.hpp"
+#include "core/credentials/credentials.hpp"
 #include "core/domain/version.hpp"
 #include "core/domain/utf.hpp"
 #include "core/launcher/command_builder.hpp"
@@ -201,6 +203,7 @@ void MainWindow::RegisterCommandHandlers() {
   command_dispatcher_.Register(kCopyDetailPair, [this] { CopySelectedDetail(true); });
   command_dispatcher_.Register(kEditTags, [this] { EditSelectedTags(); });
   command_dispatcher_.Register(kConfigureTagColors, [this] { ConfigureTagColors(); });
+  command_dispatcher_.Register(kConfigureCredentials, [this] { ConfigureCredentials(window_); });
   command_dispatcher_.Register(kSimpleMode, [this] { SetSimpleMode(!settings_.simple_mode); });
   command_dispatcher_.Register(kToggleFavorite, [this] { ToggleFavorite(); });
   command_dispatcher_.Register(kShowTagsInList, [this] { ToggleTagDisplay(); });
@@ -1508,7 +1511,14 @@ void MainWindow::LaunchWithParameters() {
     initial.individual_parameters = database.additional_parameters;
     initial.override_individual_parameters = true;
 
-    const auto options = dialog::EditLaunchOptions(window_, database, platforms_, std::move(initial));
+    const auto catalog_path = store_ ? store_->path() : settings_.active_ibases;
+    const auto fresh_credentials = storage::LoadSettings(layout_).credentials;
+    auto applicable_credentials = credentials::Applicable(fresh_credentials, catalog_path, *catalog_, database);
+    const auto options = dialog::EditLaunchOptions(window_, database, platforms_, std::move(initial),
+        applicable_credentials, [this, &database, catalog_path](HWND owner) {
+          ConfigureCredentials(owner);
+          return credentials::Applicable(settings_.credentials, catalog_path, *catalog_, database);
+        });
     if (!options) return;
     const auto selected = launcher::SelectPlatform(platforms_, *options);
     if (!selected) {
@@ -1638,7 +1648,16 @@ void MainWindow::EditSelected() {
       return;
     }
     const auto renamed = TrimText(*changed);
+    const auto before = *entry;
+    const auto after = [&] { auto copy = before; copy.name = renamed; return copy; }();
     if (!SaveCatalog(std::move(candidate))) return;
+    try {
+      credentials::RenameTargets(settings_.credentials, store_ ? store_->path() : settings_.active_ibases, before, after);
+      PersistSettings(settings_);
+    } catch (const std::exception& error) {
+      logger_.Error(L"Ошибка обновления учётных записей после переименования: " + ibstart::utf::FromUtf8(error.what()));
+      Message(window_, L"Группа переименована, но учётные записи не удалось обновить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
+    }
     PopulateTree();
     static_cast<void>(tree_view_.SelectItem(renamed));
     return;
@@ -1662,8 +1681,19 @@ void MainWindow::EditSelected() {
     return;
   }
   dialog::ApplyDatabaseEditorData(*updated, *edited);
+  const auto before = *entry;
+  const auto after = *updated;
   const auto updatedTagId = TagId(*updated);
   if (!SaveCatalog(std::move(candidate))) return;
+  if (before.name != after.name || catalog::StableDatabaseId(before) != catalog::StableDatabaseId(after)) {
+    try {
+      credentials::RenameTargets(settings_.credentials, store_ ? store_->path() : settings_.active_ibases, before, after);
+      PersistSettings(settings_);
+    } catch (const std::exception& error) {
+      logger_.Error(L"Ошибка обновления учётных записей после переименования: " + ibstart::utf::FromUtf8(error.what()));
+      Message(window_, L"База переименована, но учётные записи не удалось обновить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
+    }
+  }
   if (selected != edited->name || !domain::EqualIdentifier(previousTagId, updatedTagId)) {
     try {
       catalog_state_.RenameDatabaseMetadata(selected, edited->name, previousTagId, updatedTagId);
@@ -1687,6 +1717,25 @@ void MainWindow::EditSelectedTags() {
 }
 void MainWindow::ConfigureTagColors() {
   ApplyTagResult(tag_manager_.Configure(window_));
+}
+void MainWindow::ConfigureCredentials(HWND owner) {
+  try {
+    PersistSettings(settings_);
+    const auto baseline = settings_;
+    const auto path = store_ ? store_->path() : baseline.active_ibases;
+    const auto result = dialog::EditCredentialManager(owner ? owner : window_, baseline.credentials, path,
+        catalog_ ? &*catalog_ : nullptr);
+    if (!result) return;
+    auto updated = baseline;
+    updated.credentials = *result;
+    PersistSettings(updated);
+  } catch (const std::exception& error) {
+    logger_.Error(L"Ошибка управления учётными записями: " + ibstart::utf::FromUtf8(error.what()));
+    Message(owner ? owner : window_, L"Не удалось сохранить учётные записи.\n\n" + WideErrorText(error.what()),
+        L"Учётные записи", MB_OK | MB_ICONERROR);
+  } catch (...) {
+    Message(owner ? owner : window_, L"Не удалось сохранить учётные записи.", L"Учётные записи", MB_OK | MB_ICONERROR);
+  }
 }
 void MainWindow::AddTagToSelected(std::wstring tag) {
   if (settings_.simple_mode || !catalog_ || !EnsureCatalogValid(*catalog_, L"добавление тега")) return;

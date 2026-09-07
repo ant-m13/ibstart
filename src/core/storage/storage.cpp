@@ -362,6 +362,8 @@ namespace {
 Settings ParseSettings(std::string_view contents) {
   Settings result;
   if (const auto root = json::RootObject(contents)) {
+    const auto credential_schema = json::ObjectInt(*root, "credentials_schema_version");
+    const bool supported_credentials = !credential_schema || *credential_schema == 1;
     if (const auto active = json::ObjectString(*root, "active_ibases")) result.active_ibases = *active;
     if (const auto selected = json::ObjectString(*root, "selected_entry")) result.selected_entry = *selected;
     if (const auto simple = json::ObjectInt(*root, "simple_mode")) result.simple_mode = *simple != 0;
@@ -377,6 +379,52 @@ Settings ParseSettings(std::string_view contents) {
     json::ForEachArrayObject(*root, "recent_lists", [&](const json::Object& object) {
       if (const auto recent = json::ObjectString(object, "recent_list")) result.recent_ibases.emplace_back(*recent);
     });
+    json::ForEachArrayObject(*root, "credentials", [&](const json::Object& object) {
+      credentials::Credential c;
+      const auto id = json::ObjectString(object, "id");
+      const auto title = json::ObjectString(object, "title");
+      const auto user = json::ObjectString(object, "user_name");
+      const auto password = json::ObjectString(object, "password");
+      if (!id || !title || !user || !password) return;
+      c.id = *id; c.title = *title; c.user_name = *user; c.password = *password;
+      const auto has_nul = [](std::wstring_view value) { return value.find(L'\0') != std::wstring_view::npos; };
+      const auto blank = [](std::wstring_view value) { return value.empty() || std::all_of(value.begin(), value.end(), [](wchar_t c) { return std::iswspace(c) != 0; }); };
+      if (blank(c.id) || blank(c.title) || blank(c.user_name) || has_nul(c.id) || has_nul(c.title) || has_nul(c.user_name) || has_nul(c.password)) {
+        c.scope = credentials::ScopeMode::invalid;
+      }
+      const auto* scope = json::ObjectValue(object, "scope");
+      if (!scope || scope->kind != json::ValueKind::object) { c.scope = credentials::ScopeMode::invalid; result.credentials.push_back(std::move(c)); return; }
+      const auto scope_object = json::RootObject(scope->raw);
+      if (!scope_object) { c.scope = credentials::ScopeMode::invalid; result.credentials.push_back(std::move(c)); return; }
+      const auto mode = json::ObjectString(*scope_object, "mode");
+      if (c.scope != credentials::ScopeMode::invalid) {
+        if (mode && *mode == L"all") c.scope = credentials::ScopeMode::all;
+        else if (mode && *mode == L"selected") c.scope = credentials::ScopeMode::selected;
+        else c.scope = credentials::ScopeMode::invalid;
+      }
+      json::ForEachArrayObject(*scope_object, "targets", [&](const json::Object& target) {
+        const auto path = json::ObjectString(target, "catalog_path");
+        const auto kind = json::ObjectString(target, "kind");
+        const auto entry = json::ObjectString(target, "entry_id");
+        const auto name = json::ObjectString(target, "last_known_name");
+        if (!path || !kind || !entry || !name || *kind != L"database" && *kind != L"group") { c.scope = credentials::ScopeMode::invalid; return; }
+        const auto normalized = credentials::NormalizeCatalogPath(*path);
+        if (normalized.empty() || entry->find(L'\0') != std::wstring::npos || name->find(L'\0') != std::wstring::npos) { c.scope = credentials::ScopeMode::invalid; return; }
+        c.targets.push_back({normalized, *kind == L"database" ? credentials::TargetKind::database : credentials::TargetKind::group, *entry, *name});
+      });
+      if (c.scope == credentials::ScopeMode::selected && c.targets.empty()) c.scope = credentials::ScopeMode::invalid;
+      result.credentials.push_back(std::move(c));
+    });
+    if (!supported_credentials) for (auto& credential : result.credentials) credential.scope = credentials::ScopeMode::invalid;
+    for (std::size_t i = 0; i < result.credentials.size(); ++i) {
+      for (std::size_t j = i + 1; j < result.credentials.size(); ++j) {
+        if (domain::EqualIdentifier(result.credentials[i].id, result.credentials[j].id) ||
+            domain::EqualIdentifier(result.credentials[i].title, result.credentials[j].title)) {
+          result.credentials[i].scope = credentials::ScopeMode::invalid;
+          result.credentials[j].scope = credentials::ScopeMode::invalid;
+        }
+      }
+    }
   }
   return result;
 }
@@ -397,6 +445,23 @@ std::string SerializeSettings(const Settings& settings) {
   for (std::size_t index = 0; index < settings.platform_search_paths.size(); ++index) {
     if (index) json += ", ";
     json += "{\"platform_path\": \"" + ::ibstart::storage::json::Escape(settings.platform_search_paths[index].wstring()) + "\"}";
+  }
+  json += "],\n  \"credentials_schema_version\": 1,\n  \"credentials\": [";
+  for (std::size_t i = 0; i < settings.credentials.size(); ++i) {
+    if (i) json += ", ";
+    const auto& c = settings.credentials[i];
+    const auto mode = c.scope == credentials::ScopeMode::all ? "all" : c.scope == credentials::ScopeMode::selected ? "selected" : "invalid";
+    json += "{\"id\": \"" + json::Escape(c.id) + "\", \"title\": \"" + json::Escape(c.title) +
+        "\", \"user_name\": \"" + json::Escape(c.user_name) + "\", \"password\": \"" + json::Escape(c.password) +
+        "\", \"scope\": {\"mode\": \"" + mode + "\", \"targets\": [";
+    for (std::size_t j = 0; j < c.targets.size(); ++j) {
+      if (j) json += ", ";
+      const auto& t = c.targets[j];
+      json += "{\"catalog_path\": \"" + json::Escape(t.catalog_path.wstring()) + "\", \"kind\": \"" +
+          std::string(t.kind == credentials::TargetKind::database ? "database" : "group") + "\", \"entry_id\": \"" +
+          json::Escape(t.entry_id) + "\", \"last_known_name\": \"" + json::Escape(t.last_known_name) + "\"}";
+    }
+    json += "]}}";
   }
   json += "]\n}\n";
   return json;
@@ -528,6 +593,40 @@ void MergeChangedSettings(Settings& target, const Settings& baseline, const Sett
   if (requested.window_y != baseline.window_y) target.window_y = requested.window_y;
   if (requested.window_width != baseline.window_width) target.window_width = requested.window_width;
   if (requested.window_height != baseline.window_height) target.window_height = requested.window_height;
+  // Credentials are merged by record ID so unrelated edits from another
+  // window survive. A record changed in both snapshots is a real conflict.
+  const auto find = [](auto& values, const auto& id) {
+    return std::find_if(values.begin(), values.end(), [&](const auto& value) { return domain::EqualIdentifier(value.id, id); });
+  };
+  for (const auto& old : baseline.credentials) {
+    const auto old_requested = find(requested.credentials, old.id);
+    const auto old_latest = find(target.credentials, old.id);
+    const bool requested_changed = old_requested == requested.credentials.end() || *old_requested != old;
+    const bool latest_changed = old_latest == target.credentials.end() || *old_latest != old;
+    if (requested_changed && latest_changed && !(old_latest == target.credentials.end() && old_requested == requested.credentials.end()) &&
+        (old_latest == target.credentials.end() || old_requested == requested.credentials.end() || *old_latest != *old_requested)) {
+      throw StorageConflictError("Credential record was changed by another process: " + utf::ToUtf8(old.id));
+    }
+  }
+  for (const auto& value : requested.credentials) {
+    const auto old = find(baseline.credentials, value.id);
+    if (old == baseline.credentials.end()) {
+      const auto latest = find(target.credentials, value.id);
+      if (latest != target.credentials.end() && *latest != value) throw StorageConflictError("Credential record ID was added by another process: " + utf::ToUtf8(value.id));
+      if (latest == target.credentials.end()) target.credentials.push_back(value);
+    } else if (*old != value) {
+      auto latest = find(target.credentials, value.id);
+      if (latest == target.credentials.end()) target.credentials.push_back(value); else *latest = value;
+    }
+  }
+  for (const auto& old : baseline.credentials) if (find(requested.credentials, old.id) == requested.credentials.end()) {
+    const auto latest = find(target.credentials, old.id);
+    if (latest != target.credentials.end()) target.credentials.erase(latest);
+  }
+  for (const auto& value : target.credentials) {
+    if (value.scope == credentials::ScopeMode::invalid) continue;
+    if (!credentials::Validate(value, target.credentials).empty()) throw StorageConflictError("Invalid or duplicate credential record.");
+  }
 }
 
 }  // namespace

@@ -1,6 +1,7 @@
 #include "ui/launch_options_dialog.hpp"
 
 #include "core/connection/connection_string.hpp"
+#include "core/credentials/credentials.hpp"
 #include "core/domain/utf.hpp"
 #include "core/launcher/command_builder.hpp"
 #include "core/logging/logging.hpp"
@@ -29,6 +30,8 @@ enum LaunchOptionsControl : int {
   kLaunchArchitecture,
   kLaunchUser,
   kLaunchPassword,
+  kLaunchCredential,
+  kLaunchManageCredentials,
   kLaunchParameters,
   kLaunchPreview,
   kLaunchCopyCommand
@@ -41,6 +44,7 @@ struct LaunchOptionsState {
   HWND architecture{};
   HWND user{};
   HWND password{};
+  HWND credential{};
   HWND parameters{};
   HWND preview{};
   HWND notice{};
@@ -50,10 +54,14 @@ struct LaunchOptionsState {
   HFONT notice_font{};
   const domain::Database* database{};
   const std::vector<domain::PlatformInstallation>* platforms{};
+  std::vector<credentials::Credential> credentials;
+  std::function<std::vector<credentials::Credential>(HWND)> manage_credentials;
   domain::LaunchOptions initial;
   std::optional<domain::LaunchOptions> result;
   bool web{};
   bool done{false};
+  bool edited_credentials{false};
+  bool populating{false};
 };
 
 void Message(HWND owner, std::wstring_view text, std::wstring_view title, UINT type) {
@@ -279,6 +287,59 @@ void RefreshPreview(LaunchOptionsState& state) {
   SetWindowTextW(state.preview, Preview(state, *options).c_str());
 }
 
+void ApplyCredentialSelection(LaunchOptionsState& state) {
+  state.populating = true;
+  const LRESULT index = SendMessageW(state.credential, CB_GETCURSEL, 0, 0);
+  if (index <= 0 || index == CB_ERR) {
+    SetWindowTextW(state.user, L"");
+    SetWindowTextW(state.password, L"");
+    state.edited_credentials = false;
+  } else {
+    const auto record = static_cast<size_t>(SendMessageW(state.credential, CB_GETITEMDATA,
+        static_cast<WPARAM>(index), 0));
+    if (record < state.credentials.size()) {
+      SetWindowTextW(state.user, state.credentials[record].user_name.c_str());
+      SetWindowTextW(state.password, state.credentials[record].password.c_str());
+      state.edited_credentials = false;
+    }
+  }
+  SetWindowTextW(state.notice, state.edited_credentials ? L"Изменено для этого запуска." :
+      L"Параметры действуют только для этого запуска.");
+  RefreshPreview(state);
+  state.populating = false;
+}
+
+std::wstring SelectedCredentialId(const LaunchOptionsState& state) {
+  if (!state.credential) return {};
+  const LRESULT index = SendMessageW(state.credential, CB_GETCURSEL, 0, 0);
+  if (index <= 0 || index == CB_ERR) return {};
+  const auto record = static_cast<size_t>(SendMessageW(state.credential, CB_GETITEMDATA,
+      static_cast<WPARAM>(index), 0));
+  return record < state.credentials.size() ? state.credentials[record].id : std::wstring();
+}
+
+void RefreshCredentials(LaunchOptionsState& state, std::wstring_view selected_id = {}) {
+  if (!state.credential) return;
+  SendMessageW(state.credential, CB_RESETCONTENT, 0, 0);
+  SendMessageW(state.credential, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Ручной ввод"));
+  SendMessageW(state.credential, CB_SETITEMDATA, 0, 0);
+  for (size_t i = 0; i < state.credentials.size(); ++i) {
+    const auto& item = state.credentials[i];
+    const std::wstring label = item.title.empty() ? item.user_name : item.title + L" — " + item.user_name;
+    const LRESULT added = SendMessageW(state.credential, CB_ADDSTRING, 0,
+        reinterpret_cast<LPARAM>(label.c_str()));
+    if (added != CB_ERR) SendMessageW(state.credential, CB_SETITEMDATA,
+        static_cast<WPARAM>(added), static_cast<LPARAM>(i));
+  }
+  int selected = 0;
+  if (!selected_id.empty()) {
+    for (size_t i = 0; i < state.credentials.size(); ++i) {
+      if (EqualNoCase(state.credentials[i].id, selected_id)) { selected = static_cast<int>(i + 1); break; }
+    }
+  }
+  SendMessageW(state.credential, CB_SETCURSEL, selected, 0);
+}
+
 void CreateControls(HWND window, LaunchOptionsState& state) {
   const UINT dpi = GetDpiForWindow(window);
   const auto px = [dpi](int logical) { return ScaleForDpi(logical, dpi); };
@@ -340,29 +401,34 @@ void CreateControls(HWND window, LaunchOptionsState& state) {
       static_cast<LPARAM>(std::distance(state.platforms->begin(), std::find_if(state.platforms->begin(), state.platforms->end(),
           [&](const auto& platform) { return platform.executable == *state.initial.platform_executable; })) + 1) : 0);
 
-  create(0, L"BUTTON", L"Пользователь 1С", BS_GROUPBOX, 14, 216, 632, 92, 0, text_font);
-  create(0, L"STATIC", L"Имя пользователя:", 0, 28, 244, 154, 20, 0, text_font);
+  create(0, L"BUTTON", L"Пользователь 1С", BS_GROUPBOX, 14, 216, 632, 126, 0, text_font);
+  create(0, L"STATIC", L"Учётная запись:", 0, 28, 244, 154, 20, 0, text_font);
+  state.credential = create(0, WC_COMBOBOXW, L"", WS_TABSTOP | CBS_DROPDOWNLIST | WS_VSCROLL,
+      190, 240, 332, 120, kLaunchCredential, text_font);
+  create(0, L"BUTTON", L"Управление…", WS_TABSTOP, 530, 240, 100, 25, kLaunchManageCredentials, button_font);
+  RefreshCredentials(state);
+  create(0, L"STATIC", L"Имя пользователя:", 0, 28, 274, 154, 20, 0, text_font);
   state.user = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.user_name,
-      WS_TABSTOP | ES_AUTOHSCROLL, 190, 240, 440, 25, kLaunchUser, text_font);
-  create(0, L"STATIC", L"Пароль:", 0, 28, 278, 154, 20, 0, text_font);
+      WS_TABSTOP | ES_AUTOHSCROLL, 190, 270, 440, 25, kLaunchUser, text_font);
+  create(0, L"STATIC", L"Пароль:", 0, 28, 308, 154, 20, 0, text_font);
   state.password = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.password,
-      WS_TABSTOP | ES_PASSWORD | ES_AUTOHSCROLL, 190, 274, 440, 25, kLaunchPassword, text_font);
+      WS_TABSTOP | ES_AUTOHSCROLL, 190, 304, 440, 25, kLaunchPassword, text_font);
 
-  create(0, L"BUTTON", L"Дополнительные параметры", BS_GROUPBOX, 14, 320, 632, 94, 0, text_font);
+  create(0, L"BUTTON", L"Дополнительные параметры", BS_GROUPBOX, 14, 354, 632, 94, 0, text_font);
   state.parameters = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.individual_parameters,
       WS_TABSTOP | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL,
-      28, 348, 604, 52, kLaunchParameters, text_font);
+      28, 382, 604, 52, kLaunchParameters, text_font);
 
-  create(0, L"BUTTON", L"Предварительный просмотр команды", BS_GROUPBOX, 14, 424, 632, 94, 0, text_font);
+  create(0, L"BUTTON", L"Предварительный просмотр команды", BS_GROUPBOX, 14, 458, 632, 94, 0, text_font);
   state.preview = create(WS_EX_CLIENTEDGE, L"EDIT", L"",
       ES_READONLY | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL,
-      28, 452, 604, 50, kLaunchPreview, text_font);
+      28, 486, 604, 50, kLaunchPreview, text_font);
 
-  state.status = create(0, L"STATIC", L"", 0, 28, 536, 214, 28, 0, notice_font);
-  create(0, L"BUTTON", L"Копировать команду", WS_TABSTOP, 252, 532, 156, 28,
+  state.status = create(0, L"STATIC", L"", 0, 28, 570, 214, 28, 0, notice_font);
+  create(0, L"BUTTON", L"Копировать команду", WS_TABSTOP, 252, 566, 156, 28,
       kLaunchCopyCommand, button_font);
-  create(0, L"BUTTON", L"Запустить", WS_TABSTOP | BS_DEFPUSHBUTTON, 418, 532, 100, 28, IDOK, button_font);
-  create(0, L"BUTTON", L"Отмена", WS_TABSTOP, 528, 532, 102, 28, IDCANCEL, button_font);
+  create(0, L"BUTTON", L"Запустить", WS_TABSTOP | BS_DEFPUSHBUTTON, 418, 566, 100, 28, IDOK, button_font);
+  create(0, L"BUTTON", L"Отмена", WS_TABSTOP, 528, 566, 102, 28, IDCANCEL, button_font);
   UpdateModeControls(state);
   UpdatePlatformControls(state);
   RefreshPreview(state);
@@ -390,6 +456,41 @@ LRESULT CALLBACK LaunchOptionsProc(HWND window, UINT message, WPARAM wparam, LPA
       RefreshPreview(*state);
       return 0;
     }
+    if (command == kLaunchCredential && HIWORD(wparam) == CBN_SELCHANGE) {
+      ApplyCredentialSelection(*state);
+      return 0;
+    }
+    if (command == kLaunchManageCredentials && HIWORD(wparam) == BN_CLICKED) {
+      if (state->manage_credentials) {
+        const auto selected_id = SelectedCredentialId(*state);
+        std::optional<credentials::Credential> old_record;
+        for (const auto& record : state->credentials) if (EqualNoCase(record.id, selected_id)) old_record = record;
+        std::vector<credentials::Credential> updated;
+        try { updated = state->manage_credentials(window); }
+        catch (const std::exception& error) {
+          Message(window, L"Не удалось обновить учётные записи.\n\n" + utf::FromUtf8(error.what()),
+              L"Учётные записи", MB_OK | MB_ICONERROR);
+          return 0;
+        }
+        catch (...) {
+          Message(window, L"Не удалось обновить учётные записи.", L"Учётные записи", MB_OK | MB_ICONERROR);
+          return 0;
+        }
+        state->credentials = updated;
+        RefreshCredentials(*state, selected_id);
+        if (!selected_id.empty() && SelectedCredentialId(*state).empty()) {
+          ApplyCredentialSelection(*state);
+        } else if (!selected_id.empty()) {
+          const auto selected = std::find_if(state->credentials.begin(), state->credentials.end(),
+              [&](const auto& record) { return EqualNoCase(record.id, selected_id); });
+          if (selected != state->credentials.end() && (!old_record || *selected != *old_record)) {
+            ApplyCredentialSelection(*state);
+          }
+        }
+        RefreshPreview(*state);
+      }
+      return 0;
+    }
     if ((command == kLaunchClient || command == kLaunchArchitecture) &&
         HIWORD(wparam) == CBN_SELCHANGE) {
       RefreshPreview(*state);
@@ -397,6 +498,10 @@ LRESULT CALLBACK LaunchOptionsProc(HWND window, UINT message, WPARAM wparam, LPA
     }
     if ((command == kLaunchUser || command == kLaunchPassword || command == kLaunchParameters) &&
         HIWORD(wparam) == EN_CHANGE) {
+      if ((command == kLaunchUser || command == kLaunchPassword) && !state->populating) {
+        state->edited_credentials = true;
+        SetWindowTextW(state->notice, L"Изменено для этого запуска.");
+      }
       RefreshPreview(*state);
       return 0;
     }
@@ -466,10 +571,14 @@ LRESULT CALLBACK LaunchOptionsProc(HWND window, UINT message, WPARAM wparam, LPA
 }  // namespace
 
 std::optional<domain::LaunchOptions> EditLaunchOptions(HWND owner, const domain::Database& database,
-    const std::vector<domain::PlatformInstallation>& platforms, domain::LaunchOptions initial) {
+    const std::vector<domain::PlatformInstallation>& platforms, domain::LaunchOptions initial,
+    std::vector<credentials::Credential> credential_records,
+    std::function<std::vector<credentials::Credential>(HWND)> manage_credentials) {
   LaunchOptionsState state;
   state.database = &database;
   state.platforms = &platforms;
+  state.credentials = std::move(credential_records);
+  state.manage_credentials = std::move(manage_credentials);
   state.initial = std::move(initial);
   state.web = connection::WebUrl(database.connect).has_value();
   if (state.web) {
@@ -488,7 +597,7 @@ std::optional<domain::LaunchOptions> EditLaunchOptions(HWND owner, const domain:
   (void)atom;
   constexpr DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP;
   constexpr DWORD extended_style = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
-  const SIZE outer_size = DialogOuterSize(owner, 660, 580, style, extended_style);
+  const SIZE outer_size = DialogOuterSize(owner, 660, 614, style, extended_style);
   const std::wstring title = L"Запуск с параметрами — " + database.name;
   HWND window = CreateWindowExW(extended_style, kLaunchOptionsClass, title.c_str(), style,
       CW_USEDEFAULT, CW_USEDEFAULT, outer_size.cx, outer_size.cy, owner, nullptr,
