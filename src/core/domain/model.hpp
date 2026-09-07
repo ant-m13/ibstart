@@ -68,7 +68,8 @@ struct LaunchOptions {
   // This is deliberately not a field of Database and is never persisted to
   // ibases.v8i.
   std::optional<std::filesystem::path> platform_executable;
-  // Credentials are transient input for the current launch only.
+  // Credentials are transient input for the current launch only. They may be
+  // initialized from a saved credential record, but are never persisted here.
   std::wstring user_name;
   std::wstring password;
   std::wstring common_parameters;

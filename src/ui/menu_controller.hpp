@@ -22,6 +22,7 @@ class MenuController final {
 
   [[nodiscard]] HMENU file_menu() const noexcept { return file_menu_; }
   [[nodiscard]] HMENU view_menu() const noexcept { return view_menu_; }
+  [[nodiscard]] HMENU settings_menu() const noexcept { return settings_menu_; }
   [[nodiscard]] HMENU help_menu() const noexcept { return help_menu_; }
   [[nodiscard]] const OwnerDrawMenuItem* Find(ULONG_PTR item_data) const noexcept;
   [[nodiscard]] bool Measure(HWND owner, HFONT font, MEASUREITEMSTRUCT* measure) const;
@@ -33,6 +34,7 @@ class MenuController final {
   HMENU menu_{};
   HMENU file_menu_{};
   HMENU view_menu_{};
+  HMENU settings_menu_{};
   HMENU help_menu_{};
   OwnerDrawMenuItems main_menu_items_;
   OwnerDrawMenuItems file_menu_items_;

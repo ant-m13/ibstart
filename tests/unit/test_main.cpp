@@ -5,6 +5,7 @@
 #include "core/catalog/catalog_metadata_service.hpp"
 #include "core/cache/cache_service.hpp"
 #include "core/connection/connection_string.hpp"
+#include "core/credentials/credentials.hpp"
 #include "core/domain/version.hpp"
 #include "core/domain/utf.hpp"
 #include "core/launcher/command_builder.hpp"
@@ -2782,6 +2783,198 @@ void TestStorageRejectsUnreadableDataPath() {
   std::error_code error;
   std::filesystem::remove_all(directory, error);
 }
+
+void TestCredentialsScopesAndRoundTrip() {
+  ibstart::v8i::V8iDocument document;
+  ibstart::v8i::Section parent; parent.entry.name = L"Parent"; parent.entry.Set(L"ID", L"group-id");
+  ibstart::v8i::Section child; child.entry.name = L"Child"; child.entry.Set(L"Folder", L"/Parent");
+  ibstart::v8i::Section database; database.entry.name = L"Database"; database.entry.Set(L"ID", L"db-id");
+  database.entry.Set(L"Folder", L"/Parent/Child"); database.entry.Set(L"Connect", L"Srvr=\"server\";Ref=\"db\"");
+  ibstart::v8i::Section no_id; no_id.entry.name = L"Legacy"; no_id.entry.Set(L"Connect", L"Srvr=\"server\";Ref=\"legacy\"");
+  document.sections = {parent, child, database, no_id};
+  const ibstart::catalog::Catalog catalog(document);
+  const auto path = std::filesystem::path(L"C:/Catalog/../Catalog/list.v8i");
+  const auto db = catalog.DatabaseFor(L"Database");
+  using namespace ibstart::credentials;
+  Credential group{L"group", L"Group credential", L"user", L" p a s s \" \\ \n", ScopeMode::selected,
+      {MakeTarget(path, catalog.document().sections[0].entry)}};
+  Credential direct{L"direct", L"Direct credential", L"user2", L"secret", ScopeMode::selected,
+      {MakeTarget(path, catalog.document().sections[2].entry)}};
+  Credential legacy{L"legacy", L"Legacy credential", L"old", L"old-pass", ScopeMode::selected,
+      {{NormalizeCatalogPath(path), TargetKind::database, {}, L"Legacy"}}};
+  Credential invalid{L"invalid", L"Invalid credential", L"bad", L"bad", ScopeMode::invalid, {}};
+  const auto applicable = Applicable({invalid, group, direct, legacy}, L"c:/catalog/list.v8i", catalog, db);
+  CHECK(applicable.size() == 2);
+  CHECK(applicable[0].id == L"direct" && applicable[1].id == L"group");
+  CHECK(!Applicable({legacy}, path, catalog, db).size());
+  const auto legacy_db = catalog.DatabaseFor(L"Legacy");
+  CHECK(Applicable({legacy}, L"C:/CATALOG/list.v8i", catalog, legacy_db).size() == 1);
+  CHECK(SameCatalogPath(L"C:/Каталог/./list.v8i", L"c:\\КАТАЛОГ\\list.v8i"));
+  CHECK(SameCatalogPath(L"\\\\?\\C:\\Каталог\\list.v8i", L"c:/Каталог/list.v8i"));
+
+  const auto directory = Temp(L"credentials-roundtrip");
+  const ibstart::storage::StorageLayout layout{directory, true};
+  ibstart::storage::Settings settings; settings.credentials = {group, direct, legacy, invalid};
+  ibstart::storage::SaveSettings(layout, settings);
+  const auto loaded = ibstart::storage::LoadSettings(layout);
+  CHECK(loaded.credentials == settings.credentials);
+  CHECK(ReadBytes(layout.root / L"settings.json").find("p a s s \\\" \\\\ \\n") != std::string::npos);
+  auto renamed = settings.credentials;
+  auto before = catalog.document().sections[0].entry; auto after = before; after.name = L"Renamed";
+  RenameTargets(renamed, path, before, after);
+  CHECK(renamed[0].targets[0].last_known_name == L"Renamed");
+  CHECK(renamed[0].targets[0].entry_id == L"group-id");
+  std::error_code error; std::filesystem::remove_all(directory, error);
+}
+
+void TestCredentialConcurrentMerges() {
+  const auto directory = Temp(L"credentials-merge");
+  const ibstart::storage::StorageLayout layout{directory, true};
+  ibstart::storage::Settings initial;
+  initial.credentials = {{L"one", L"One", L"u", L"p"}, {L"two", L"Two", L"u", L"p"}};
+  ibstart::storage::SaveSettings(layout, initial);
+  ibstart::storage::SettingsRepository first(layout), second(layout);
+  auto first_value = first.Read(); auto second_value = second.Read();
+  first_value.credentials[0].password = L"first";
+  second_value.credentials[1].password = L"second";
+  first.Save(first_value); second.Save(second_value);
+  auto merged = ibstart::storage::LoadSettings(layout);
+  CHECK(merged.credentials[0].password == L"first" && merged.credentials[1].password == L"second");
+
+  auto conflict_value = first.Read(); auto conflict_other = second.Read();
+  conflict_value.credentials[0].password = L"conflict-a";
+  conflict_other.credentials[0].password = L"conflict-b";
+  first.Save(conflict_value);
+  bool conflict = false;
+  try { second.Save(conflict_other); } catch (const ibstart::storage::StorageConflictError&) { conflict = true; }
+  CHECK(conflict);
+
+  auto delete_value = first.Read(); auto edit_value = second.Read();
+  delete_value.credentials.erase(delete_value.credentials.begin() + 1);
+  edit_value.credentials[1].title = L"Edited";
+  first.Save(delete_value);
+  conflict = false;
+  try { second.Save(edit_value); } catch (const ibstart::storage::StorageConflictError&) { conflict = true; }
+  CHECK(conflict);
+  std::error_code error; std::filesystem::remove_all(directory, error);
+}
+
+void TestCredentialApplicabilityBoundaries() {
+  ibstart::v8i::V8iDocument document;
+  ibstart::v8i::Section first; first.entry.name = L"First"; first.entry.Set(L"ID", L"g1");
+  ibstart::v8i::Section second; second.entry.name = L"Second"; second.entry.Set(L"ID", L"g2"); second.entry.Set(L"Folder", L"/First");
+  ibstart::v8i::Section database; database.entry.name = L"DB"; database.entry.Set(L"ID", L"db"); database.entry.Set(L"Folder", L"/First/Second"); database.entry.Set(L"Connect", L"Srvr=\"s\";Ref=\"d\"");
+  document.sections = {first, second, database};
+  const ibstart::catalog::Catalog catalog(document);
+  const auto db = catalog.DatabaseFor(L"DB");
+  const auto path = std::filesystem::path(L"C:/lists/main.v8i");
+  using namespace ibstart::credentials;
+  const Credential group{L"group", L"Group", L"u", L"p", ScopeMode::selected, {MakeTarget(path, document.sections[0].entry)}};
+  const Credential direct{L"direct", L"Direct", L"u", L"p", ScopeMode::selected, {MakeTarget(path, document.sections[2].entry)}};
+  const Credential missing{L"missing", L"Missing", L"u", L"p", ScopeMode::selected, {{path, TargetKind::database, L"other", L"DB"}}};
+  const Credential global{L"global", L"Global", L"u", L"p", ScopeMode::all, {}};
+  const auto result = Applicable({missing, group, direct, global}, path, catalog, db);
+  CHECK(result.size() == 3);
+  if (result.size() == 3) CHECK(result[0].id == L"direct" && result[1].id == L"group" && result[2].id == L"global");
+
+  auto moved = catalog;
+  CHECK(moved.Move(L"DB", L"", 0));
+  const auto moved_db = moved.DatabaseFor(L"DB");
+  CHECK(Applicable({group}, path, moved, moved_db).empty());
+  CHECK(moved.Move(L"DB", L"First", 0));
+  CHECK(!Applicable({group}, path, moved, moved.DatabaseFor(L"DB")).empty());
+
+  auto renamed = catalog;
+  CHECK(renamed.RenameDatabase(L"DB", L"Renamed"));
+  CHECK(!Applicable({direct}, path, renamed, renamed.DatabaseFor(L"Renamed")).empty());
+  CHECK(Applicable({missing}, path, catalog, db).empty());
+
+  ibstart::v8i::Section duplicate = first; duplicate.entry.name = L"Other"; duplicate.entry.Set(L"Folder", L"/");
+  ibstart::v8i::V8iDocument ambiguous_doc = document; ambiguous_doc.sections.push_back(duplicate);
+  const ibstart::catalog::Catalog ambiguous(ambiguous_doc);
+  CHECK(Applicable({group}, path, ambiguous, ambiguous.DatabaseFor(L"DB")).empty());
+}
+
+void TestCredentialSettingsRejectInvalidScopeAndDuplicateIds() {
+  const auto directory = Temp(L"credentials-invalid-settings");
+  const ibstart::storage::StorageLayout layout{directory, true};
+  WriteBytes(layout.root / L"settings.json", R"({"credentials_schema_version":1,"credentials":[
+    {"id":"", "title":"Blank", "user_name":"u", "password":"p", "scope":{"mode":"all"}},
+    {"id":"same", "title":"One", "user_name":"u", "password":"p", "scope":{"mode":"unknown"}},
+    {"id":"SAME", "title":"Two", "user_name":"u", "password":"пароль", "scope":{"mode":"all"}}
+  ]})");
+  const auto loaded = ibstart::storage::LoadSettings(layout);
+  CHECK(loaded.credentials.size() == 3);
+  CHECK(std::all_of(loaded.credentials.begin(), loaded.credentials.end(), [](const auto& c) {
+    return c.scope == ibstart::credentials::ScopeMode::invalid;
+  }));
+  std::error_code error; std::filesystem::remove_all(directory, error);
+}
+
+void TestCredentialConcurrentDeletionAndAdditionConflicts() {
+  const auto directory = Temp(L"credentials-concurrent-edits");
+  const ibstart::storage::StorageLayout layout{directory, true};
+  ibstart::storage::Settings initial;
+  initial.credentials = {{L"delete", L"Delete", L"u", L"p"}};
+  ibstart::storage::SaveSettings(layout, initial);
+  ibstart::storage::SettingsRepository first(layout), second(layout);
+  auto a = first.Read(); auto b = second.Read();
+  a.credentials.clear(); b.credentials.clear();
+  first.Save(a);
+  bool deletion_conflict = false;
+  try { second.Save(b); } catch (const ibstart::storage::StorageConflictError&) { deletion_conflict = true; }
+  CHECK(!deletion_conflict);
+
+  initial.credentials.clear(); ibstart::storage::SaveSettings(layout, initial);
+  ibstart::storage::SettingsRepository left(layout), right(layout);
+  auto left_value = left.Read(); auto right_value = right.Read();
+  left_value.credentials.push_back({L"left", L"Same title", L"u", L"p"});
+  right_value.credentials.push_back({L"right", L"Same title", L"u", L"p"});
+  left.Save(left_value);
+  bool addition_conflict = false;
+  try { right.Save(right_value); } catch (const ibstart::storage::StorageConflictError&) { addition_conflict = true; }
+  CHECK(addition_conflict);
+  std::error_code error; std::filesystem::remove_all(directory, error);
+}
+
+void TestCredentialStaleSettingsPreservePasswordAndFutureSchemaInactive() {
+  const auto directory = Temp(L"credentials-stale-settings");
+  const ibstart::storage::StorageLayout layout{directory, true};
+  ibstart::storage::Settings initial;
+  initial.credentials = {{L"good", L"Good", L"u", L"old"}, {L"bad", L"Bad", L"u", L"p", ibstart::credentials::ScopeMode::invalid}};
+  ibstart::storage::SaveSettings(layout, initial);
+  ibstart::storage::SettingsRepository latest(layout), stale(layout);
+  auto latest_value = latest.Read(); auto stale_value = stale.Read();
+  latest_value.credentials[0].password = L"latest пароль";
+  latest.Save(latest_value);
+  stale_value.window_width += 1;
+  stale.Save(stale_value);
+  const auto merged = ibstart::storage::LoadSettings(layout);
+  CHECK(merged.credentials.size() == 2);
+  if (merged.credentials.size() == 2) {
+    CHECK(merged.credentials[0].password == L"latest пароль");
+    CHECK(merged.credentials[1].scope == ibstart::credentials::ScopeMode::invalid);
+  }
+  WriteBytes(layout.root / L"settings.json", R"({"credentials_schema_version":99,"credentials":[{"id":"future","title":"Future","user_name":"u","password":"пароль","scope":{"mode":"all"}}]})");
+  const auto future = ibstart::storage::LoadSettings(layout);
+  CHECK(future.credentials.size() == 1);
+  if (future.credentials.size() == 1) CHECK(future.credentials[0].scope == ibstart::credentials::ScopeMode::invalid);
+  std::error_code error; std::filesystem::remove_all(directory, error);
+}
+
+void TestCredentialGroupIncludesNewNestedDatabase() {
+  ibstart::v8i::V8iDocument document;
+  ibstart::v8i::Section group; group.entry.name = L"Group"; group.entry.Set(L"ID", L"group");
+  ibstart::v8i::Section first; first.entry.name = L"First"; first.entry.Set(L"ID", L"first"); first.entry.Set(L"Folder", L"/Group"); first.entry.Set(L"Connect", L"Srvr=\"s\";Ref=\"first\"");
+  document.sections = {group, first};
+  const auto path = std::filesystem::path(L"C:/lists/nested.v8i");
+  const ibstart::credentials::Credential credential{L"group", L"Group", L"u", L"p", ibstart::credentials::ScopeMode::selected,
+      {ibstart::credentials::MakeTarget(path, document.sections[0].entry)}};
+  ibstart::catalog::Catalog catalog(document);
+  CHECK(!ibstart::credentials::Applicable({credential}, path, catalog, catalog.DatabaseFor(L"First")).empty());
+  CHECK(catalog.AddServerDatabase(L"Second", L"Srvr=\"s\";Ref=\"second\"", L"Group"));
+  CHECK(!ibstart::credentials::Applicable({credential}, path, catalog, catalog.DatabaseFor(L"Second")).empty());
+}
 }
 
 int wmain(int argc, wchar_t* argv[]) {
@@ -2864,6 +3057,13 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"StorageSkipsMalformedRecords", TestStorageSkipsMalformedRecords);
   run(L"CatalogStateNormalization", TestCatalogStateNormalization);
   run(L"StorageRejectsUnreadableDataPath", TestStorageRejectsUnreadableDataPath);
+  run(L"CredentialsScopesAndRoundTrip", TestCredentialsScopesAndRoundTrip);
+  run(L"CredentialConcurrentMerges", TestCredentialConcurrentMerges);
+  run(L"CredentialApplicabilityBoundaries", TestCredentialApplicabilityBoundaries);
+  run(L"CredentialSettingsRejectInvalidScopeAndDuplicateIds", TestCredentialSettingsRejectInvalidScopeAndDuplicateIds);
+  run(L"CredentialConcurrentDeletionAndAdditionConflicts", TestCredentialConcurrentDeletionAndAdditionConflicts);
+  run(L"CredentialStaleSettingsPreservePasswordAndFutureSchemaInactive", TestCredentialStaleSettingsPreservePasswordAndFutureSchemaInactive);
+  run(L"CredentialGroupIncludesNewNestedDatabase", TestCredentialGroupIncludesNewNestedDatabase);
   if (failures) { std::wcerr << failures << L" test(s) failed\n"; return 1; }
   std::wcout << L"All IBStart unit tests passed\n"; return 0;
 }

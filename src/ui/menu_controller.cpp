@@ -47,6 +47,7 @@ void MenuController::Create(HWND window, HINSTANCE instance) {
   menu_ = CreateMenu();
   file_menu_ = CreatePopupMenu();
   view_menu_ = CreatePopupMenu();
+  settings_menu_ = CreatePopupMenu();
   help_menu_ = CreatePopupMenu();
 }
 
@@ -54,10 +55,20 @@ void MenuController::Clear() noexcept {
   main_menu_items_.Clear();
   file_menu_items_.Clear();
   if (window_ && IsWindow(window_)) SetMenu(window_, nullptr);
-  if (menu_) DestroyMenu(menu_);
+  if (menu_) {
+    while (GetMenuItemCount(menu_) > 0) {
+      RemoveMenu(menu_, 0, MF_BYPOSITION);
+    }
+    DestroyMenu(menu_);
+  }
+  if (file_menu_) DestroyMenu(file_menu_);
+  if (view_menu_) DestroyMenu(view_menu_);
+  if (settings_menu_) DestroyMenu(settings_menu_);
+  if (help_menu_) DestroyMenu(help_menu_);
   menu_ = nullptr;
   file_menu_ = nullptr;
   view_menu_ = nullptr;
+  settings_menu_ = nullptr;
   help_menu_ = nullptr;
   window_ = nullptr;
   instance_ = nullptr;
@@ -107,8 +118,9 @@ void MenuController::RefreshFile(const storage::Settings& settings) {
 }
 
 void MenuController::RefreshMain(const storage::Settings& settings) {
-  if (!menu_ || !file_menu_ || !view_menu_ || !help_menu_) return;
+  if (!menu_ || !file_menu_ || !view_menu_ || !settings_menu_ || !help_menu_) return;
   ClearMenu(view_menu_);
+  ClearMenu(settings_menu_);
   ClearMenu(help_menu_);
   main_menu_items_.Clear();
   const auto append = [&](HMENU target, UINT command, int icon_resource, std::wstring text,
@@ -121,6 +133,7 @@ void MenuController::RefreshMain(const storage::Settings& settings) {
   if (settings.simple_mode) {
     append(view_menu_, kSimpleMode, 0, L"Выйти из простого режима", L"Ctrl+Alt+M", true);
   } else {
+    append(settings_menu_, kConfigureCredentials, 0, L"Учётные записи…");
     append(view_menu_, kToggleFavorite, IDI_ACTION_FAVORITE,
         L"Добавить/убрать из избранного", L"Ctrl+Alt+I");
     append(view_menu_, kToggleFoldersFirstWhenSorting, IDI_TREE_FOLDER,
@@ -139,6 +152,8 @@ void MenuController::RefreshMain(const storage::Settings& settings) {
       reinterpret_cast<UINT_PTR>(file_menu_), L"Файл");
   AppendMenuW(menu_, MF_POPUP, reinterpret_cast<UINT_PTR>(view_menu_),
       settings.simple_mode ? L"Режим" : L"Вид");
+  if (!settings.simple_mode) AppendMenuW(menu_, MF_POPUP,
+      reinterpret_cast<UINT_PTR>(settings_menu_), L"Настройки");
   if (!settings.simple_mode) AppendMenuW(menu_, MF_POPUP,
       reinterpret_cast<UINT_PTR>(help_menu_), L"Справка");
   SetMenu(window_, menu_);

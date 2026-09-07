@@ -5,6 +5,7 @@
 #include "core/catalog/catalog_session.hpp"
 #include "core/logging/logging.hpp"
 #include "core/storage/storage.hpp"
+#include "core/credentials/credentials.hpp"
 #include "core/v8i/v8i_file_store.hpp"
 #include "ui/cache_clear_operation.hpp"
 #include "ui/command_dispatcher.hpp"
@@ -87,6 +88,7 @@ class MainWindow {
   void EditSelected();
   void EditSelectedTags();
   void ConfigureTagColors();
+  void ConfigureCredentials(HWND owner = nullptr);
   void AddTagToSelected(std::wstring tag);
   void AddNewTagToSelected();
   void ApplyTagResult(TagManager::Result result, std::wstring_view selected = {});
