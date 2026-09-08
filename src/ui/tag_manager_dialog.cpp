@@ -300,18 +300,15 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
     if (command == IDOK) {
       state->result = TagManagerResult{state->tags, state->styles};
       state->done = true;
-      DestroyWindow(window);
       return 0;
     }
     if (command == IDCANCEL) {
       state->done = true;
-      DestroyWindow(window);
       return 0;
     }
   }
   if (message == WM_CLOSE && state) {
     state->done = true;
-    DestroyWindow(window);
     return 0;
   }
   return DefWindowProcW(window, message, wparam, lparam);
@@ -394,9 +391,10 @@ std::optional<TagManagerResult> EditTagManager(
       DispatchMessageW(&message);
     }
   }
-  if (IsWindow(window)) DestroyWindow(window);
+  // Re-enable the immediate modal owner before destroying the active child.
+  // Otherwise Windows briefly activates the top-level application window.
+  CloseModalDialog(window, owner);
   if (result == 0) PostQuitMessage(static_cast<int>(message.wParam));
-  RestoreModalOwner(owner);
   if (state.font) DeleteObject(state.font);
   if (state.button_font) DeleteObject(state.button_font);
   return state.result;

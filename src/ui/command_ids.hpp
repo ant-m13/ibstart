@@ -26,6 +26,7 @@ enum Id : int {
   kMoveDown,
   kOpenFolder,
   kClearRecent,
+  kRemoveRecentDatabase,
   kCopyDetailValue,
   kCopyDetailPair,
   kEditTags,
@@ -38,11 +39,13 @@ enum Id : int {
   kShowTagsInList,
   kNewTagForSelected,
   kExit,
+  kConfigureApplicationSettings,
   kConfigureCredentials,
   kFavorite1 = 200,
 };
 
 inline constexpr UINT kRecentList1 = 300;
+inline constexpr UINT kRemoveRecentList1 = 320;
 inline constexpr UINT kQuickTag1 = 400;
 inline constexpr UINT kTagsContextMenu = 250;
 inline constexpr UINT kRecentListsMenu = 299;

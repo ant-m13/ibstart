@@ -13,6 +13,7 @@
 #include <map>
 #include <optional>
 #include <string>
+#include <string_view>
 #include <stdexcept>
 #include <vector>
 
@@ -58,6 +59,19 @@ struct Settings {
   bool simple_mode{false};
   bool show_tags_in_list{true};
   bool folders_first_when_sorting{true};
+  bool open_last_list_on_startup{true};
+  bool restore_last_selection{true};
+  domain::ClientType default_client_type{domain::ClientType::automatic};
+  domain::ClientArchitecture default_architecture{domain::ClientArchitecture::automatic};
+  std::wstring default_platform_version;
+  bool confirm_destructive_actions{true};
+  bool confirm_secret_launch{true};
+  bool show_details_panel{true};
+  bool show_status_bar{true};
+  int tree_density{1};
+  bool remember_launch_history{true};
+  int launch_history_limit{20};
+  int recent_lists_limit{9};
   std::vector<std::filesystem::path> recent_ibases;
   std::vector<std::filesystem::path> platform_search_paths;
   int window_x{CW_USEDEFAULT};
@@ -112,7 +126,8 @@ class CatalogStateRepository {
   [[nodiscard]] const CatalogState& Read();
   [[nodiscard]] const CatalogState& Reload();
   void Update(const std::function<void(CatalogState&)>& mutation);
-  void AppendHistory(domain::HistoryItem item);
+  void AppendHistory(domain::HistoryItem item, std::size_t max_history = kMaxHistory);
+  void RemoveHistory(std::wstring_view database_id);
   void ClearHistory();
 
  private:
@@ -125,6 +140,12 @@ class CatalogStateRepository {
 void EnsureWritable(const StorageLayout& layout);
 [[nodiscard]] Settings LoadSettings(const StorageLayout& layout);
 void SaveSettings(const StorageLayout& layout, const Settings& settings);
+// Copies the profile's own JSON state to a user-selected directory. Credentials
+// are omitted unless the caller explicitly opts in.
+void ExportProfile(const StorageLayout& source, const std::filesystem::path& target, bool include_credentials);
+// Imports profile JSON state. Existing credentials are preserved unless the
+// caller explicitly opts in to replacing them with the imported records.
+void ImportProfile(const std::filesystem::path& source, const StorageLayout& target, bool include_credentials);
 [[nodiscard]] CatalogState LoadCatalogState(const StorageLayout& layout);
 // Removes invalid and duplicate favorite/history entries and applies their size limits.
 void NormalizeCatalogState(CatalogState& state);

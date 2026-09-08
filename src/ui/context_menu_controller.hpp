@@ -20,6 +20,7 @@ struct TreeContextMenuState {
   bool editable{};
   bool file{};
   bool recent_root{};
+  bool recent_item{};
   bool favorite{};
   std::wstring add_parent;
   std::wstring sort_parent;

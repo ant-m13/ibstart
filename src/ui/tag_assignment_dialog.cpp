@@ -153,18 +153,15 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
     if (command == IDOK) {
       state->result = SelectedTags(*state);
       state->done = true;
-      DestroyWindow(window);
       return 0;
     }
     if (command == IDCANCEL) {
       state->done = true;
-      DestroyWindow(window);
       return 0;
     }
   }
   if (message == WM_CLOSE && state) {
     state->done = true;
-    DestroyWindow(window);
     return 0;
   }
   return DefWindowProcW(window, message, wparam, lparam);
@@ -247,9 +244,8 @@ std::optional<std::vector<std::wstring>> EditTagAssignment(HWND owner,
       DispatchMessageW(&message);
     }
   }
-  if (IsWindow(window)) DestroyWindow(window);
+  CloseModalDialog(window, owner);
   if (result == 0) PostQuitMessage(static_cast<int>(message.wParam));
-  RestoreModalOwner(owner);
   if (state.font) DeleteObject(state.font);
   if (state.button_font) DeleteObject(state.button_font);
   return state.result;

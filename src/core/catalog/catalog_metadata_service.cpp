@@ -190,7 +190,13 @@ void CatalogMetadataService::ReplaceTagConfiguration(storage::DatabaseTags tags,
   });
 }
 
-void CatalogMetadataService::RecordLaunch(domain::HistoryItem item) { repository_.AppendHistory(std::move(item)); }
+void CatalogMetadataService::RecordLaunch(domain::HistoryItem item, std::size_t max_history) {
+  repository_.AppendHistory(std::move(item), max_history);
+}
+
+void CatalogMetadataService::RemoveHistory(std::wstring_view database_id) {
+  repository_.RemoveHistory(database_id);
+}
 
 void CatalogMetadataService::ClearHistory() { repository_.ClearHistory(); }
 

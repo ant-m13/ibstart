@@ -1,5 +1,6 @@
 #include "ui/main_window.hpp"
 #include "ui/command_ids.hpp"
+#include "ui/application_settings_dialog.hpp"
 #include "ui/database_editor_dialog.hpp"
 #include "ui/dialog_support.hpp"
 #include "ui/folder_picker.hpp"
@@ -43,6 +44,7 @@ using namespace commands;
 using dialog::CreateUiFont;
 using dialog::DialogControlColor;
 using dialog::InputBox;
+using dialog::PickFolder;
 using dialog::ScaleForDpi;
 using presentation::ContainsTag;
 using presentation::KnownTags;
@@ -196,6 +198,7 @@ void MainWindow::RegisterCommandHandlers() {
   command_dispatcher_.Register(kEdit, [this] { EditSelected(); });
   command_dispatcher_.Register(kCache, [this] { ClearSelectedCache(); });
   command_dispatcher_.Register(kClearRecent, [this] { ClearRecentBases(); });
+  command_dispatcher_.Register(kRemoveRecentDatabase, [this] { RemoveRecentDatabase(); });
   command_dispatcher_.Register(kShortcut, [this] { CreateShortcut(); });
   command_dispatcher_.Register(kOpenFolder, [this] { OpenSelectedFolder(); });
   command_dispatcher_.Register(kDelete, [this] { DeleteSelected(); });
@@ -203,6 +206,7 @@ void MainWindow::RegisterCommandHandlers() {
   command_dispatcher_.Register(kCopyDetailPair, [this] { CopySelectedDetail(true); });
   command_dispatcher_.Register(kEditTags, [this] { EditSelectedTags(); });
   command_dispatcher_.Register(kConfigureTagColors, [this] { ConfigureTagColors(); });
+  command_dispatcher_.Register(kConfigureApplicationSettings, [this] { ConfigureApplicationSettings(); });
   command_dispatcher_.Register(kConfigureCredentials, [this] { ConfigureCredentials(window_); });
   command_dispatcher_.Register(kSimpleMode, [this] { SetSimpleMode(!settings_.simple_mode); });
   command_dispatcher_.Register(kToggleFavorite, [this] { ToggleFavorite(); });
@@ -218,7 +222,8 @@ void MainWindow::RegisterCommandHandlers() {
   command_dispatcher_.Register(kNewTagForSelected, [this] { AddNewTagToSelected(); });
   command_dispatcher_.Register(kToggleFoldersFirstWhenSorting, [this] { ToggleFoldersFirstWhenSorting(); });
   command_dispatcher_.RegisterRange(kFavorite1, 9, [this](std::size_t slot) { LaunchFavorite(slot); });
-  command_dispatcher_.RegisterRange(kRecentList1, 10, [this](std::size_t index) { OpenRecentList(index); });
+  command_dispatcher_.RegisterRange(kRecentList1, 9, [this](std::size_t index) { OpenRecentList(index); });
+  command_dispatcher_.RegisterRange(kRemoveRecentList1, 9, [this](std::size_t index) { RemoveRecentList(index); });
 }
 MainWindow::~MainWindow() {
   StopAndJoinBackgroundThreads();
@@ -660,13 +665,13 @@ void MainWindow::Layout(int width, int height) {
     return;
   }
 
-  constexpr int statusHeight = 22;
+  const int statusHeight = settings_.show_status_bar ? 22 : 0;
   // The tree starts below the tag filter, while the details panel can use the
   // same vertical band as that filter.  Keeping these anchors separate avoids
   // an unused gap above the selected database information.
   constexpr int treeTop = 74;
   constexpr int detailsTop = 39;
-  constexpr int bottom = statusHeight + 10;
+  const int bottom = statusHeight + 10;
   constexpr int buttonGap = 8;
   constexpr int buttonRowGap = 6;
   constexpr int buttonHeight = 30;
@@ -790,6 +795,16 @@ void MainWindow::LoadCatalog(bool report_error) {
   const bool had_tree_selection = tree_ && TreeView_GetSelection(tree_);
   const bool hasInitialLaunch = initial_launch_id_.has_value();
   try {
+    if (!settings_.open_last_list_on_startup && !hasInitialLaunch) {
+      catalog_.emplace();
+      store_.reset();
+      platforms_.clear();
+      static_cast<void>(catalog_state_.Reload());
+      RefreshTagFilter();
+      PopulateTree();
+      SetStatus(L"Автоматическое открытие списка отключено. Выберите список через меню «Файл». | " + CatalogStatistics());
+      return;
+    }
     if (settings_.active_ibases.empty()) { if (const auto standard = storage::FindStandardIbases()) settings_.active_ibases = *standard; }
     auto session = catalog::LoadSession(settings_.active_ibases, settings_.platform_search_paths);
     if (!session.loaded) {
@@ -819,7 +834,7 @@ void MainWindow::LoadCatalog(bool report_error) {
     }
     RefreshTagFilter();
     PopulateTree();
-    if (!hasInitialLaunch) {
+    if (!hasInitialLaunch && settings_.restore_last_selection) {
       if (selected_database) {
         if (!RestoreDatabaseSelection(*selected_database)) TreeView_SelectItem(tree_, nullptr);
       } else if (!had_tree_selection && !settings_.selected_entry.empty()) {
@@ -1292,6 +1307,7 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   const bool specialRoot = selectedData == TreeViewController::kRecentRootItemData ||
       selectedData == TreeViewController::kFavoritesRootItemData;
   const bool recentRoot = tree_view_.SelectedItemIsRecentRoot();
+  const bool recentItem = tree_view_.BranchData(selectedItem) == TreeViewController::kRecentRootItemData;
   const auto entry = specialRoot ? std::optional<domain::Entry>() : SelectedCatalogEntry();
   if (!specialRoot && tree_view_.SelectedSectionIndex() && !entry) {
     ResetStaleSelectionIfNeeded();
@@ -1319,7 +1335,7 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   }
   const TreeContextMenuState state{
       settings_.simple_mode, sortTarget, catalogRoot, database, web, launch_available, group,
-      editable, file, recentRoot, favorite, addParent, sortParent, quick_tags};
+      editable, file, recentRoot, recentItem, favorite, addParent, sortParent, quick_tags};
   const UINT command = context_menus_.ShowTree(window_, screen, state);
   if (!command) return;
   if (settings_.simple_mode) {
@@ -1376,8 +1392,9 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
       return;
     }
     const auto rememberLaunch = [&](domain::LaunchMode launchedMode) {
+      if (!settings_.remember_launch_history) return;
       const auto timestamp = std::chrono::system_clock::now();
-      catalog_state_.RecordLaunch({database.id, timestamp, launchedMode});
+      catalog_state_.RecordLaunch({database.id, timestamp, launchedMode}, settings_.launch_history_limit);
       if (selectedFromRecent) {
         const auto current_index = catalog_ ? tree_view_.SelectedSectionIndex(*catalog_) : std::nullopt;
         RefreshRecentTreeBranch(current_index);
@@ -1396,6 +1413,7 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
     } else {
       options.client_type = ClientTypeFromApplication(database.app);
       if (options.client_type == domain::ClientType::automatic) options.client_type = ClientTypeFromApplication(database.default_app);
+      if (options.client_type == domain::ClientType::automatic) options.client_type = settings_.default_client_type;
     }
     const auto validation = launcher::ValidateLaunchParameters(database, options);
     if (!validation.empty()) throw std::invalid_argument(utf::ToUtf8(validation.front()));
@@ -1403,8 +1421,10 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
     const auto fromDatabase = launcher::ParseAppArchitecture(database.app_arch);
     if (fromParameters) options.architecture = *fromParameters;
     else if (fromDatabase) options.architecture = *fromDatabase;
+    else options.architecture = settings_.default_architecture;
     const auto& selectedVersion = database.version.empty() ? database.default_version : database.version;
     if (selectedVersion != L"" && selectedVersion != L"Авто") options.version = selectedVersion;
+    else if (!settings_.default_platform_version.empty()) options.version = settings_.default_platform_version;
     if (options.client_type == domain::ClientType::web) { Message(window_, L"Веб-клиент можно использовать только для веб-базы с адресом http:// или https://.", L"ИБ Старт", MB_OK | MB_ICONWARNING); return; }
     auto selected = launcher::SelectPlatform(platforms_, options);
     bool usedNewestThinClient = false;
@@ -1432,7 +1452,7 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
       return;
     }
     const auto command = launcher::BuildCommand(database, *selected, options);
-    if (logging::ContainsSecretArguments(command) &&
+    if (logging::ContainsSecretArguments(command) && settings_.confirm_secret_launch &&
         MessageBoxW(window_, L"В параметрах запуска обнаружен пароль или токен. Значение будет видно в ibases.v8i и интерфейсе, "
                              L"а в журналах и автоматически создаваемых диагностических сообщениях будет замаскировано. Продолжить?",
             L"Предупреждение", MB_YESNO | MB_ICONWARNING) != IDYES) return;
@@ -1499,15 +1519,17 @@ void MainWindow::LaunchWithParameters() {
     if (initial.client_type == domain::ClientType::automatic) {
       initial.client_type = ClientTypeFromApplication(database.default_app);
     }
+    if (initial.client_type == domain::ClientType::automatic) initial.client_type = settings_.default_client_type;
     const auto validation = launcher::ValidateLaunchParameters(database, initial);
     if (!validation.empty()) throw std::invalid_argument(utf::ToUtf8(validation.front()));
     if (const auto fromParameters = launcher::AppArchitectureFromParameters(database.additional_parameters)) {
       initial.architecture = *fromParameters;
     } else if (const auto fromDatabase = launcher::ParseAppArchitecture(database.app_arch)) {
       initial.architecture = *fromDatabase;
-    }
+    } else initial.architecture = settings_.default_architecture;
     const auto& selectedVersion = database.version.empty() ? database.default_version : database.version;
     if (selectedVersion != L"" && selectedVersion != L"Авто") initial.version = selectedVersion;
+    else if (!settings_.default_platform_version.empty()) initial.version = settings_.default_platform_version;
     initial.individual_parameters = database.additional_parameters;
     initial.override_individual_parameters = true;
 
@@ -1532,7 +1554,9 @@ void MainWindow::LaunchWithParameters() {
     logger_.Info(L"Запуск с параметрами: " + logging::RedactedCommandLine(command));
     SetStatus(L"Запущена база: " + database.name);
     const auto timestamp = std::chrono::system_clock::now();
-    catalog_state_.RecordLaunch({database.id, timestamp, options->mode});
+    if (settings_.remember_launch_history) {
+      catalog_state_.RecordLaunch({database.id, timestamp, options->mode}, settings_.launch_history_limit);
+    }
     if (selectedFromRecent) {
       const auto current_index = catalog_ ? tree_view_.SelectedSectionIndex(*catalog_) : std::nullopt;
       RefreshRecentTreeBranch(current_index);
@@ -1718,6 +1742,119 @@ void MainWindow::EditSelectedTags() {
 void MainWindow::ConfigureTagColors() {
   ApplyTagResult(tag_manager_.Configure(window_));
 }
+void MainWindow::ConfigureApplicationSettings() {
+  const auto original = settings_;
+  bool tags_changed = false;
+  const auto result = dialog::EditApplicationSettings(window_, settings_, layout_.root, layout_.portable,
+      [this](HWND owner, const std::vector<credentials::Credential>& current)
+          -> std::optional<std::vector<credentials::Credential>> {
+        try {
+          const auto path = store_ ? store_->path() : settings_.active_ibases;
+          return dialog::EditCredentialManager(owner, current, path, catalog_ ? &*catalog_ : nullptr);
+        } catch (const std::exception& error) {
+          Message(owner, L"Не удалось открыть учётные записи.\n\n" + WideErrorText(error.what()),
+              L"Учётные записи", MB_OK | MB_ICONERROR);
+          return std::nullopt;
+        }
+      },
+      [this, &tags_changed](HWND owner) { tags_changed = tag_manager_.Configure(owner).changed; },
+      [this](HWND) { ClearRecentBases(); },
+      [this](HWND owner) -> bool {
+        const auto target = PickFolder(owner, L"Папка для экспорта профиля IBStart");
+        if (!target) return false;
+        const bool include_credentials = MessageBoxW(owner,
+            L"Включить в экспорт логины и пароли учётных записей?\n\n"
+            L"По умолчанию секреты не экспортируются.", L"Экспорт профиля",
+            MB_YESNO | MB_ICONWARNING) == IDYES;
+        try {
+          storage::ExportProfile(layout_, *target, include_credentials);
+          Message(owner, L"Профиль IBStart экспортирован в выбранную папку.", L"Экспорт профиля");
+          return true;
+        } catch (const std::exception& error) {
+          logger_.Error(L"Ошибка экспорта профиля: " + WideErrorText(error.what()));
+          Message(owner, L"Не удалось экспортировать профиль.\n\n" + WideErrorText(error.what()),
+              L"Экспорт профиля", MB_OK | MB_ICONERROR);
+          return false;
+        }
+      },
+      [this](HWND owner) -> bool {
+        const auto source = PickFolder(owner, L"Папка с профилем IBStart для импорта");
+        if (!source) return false;
+        const bool include_credentials = MessageBoxW(owner,
+            L"Заменить текущие логины и пароли учётных записей данными из профиля?\n\n"
+            L"При ответе «Нет» текущие учётные записи будут сохранены.", L"Импорт профиля",
+            MB_YESNO | MB_ICONWARNING) == IDYES;
+        try {
+          storage::ImportProfile(*source, layout_, include_credentials);
+          settings_ = settings_repository_.Reload();
+          static_cast<void>(catalog_state_.Reload());
+          LoadCatalog(false);
+          RefreshFileMenu();
+          RefreshMainMenuBar();
+          SetStatus(L"Профиль IBStart импортирован.");
+          return true;
+        } catch (const std::exception& error) {
+          logger_.Error(L"Ошибка импорта профиля: " + WideErrorText(error.what()));
+          Message(owner, L"Не удалось импортировать профиль.\n\n" + WideErrorText(error.what()),
+              L"Импорт профиля", MB_OK | MB_ICONERROR);
+          return false;
+        }
+      });
+  if (!result) {
+    if (tags_changed) {
+      RefreshTagFilter();
+      PopulateTree();
+      DisplaySelected();
+    }
+    return;
+  }
+  try {
+    settings_ = result->settings;
+    PersistSettings(settings_);
+    if (result->reset_window_layout && window_) {
+      RECT work_area{};
+      SystemParametersInfoW(SPI_GETWORKAREA, 0, &work_area, 0);
+      const UINT dpi = GetDpiForWindow(window_);
+      const int width = std::max(900, ScaleForDpi(kMinimumWindowWidth, dpi));
+      const int height = std::max(560, ScaleForDpi(kMinimumWindowHeight, dpi));
+      const int work_width = static_cast<int>(work_area.right - work_area.left);
+      const int work_height = static_cast<int>(work_area.bottom - work_area.top);
+      const int x = static_cast<int>(work_area.left) + std::max(0, (work_width - width) / 2);
+      const int y = static_cast<int>(work_area.top) + std::max(0, (work_height - height) / 2);
+      settings_.window_x = x;
+      settings_.window_y = y;
+      settings_.window_width = width;
+      settings_.window_height = height;
+      SetWindowPos(window_, nullptr, x, y, width, height, SWP_NOZORDER | SWP_NOACTIVATE);
+      PersistSettings(settings_);
+    }
+    const bool platform_paths_changed = original.platform_search_paths != settings_.platform_search_paths;
+    const bool simple_mode_changed = original.simple_mode != settings_.simple_mode;
+    const bool appearance_changed = original.show_details_panel != settings_.show_details_panel ||
+        original.show_status_bar != settings_.show_status_bar || original.tree_density != settings_.tree_density;
+    if (platform_paths_changed) {
+      LoadCatalog(false);
+    }
+    if (simple_mode_changed || appearance_changed) {
+      SetSimpleMode(settings_.simple_mode);
+    } else if (platform_paths_changed) {
+      RefreshFileMenu();
+      RefreshMainMenuBar();
+    } else {
+      RefreshFileMenu();
+      RefreshMainMenuBar();
+      RefreshTagFilter();
+      PopulateTree();
+      DisplaySelected();
+    }
+    SetStatus(L"Настройки приложения сохранены.");
+  } catch (const std::exception& error) {
+    settings_ = original;
+    logger_.Error(L"Ошибка сохранения настроек приложения: " + ibstart::utf::FromUtf8(error.what()));
+    Message(window_, L"Не удалось сохранить настройки приложения.\n\n" + WideErrorText(error.what()),
+        L"Настройки IBStart", MB_OK | MB_ICONERROR);
+  }
+}
 void MainWindow::ConfigureCredentials(HWND owner) {
   try {
     PersistSettings(settings_);
@@ -1765,6 +1902,11 @@ void MainWindow::ApplyTagResult(TagManager::Result result, std::wstring_view sel
 }
 void MainWindow::DeleteSelected() {
   if (!catalog_ || !EnsureCatalogValid(*catalog_, L"удаление записи")) return;
+  if (tree_ && tree_view_.BranchData(TreeView_GetSelection(tree_)) ==
+      TreeViewController::kRecentRootItemData) {
+    RemoveRecentDatabase();
+    return;
+  }
   const auto entry = SelectedCatalogEntry();
   if (!entry) {
     static_cast<void>(ResetStaleSelectionIfNeeded());
@@ -1775,7 +1917,7 @@ void MainWindow::DeleteSelected() {
   const auto tagId = entry->IsDatabase() ? TagId(*entry) : std::wstring();
   const auto item = entry->IsDatabase() ? L"информационную базу" : L"группу";
   const auto message = L"Удалить " + std::wstring(item) + L" \"" + name + L"\" из списка.";
-  if (MessageBoxW(window_, message.c_str(), L"ИБ Старт", MB_YESNO) != IDYES) return;
+  if (settings_.confirm_destructive_actions && MessageBoxW(window_, message.c_str(), L"ИБ Старт", MB_YESNO) != IDYES) return;
   auto candidate = *catalog_;
   if (!SameCatalogEntry(candidate, *entry) || !candidate.Remove(name)) {
     ResetStaleSelectionIfNeeded();
@@ -1883,7 +2025,7 @@ bool MainWindow::IsClearingCache() const {
 void MainWindow::ClearRecentBases() {
   try {
     if (catalog_state_.Read().history.empty()) { SetStatus(L"Список недавних баз уже пуст."); return; }
-    if (MessageBoxW(window_, L"Очистить список недавних баз?\n\nСами базы и избранное не будут затронуты.", L"Очистить недавние базы", MB_YESNO | MB_ICONWARNING) != IDYES) return;
+    if (settings_.confirm_destructive_actions && MessageBoxW(window_, L"Очистить список недавних баз?\n\nСами базы и избранное не будут затронуты.", L"Очистить недавние базы", MB_YESNO | MB_ICONWARNING) != IDYES) return;
     catalog_state_.ClearHistory();
     logger_.Info(L"Очищен список недавних баз.");
     PopulateTree();
@@ -2023,6 +2165,39 @@ void MainWindow::OpenRecentList(size_t index) {
   }
   static_cast<void>(ActivateCatalog(path));
 }
+void MainWindow::RemoveRecentList(size_t index) {
+  if (index >= settings_.recent_ibases.size()) return;
+  auto updatedSettings = settings_;
+  const auto path = updatedSettings.recent_ibases[index];
+  updatedSettings.recent_ibases.erase(updatedSettings.recent_ibases.begin() + static_cast<std::ptrdiff_t>(index));
+  try {
+    PersistSettings(updatedSettings);
+    RefreshFileMenu();
+    DrawMenuBar(window_);
+    SetStatus(L"Удалено из списка последних: " + path.wstring());
+  } catch (const std::exception& error) {
+    logger_.Error(L"Не удалось удалить список из истории: " + ibstart::utf::FromUtf8(error.what()));
+    Message(window_, L"Не удалось удалить список из истории.", L"Список баз", MB_OK | MB_ICONERROR);
+  }
+}
+void MainWindow::RemoveRecentDatabase() {
+  if (!catalog_ || !tree_ || tree_view_.BranchData(TreeView_GetSelection(tree_)) !=
+      TreeViewController::kRecentRootItemData) return;
+  const auto entry = SelectedCatalogEntry();
+  if (!entry || !entry->IsDatabase()) return;
+  const std::wstring name = entry->name;
+  const std::wstring database_id = TagId(*entry);
+  if (database_id.empty()) return;
+  try {
+    catalog_state_.RemoveHistory(database_id);
+    RefreshRecentTreeBranch();
+    DisplaySelected();
+    SetStatus(L"База удалена из списка недавних: " + name);
+  } catch (const std::exception& error) {
+    logger_.Error(L"Ошибка удаления базы из недавних: " + ibstart::utf::FromUtf8(error.what()));
+    Message(window_, L"Не удалось удалить базу из списка недавних.", L"Недавние базы", MB_OK | MB_ICONERROR);
+  }
+}
 void MainWindow::ToggleTagDisplay() {
   if (settings_.simple_mode) return;
   const bool previous = settings_.show_tags_in_list;
@@ -2050,13 +2225,23 @@ void MainWindow::SetSimpleMode(bool enabled) {
   const std::wstring selected = SelectedCatalogName();
   settings_.simple_mode = enabled;
   const int visible = enabled ? SW_HIDE : SW_SHOW;
-  for (const HWND control : {tag_filter_label_, tag_filter_, details_title_, details_subtitle_, details_, status_,
+  const int details_visible = !enabled && settings_.show_details_panel ? SW_SHOW : SW_HIDE;
+  const int status_visible = !enabled && settings_.show_status_bar ? SW_SHOW : SW_HIDE;
+  for (const HWND control : {tag_filter_label_, tag_filter_,
                               edit_, cache_, shortcut_, remove_}) {
     if (control) ShowWindow(control, visible);
   }
+  for (const HWND control : {details_title_, details_subtitle_, details_}) {
+    if (control) ShowWindow(control, details_visible);
+  }
+  if (status_) ShowWindow(status_, status_visible);
   if (connection_) ShowWindow(connection_, SW_SHOW);
   if (enterprise_) ShowWindow(enterprise_, SW_SHOW);
   if (designer_) ShowWindow(designer_, SW_SHOW);
+  if (tree_) {
+    constexpr int itemHeights[] = {18, 22, 28};
+    TreeView_SetItemHeight(tree_, ScaleForDpi(itemHeights[std::clamp(settings_.tree_density, 0, 2)], GetDpiForWindow(window_)));
+  }
   if (!enabled && window_) {
     RECT bounds{};
     const int minimumWidth = ScaleForDpi(kMinimumWindowWidth, GetDpiForWindow(window_));
@@ -2227,7 +2412,7 @@ void MainWindow::CompleteCacheOperation() {
               L"поэтому очистка может быть неполной, а отдельные каталоги могут остаться.\n"
               L"IBStart не будет завершать процесс 1С автоматически. Можно продолжить очистку.\n";
     }
-    if (MessageBoxW(window_, list.c_str(), L"Очистка кэша", MB_YESNO | MB_ICONWARNING) != IDYES) {
+    if (settings_.confirm_destructive_actions && MessageBoxW(window_, list.c_str(), L"Очистка кэша", MB_YESNO | MB_ICONWARNING) != IDYES) {
       DisplaySelected();
       SetStatus(L"Очистка кэша отменена.");
       return;

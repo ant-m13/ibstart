@@ -27,7 +27,8 @@ class CatalogMetadataService {
   [[nodiscard]] bool AddTag(std::wstring database_id, std::wstring tag);
   [[nodiscard]] bool RemoveTags(std::wstring_view database_id);
   void ReplaceTagConfiguration(storage::DatabaseTags tags, storage::TagStyles styles);
-  void RecordLaunch(domain::HistoryItem item);
+  void RecordLaunch(domain::HistoryItem item, std::size_t max_history = storage::kMaxHistory);
+  void RemoveHistory(std::wstring_view database_id);
   void ClearHistory();
 
  private:

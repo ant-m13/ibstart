@@ -88,6 +88,7 @@ class MainWindow {
   void EditSelected();
   void EditSelectedTags();
   void ConfigureTagColors();
+  void ConfigureApplicationSettings();
   void ConfigureCredentials(HWND owner = nullptr);
   void AddTagToSelected(std::wstring tag);
   void AddNewTagToSelected();
@@ -98,11 +99,13 @@ class MainWindow {
   void ClearSelectedCache();
   [[nodiscard]] bool IsClearingCache() const;
   void ClearRecentBases();
+  void RemoveRecentDatabase();
   void CreateShortcut();
   void OpenSelectedFolder();
   void OpenList();
   void OpenStandardList();
   void OpenRecentList(size_t index);
+  void RemoveRecentList(size_t index);
   bool ActivateCatalog(const std::filesystem::path& path);
   static void RememberRecentList(storage::Settings& settings, const std::filesystem::path& path);
   void PersistSettings(const storage::Settings& settings);

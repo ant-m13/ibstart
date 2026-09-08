@@ -242,7 +242,7 @@ bool IsValidHistoryItem(const domain::HistoryItem& item) noexcept {
       mode <= static_cast<int>(domain::LaunchMode::web_client);
 }
 
-void AppendHistoryToState(CatalogState& state, domain::HistoryItem item) {
+void AppendHistoryToState(CatalogState& state, domain::HistoryItem item, std::size_t max_history) {
   if (!IsValidHistoryItem(item)) return;
   state.history.erase(std::remove_if(state.history.begin(), state.history.end(), [&](const auto& existing) {
     return domain::EqualIdentifier(existing.database_id, item.database_id);
@@ -250,7 +250,7 @@ void AppendHistoryToState(CatalogState& state, domain::HistoryItem item) {
   const auto id = item.database_id;
   const auto timestamp = item.timestamp;
   state.history.insert(state.history.begin(), std::move(item));
-  if (state.history.size() > kMaxHistory) state.history.resize(kMaxHistory);
+  if (state.history.size() > max_history) state.history.resize(max_history);
   if (!id.empty()) state.last_launches[id] = timestamp;
 }
 
@@ -359,6 +359,35 @@ void NormalizeCatalogState(CatalogState& state) {
 
 namespace {
 
+std::optional<domain::ClientType> ParseClientTypeSetting(std::int64_t value) {
+  switch (value) {
+    case 0: return domain::ClientType::automatic;
+    case 1: return domain::ClientType::thick;
+    case 2: return domain::ClientType::thin;
+    case 3: return domain::ClientType::web;
+    default: return std::nullopt;
+  }
+}
+
+std::optional<domain::ClientArchitecture> ParseClientArchitectureSetting(std::int64_t value) {
+  switch (value) {
+    case 0: return domain::ClientArchitecture::automatic;
+    case 1: return domain::ClientArchitecture::x86;
+    case 2: return domain::ClientArchitecture::x64;
+    case 3: return domain::ClientArchitecture::x86_priority;
+    case 4: return domain::ClientArchitecture::x64_priority;
+    default: return std::nullopt;
+  }
+}
+
+int ClientTypeSettingValue(domain::ClientType value) {
+  return static_cast<int>(value);
+}
+
+int ClientArchitectureSettingValue(domain::ClientArchitecture value) {
+  return static_cast<int>(value);
+}
+
 Settings ParseSettings(std::string_view contents) {
   Settings result;
   if (const auto root = json::RootObject(contents)) {
@@ -369,6 +398,25 @@ Settings ParseSettings(std::string_view contents) {
     if (const auto simple = json::ObjectInt(*root, "simple_mode")) result.simple_mode = *simple != 0;
     if (const auto show_tags = json::ObjectInt(*root, "show_tags_in_list")) result.show_tags_in_list = *show_tags != 0;
     if (const auto folders_first = json::ObjectInt(*root, "folders_first_when_sorting")) result.folders_first_when_sorting = *folders_first != 0;
+    if (const auto open_last = json::ObjectInt(*root, "open_last_list_on_startup")) result.open_last_list_on_startup = *open_last != 0;
+    if (const auto restore_selection = json::ObjectInt(*root, "restore_last_selection")) result.restore_last_selection = *restore_selection != 0;
+    if (const auto client = json::ObjectInt(*root, "default_client_type")) {
+      if (const auto parsed = ParseClientTypeSetting(*client)) result.default_client_type = *parsed;
+    }
+    if (const auto architecture = json::ObjectInt(*root, "default_architecture")) {
+      if (const auto parsed = ParseClientArchitectureSetting(*architecture)) result.default_architecture = *parsed;
+    }
+    if (const auto version = json::ObjectString(*root, "default_platform_version")) result.default_platform_version = *version;
+    if (const auto confirm = json::ObjectInt(*root, "confirm_destructive_actions")) result.confirm_destructive_actions = *confirm != 0;
+    if (const auto confirm = json::ObjectInt(*root, "confirm_secret_launch")) result.confirm_secret_launch = *confirm != 0;
+    if (const auto details = json::ObjectInt(*root, "show_details_panel")) result.show_details_panel = *details != 0;
+    if (const auto status = json::ObjectInt(*root, "show_status_bar")) result.show_status_bar = *status != 0;
+    if (const auto density = json::ObjectInt(*root, "tree_density")) result.tree_density = std::clamp(*density, 0, 2);
+    if (const auto history = json::ObjectInt(*root, "remember_launch_history")) result.remember_launch_history = *history != 0;
+    if (const auto history_limit = json::ObjectInt(*root, "launch_history_limit")) result.launch_history_limit = std::clamp(*history_limit, 1, static_cast<int>(kMaxHistory));
+    if (const auto recent_limit = json::ObjectInt(*root, "recent_lists_limit")) {
+      result.recent_lists_limit = std::clamp(*recent_limit, 1, 9);
+    }
     if (const auto x = json::ObjectInt(*root, "window_x")) result.window_x = *x;
     if (const auto y = json::ObjectInt(*root, "window_y")) result.window_y = *y;
     if (const auto width = json::ObjectInt(*root, "window_width")) result.window_width = std::clamp(*width, 480, 10000);
@@ -379,6 +427,7 @@ Settings ParseSettings(std::string_view contents) {
     json::ForEachArrayObject(*root, "recent_lists", [&](const json::Object& object) {
       if (const auto recent = json::ObjectString(object, "recent_list")) result.recent_ibases.emplace_back(*recent);
     });
+    if (result.recent_ibases.size() > 9) result.recent_ibases.resize(9);
     json::ForEachArrayObject(*root, "credentials", [&](const json::Object& object) {
       credentials::Credential c;
       const auto id = json::ObjectString(object, "id");
@@ -435,6 +484,19 @@ std::string SerializeSettings(const Settings& settings) {
   json += "  \"simple_mode\": " + std::string(settings.simple_mode ? "1" : "0") + ",\n";
   json += "  \"show_tags_in_list\": " + std::string(settings.show_tags_in_list ? "1" : "0") + ",\n";
   json += "  \"folders_first_when_sorting\": " + std::string(settings.folders_first_when_sorting ? "1" : "0") + ",\n";
+  json += "  \"open_last_list_on_startup\": " + std::string(settings.open_last_list_on_startup ? "1" : "0") + ",\n";
+  json += "  \"restore_last_selection\": " + std::string(settings.restore_last_selection ? "1" : "0") + ",\n";
+  json += "  \"default_client_type\": " + std::to_string(ClientTypeSettingValue(settings.default_client_type)) + ",\n";
+  json += "  \"default_architecture\": " + std::to_string(ClientArchitectureSettingValue(settings.default_architecture)) + ",\n";
+  json += "  \"default_platform_version\": \"" + json::Escape(settings.default_platform_version) + "\",\n";
+  json += "  \"confirm_destructive_actions\": " + std::string(settings.confirm_destructive_actions ? "1" : "0") + ",\n";
+  json += "  \"confirm_secret_launch\": " + std::string(settings.confirm_secret_launch ? "1" : "0") + ",\n";
+  json += "  \"show_details_panel\": " + std::string(settings.show_details_panel ? "1" : "0") + ",\n";
+  json += "  \"show_status_bar\": " + std::string(settings.show_status_bar ? "1" : "0") + ",\n";
+  json += "  \"tree_density\": " + std::to_string(std::clamp(settings.tree_density, 0, 2)) + ",\n";
+  json += "  \"remember_launch_history\": " + std::string(settings.remember_launch_history ? "1" : "0") + ",\n";
+  json += "  \"launch_history_limit\": " + std::to_string(std::clamp(settings.launch_history_limit, 1, static_cast<int>(kMaxHistory))) + ",\n";
+  json += "  \"recent_lists_limit\": " + std::to_string(std::clamp(settings.recent_lists_limit, 1, 9)) + ",\n";
   json += "  \"window_x\": " + std::to_string(settings.window_x) + ",\n  \"window_y\": " + std::to_string(settings.window_y);
   json += ",\n  \"window_width\": " + std::to_string(settings.window_width) + ",\n  \"window_height\": " + std::to_string(settings.window_height) + ",\n  \"recent_lists\": [";
   for (std::size_t index = 0; index < settings.recent_ibases.size(); ++index) {
@@ -585,6 +647,21 @@ void MergeChangedSettings(Settings& target, const Settings& baseline, const Sett
   if (requested.folders_first_when_sorting != baseline.folders_first_when_sorting) {
     target.folders_first_when_sorting = requested.folders_first_when_sorting;
   }
+  if (requested.open_last_list_on_startup != baseline.open_last_list_on_startup) target.open_last_list_on_startup = requested.open_last_list_on_startup;
+  if (requested.restore_last_selection != baseline.restore_last_selection) target.restore_last_selection = requested.restore_last_selection;
+  if (requested.default_client_type != baseline.default_client_type) target.default_client_type = requested.default_client_type;
+  if (requested.default_architecture != baseline.default_architecture) target.default_architecture = requested.default_architecture;
+  if (requested.default_platform_version != baseline.default_platform_version) target.default_platform_version = requested.default_platform_version;
+  if (requested.confirm_destructive_actions != baseline.confirm_destructive_actions) target.confirm_destructive_actions = requested.confirm_destructive_actions;
+  if (requested.confirm_secret_launch != baseline.confirm_secret_launch) target.confirm_secret_launch = requested.confirm_secret_launch;
+  if (requested.show_details_panel != baseline.show_details_panel) target.show_details_panel = requested.show_details_panel;
+  if (requested.show_status_bar != baseline.show_status_bar) target.show_status_bar = requested.show_status_bar;
+  if (requested.tree_density != baseline.tree_density) target.tree_density = std::clamp(requested.tree_density, 0, 2);
+  if (requested.remember_launch_history != baseline.remember_launch_history) target.remember_launch_history = requested.remember_launch_history;
+  if (requested.launch_history_limit != baseline.launch_history_limit) target.launch_history_limit = std::clamp(requested.launch_history_limit, 1, static_cast<int>(kMaxHistory));
+  if (requested.recent_lists_limit != baseline.recent_lists_limit) {
+    target.recent_lists_limit = std::clamp(requested.recent_lists_limit, 1, 9);
+  }
   if (requested.recent_ibases != baseline.recent_ibases) target.recent_ibases = requested.recent_ibases;
   if (requested.platform_search_paths != baseline.platform_search_paths) {
     target.platform_search_paths = requested.platform_search_paths;
@@ -639,6 +716,45 @@ Settings LoadSettings(const StorageLayout& layout) {
 
 void SaveSettings(const StorageLayout& layout, const Settings& settings) {
   SaveFile(layout, PathFor(layout, L"settings.json"), SerializeSettings(settings));
+}
+
+void EnsureProfileDirectory(const std::filesystem::path& path) {
+  if (!windows_path::IsWithinLimit(path)) {
+    throw std::runtime_error("Profile path is too long: " + utf::ToUtf8(windows_path::LengthError(path)));
+  }
+  std::error_code error;
+  std::filesystem::create_directories(path, error);
+  if (error) throw std::runtime_error("Cannot create profile directory: " + utf::ToUtf8(path.wstring()) + ": " + error.message());
+  if (!std::filesystem::is_directory(path, error) || error) {
+    throw std::runtime_error("Profile path is not a directory: " + utf::ToUtf8(path.wstring()));
+  }
+}
+
+bool ProfileFileExists(const std::filesystem::path& root, std::wstring_view name) {
+  std::error_code error;
+  return std::filesystem::is_regular_file(root / std::wstring(name), error) && !error;
+}
+
+void ExportProfile(const StorageLayout& source, const std::filesystem::path& target, bool include_credentials) {
+  EnsureProfileDirectory(target);
+  const auto settings = [&] {
+    auto value = LoadSettings(source);
+    if (!include_credentials) value.credentials.clear();
+    return value;
+  }();
+  SaveSettings({target, false}, settings);
+  SaveCatalogState({target, false}, LoadCatalogState(source));
+}
+
+void ImportProfile(const std::filesystem::path& source, const StorageLayout& target, bool include_credentials) {
+  if (!ProfileFileExists(source, L"settings.json") && !ProfileFileExists(source, L"catalog-state.json")) {
+    throw std::runtime_error("Selected directory does not contain an IBStart profile.");
+  }
+  EnsureProfileDirectory(target.root);
+  auto imported = LoadSettings({source, false});
+  if (!include_credentials) imported.credentials = LoadSettings(target).credentials;
+  SaveSettings(target, imported);
+  SaveCatalogState(target, LoadCatalogState({source, false}));
 }
 
 CatalogState LoadCatalogState(const StorageLayout& layout) {
@@ -727,8 +843,16 @@ void CatalogStateRepository::Update(const std::function<void(CatalogState&)>& mu
   state_ = std::move(updated);
 }
 
-void CatalogStateRepository::AppendHistory(domain::HistoryItem item) {
-  Update([&](CatalogState& state) { AppendHistoryToState(state, std::move(item)); });
+void CatalogStateRepository::AppendHistory(domain::HistoryItem item, std::size_t max_history) {
+  Update([&](CatalogState& state) { AppendHistoryToState(state, std::move(item), std::clamp(max_history, std::size_t{1}, kMaxHistory)); });
+}
+
+void CatalogStateRepository::RemoveHistory(std::wstring_view database_id) {
+  Update([&](CatalogState& state) {
+    state.history.erase(std::remove_if(state.history.begin(), state.history.end(), [&](const auto& item) {
+      return domain::EqualIdentifier(item.database_id, database_id);
+    }), state.history.end());
+  });
 }
 
 void CatalogStateRepository::ClearHistory() {
