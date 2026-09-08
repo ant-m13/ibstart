@@ -15,6 +15,7 @@ OwnerDrawMenuIcon MenuIconForCommand(UINT command) {
     case kMoveUp: return OwnerDrawMenuIcon::move_up;
     case kMoveDown: return OwnerDrawMenuIcon::move_down;
     case kSimpleMode: return OwnerDrawMenuIcon::compact_mode;
+    case kConfigureApplicationSettings: return OwnerDrawMenuIcon::settings;
     case kTagsContextMenu:
     case kEditTags:
     case kConfigureTagColors:
@@ -140,7 +141,7 @@ void MenuController::RefreshMain(const storage::Settings& settings) {
   } else {
     append(settings_menu_, kConfigureApplicationSettings, 0, L"Параметры приложения…");
     AppendMenuW(settings_menu_, MF_SEPARATOR, 0, nullptr);
-    append(settings_menu_, kConfigureCredentials, 0, L"Учётные записи…");
+    append(settings_menu_, kConfigureCredentials, IDI_ACTION_EDIT, L"Учётные записи…");
     append(view_menu_, kToggleFavorite, IDI_ACTION_FAVORITE,
         L"Добавить/убрать из избранного", L"Ctrl+Alt+I");
     append(view_menu_, kToggleFoldersFirstWhenSorting, IDI_TREE_FOLDER,

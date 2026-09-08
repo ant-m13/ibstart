@@ -47,10 +47,44 @@ void DrawCompactModeIcon(HDC context, int icon_x, int icon_y, bool disabled, boo
   DeleteObject(pen);
 }
 
-void DrawTagIcon(HDC context, int icon_x, int icon_y, bool disabled, bool selected) {
+void DrawSettingsIcon(HDC context, int icon_x, int icon_y, bool disabled, bool selected) {
   const COLORREF color = disabled ? GetSysColor(COLOR_GRAYTEXT) : selected ? RGB(218, 242, 255) : RGB(0, 144, 162);
+  const COLORREF background = selected ? GetSysColor(COLOR_HIGHLIGHT) : GetSysColor(COLOR_MENU);
   const HBRUSH brush = CreateSolidBrush(color);
   const HPEN pen = CreatePen(PS_SOLID, 1, color);
+  const auto previous_brush = SelectObject(context, brush);
+  const auto previous_pen = SelectObject(context, pen);
+  POINT gear[] = {
+      {icon_x + 8, icon_y + 3}, {icon_x + 12, icon_y + 3}, {icon_x + 13, icon_y + 6},
+      {icon_x + 16, icon_y + 5}, {icon_x + 17, icon_y + 8}, {icon_x + 15, icon_y + 10},
+      {icon_x + 17, icon_y + 12}, {icon_x + 15, icon_y + 15}, {icon_x + 12, icon_y + 14},
+      {icon_x + 11, icon_y + 17}, {icon_x + 8, icon_y + 17}, {icon_x + 7, icon_y + 14},
+      {icon_x + 4, icon_y + 15}, {icon_x + 3, icon_y + 12}, {icon_x + 5, icon_y + 10},
+      {icon_x + 3, icon_y + 8}, {icon_x + 4, icon_y + 5}, {icon_x + 7, icon_y + 6},
+  };
+  Polygon(context, gear, static_cast<int>(std::size(gear)));
+  SelectObject(context, previous_brush);
+  SelectObject(context, previous_pen);
+  DeleteObject(brush);
+  DeleteObject(pen);
+  const HBRUSH hole_brush = CreateSolidBrush(background);
+  const HPEN hole_pen = CreatePen(PS_SOLID, 1, background);
+  const auto previous_hole_brush = SelectObject(context, hole_brush);
+  const auto previous_hole_pen = SelectObject(context, hole_pen);
+  Ellipse(context, icon_x + 8, icon_y + 8, icon_x + 13, icon_y + 13);
+  SelectObject(context, previous_hole_brush);
+  SelectObject(context, previous_hole_pen);
+  DeleteObject(hole_brush);
+  DeleteObject(hole_pen);
+}
+
+void DrawTagIcon(HDC context, int icon_x, int icon_y, bool disabled, bool selected) {
+  const COLORREF outline = disabled ? GetSysColor(COLOR_GRAYTEXT) :
+      selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : RGB(0, 103, 117);
+  const COLORREF fill = disabled ? GetSysColor(COLOR_MENU) :
+      selected ? RGB(218, 242, 255) : RGB(197, 235, 239);
+  const HBRUSH brush = CreateSolidBrush(fill);
+  const HPEN pen = CreatePen(PS_SOLID, 1, outline);
   const auto previous_brush = SelectObject(context, brush);
   const auto previous_pen = SelectObject(context, pen);
   POINT tag[] = {{icon_x + 2, icon_y + 3}, {icon_x + 11, icon_y + 3}, {icon_x + 18, icon_y + 10}, {icon_x + 11, icon_y + 17}, {icon_x + 2, icon_y + 17}};
@@ -58,7 +92,7 @@ void DrawTagIcon(HDC context, int icon_x, int icon_y, bool disabled, bool select
   SelectObject(context, previous_brush);
   SelectObject(context, previous_pen);
   const HBRUSH hole_brush = GetSysColorBrush(selected ? COLOR_HIGHLIGHT : COLOR_MENU);
-  const HPEN hole_pen = CreatePen(PS_SOLID, 1, selected ? GetSysColor(COLOR_HIGHLIGHT) : GetSysColor(COLOR_MENU));
+  const HPEN hole_pen = CreatePen(PS_SOLID, 1, outline);
   const auto previous_hole_brush = SelectObject(context, hole_brush);
   const auto previous_hole_pen = SelectObject(context, hole_pen);
   Ellipse(context, icon_x + 5, icon_y + 6, icon_x + 9, icon_y + 10);
@@ -208,6 +242,7 @@ bool OwnerDrawMenu::Draw(HFONT font, const OwnerDrawMenuItem& item, const DRAWIT
     case OwnerDrawMenuIcon::move_up:
     case OwnerDrawMenuIcon::move_down: DrawMoveArrow(draw->hDC, item, icon_x, icon_y, disabled); break;
     case OwnerDrawMenuIcon::compact_mode: DrawCompactModeIcon(draw->hDC, icon_x, icon_y, disabled, selected); break;
+    case OwnerDrawMenuIcon::settings: DrawSettingsIcon(draw->hDC, icon_x, icon_y, disabled, selected); break;
     case OwnerDrawMenuIcon::tag: DrawTagIcon(draw->hDC, icon_x, icon_y, disabled, selected); break;
     case OwnerDrawMenuIcon::launch_parameters: DrawLaunchParametersIcon(draw->hDC, icon_x, icon_y, disabled, selected); break;
     case OwnerDrawMenuIcon::sort_ascending:
