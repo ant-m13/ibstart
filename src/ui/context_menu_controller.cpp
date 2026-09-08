@@ -71,15 +71,27 @@ UINT ContextMenuController::ShowTree(HWND owner, POINT screen, const TreeContext
         icon_resource == 0 ? nullptr : LoadResourceIcon(instance_, icon_resource, 20),
         std::move(text), std::move(shortcut), MenuIconForCommand(command), enabled, checked);
   };
+  bool has_content = false;
+  bool separator_pending = false;
   const auto append = [&](bool enabled, bool checked, UINT command, int icon_resource,
                           std::wstring text, std::wstring shortcut = {}) {
+    if (!enabled) return;
     append_to(menu, enabled, checked, command, icon_resource, std::move(text), std::move(shortcut));
+    separator_pending = false;
+    has_content = true;
   };
   const auto append_popup = [&](HMENU submenu, UINT identity, std::wstring text) {
+    if (!submenu) return;
     items_.Append(menu, identity, nullptr, std::move(text), {}, MenuIconForCommand(identity),
         true, false, submenu);
+    separator_pending = false;
+    has_content = true;
   };
-  const auto separator = [&] { AppendMenuW(menu, MF_SEPARATOR, 0, nullptr); };
+  const auto separator = [&] {
+    if (!has_content || separator_pending) return;
+    AppendMenuW(menu, MF_SEPARATOR, 0, nullptr);
+    separator_pending = true;
+  };
 
   if (state.simple_mode) {
     if (state.sort_target) {
@@ -155,9 +167,11 @@ UINT ContextMenuController::ShowTree(HWND owner, POINT screen, const TreeContext
     append(true, false, kSortDescending, 0, L"Сортировать по убыванию");
   }
   separator();
-  append(!state.simple_mode, false, kAddDatabase, IDI_ACTION_ADD,
+  const bool can_add = !state.simple_mode && !state.recent_root &&
+      (state.catalog_root || state.group || state.database);
+  append(can_add, false, kAddDatabase, IDI_ACTION_ADD,
       state.group ? L"Добавить базу в группу…" : L"Добавить базу…", L"Ctrl+Alt+F");
-  append(!state.simple_mode, false, kAddGroup, IDI_TREE_FOLDER,
+  append(can_add, false, kAddGroup, IDI_TREE_FOLDER,
       state.group ? L"Добавить вложенную группу…" : L"Добавить группу…", L"Ctrl+Alt+G");
   separator();
   append(true, false, kRefresh, IDI_ACTION_REFRESH, L"Обновить список", L"F5");
