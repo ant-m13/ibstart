@@ -275,17 +275,6 @@ bool OwnerDrawMenu::Draw(HFONT font, const OwnerDrawMenuItem& item, const DRAWIT
   }
   SetTextColor(draw->hDC, GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : (disabled ? COLOR_GRAYTEXT : COLOR_MENUTEXT)));
   DrawTextW(draw->hDC, item.text.c_str(), static_cast<int>(item.text.size()), &text_rect, DT_SINGLELINE | DT_VCENTER | DT_END_ELLIPSIS | DT_NOPREFIX);
-  if (item.has_submenu) {
-    const COLORREF arrow_color = disabled ? GetSysColor(COLOR_GRAYTEXT) : GetSysColor(selected ? COLOR_HIGHLIGHTTEXT : COLOR_MENUTEXT);
-    const HPEN pen = CreatePen(PS_SOLID, 1, arrow_color);
-    const auto previous_pen = SelectObject(draw->hDC, pen);
-    const int center_y = (static_cast<int>(draw->rcItem.top) + static_cast<int>(draw->rcItem.bottom)) / 2;
-    MoveToEx(draw->hDC, draw->rcItem.right - 15, center_y - 4, nullptr);
-    LineTo(draw->hDC, draw->rcItem.right - 10, center_y);
-    LineTo(draw->hDC, draw->rcItem.right - 15, center_y + 4);
-    SelectObject(draw->hDC, previous_pen);
-    DeleteObject(pen);
-  }
   if (draw->itemState & ODS_FOCUS) DrawFocusRect(draw->hDC, &draw->rcItem);
   RestoreDC(draw->hDC, saved);
   return true;

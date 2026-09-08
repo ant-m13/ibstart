@@ -15,7 +15,6 @@ namespace ibstart::ui::dialog {
 namespace {
 
 constexpr wchar_t kClassName[] = L"IBStart.ApplicationSettings";
-constexpr wchar_t kPageClassName[] = L"IBStart.ApplicationSettings.Page";
 constexpr wchar_t kGroupClassName[] = L"IBStart.ApplicationSettings.Group";
 constexpr int kSimpleMode = 1800;
 constexpr int kShowTags = 1801;
@@ -59,7 +58,7 @@ enum class SettingsPage : int {
 
 struct State {
   HWND tabs{};
-  std::array<HWND, 4> pages{};
+  std::array<std::vector<HWND>, 4> page_controls{};
   HWND simple_mode{};
   HWND show_tags{};
   HWND folders_first{};
@@ -92,17 +91,12 @@ struct State {
   std::optional<ApplicationSettingsResult> result;
 };
 
-LRESULT CALLBACK SettingsPageProc(HWND page, UINT message, WPARAM wparam, LPARAM lparam) {
-  if (message == WM_COMMAND || message == WM_NOTIFY ||
-      message == WM_CTLCOLORSTATIC || message == WM_CTLCOLORBTN) {
-    const HWND tabs = GetParent(page);
-    const HWND window = tabs ? GetParent(tabs) : nullptr;
-    if (window) return SendMessageW(window, message, wparam, lparam);
-  }
-  return DefWindowProcW(page, message, wparam, lparam);
-}
-
 LRESULT CALLBACK SettingsGroupProc(HWND group, UINT message, WPARAM wparam, LPARAM lparam) {
+  if (message == WM_NCHITTEST) {
+    // Group frames are decorative sibling windows. Let mouse input pass through
+    // to the check boxes, fields and buttons drawn inside their bounds.
+    return HTTRANSPARENT;
+  }
   if (message == WM_SETFONT) {
     SetWindowLongPtrW(group, GWLP_USERDATA, static_cast<LONG_PTR>(wparam));
     if (lparam) InvalidateRect(group, nullptr, TRUE);
@@ -153,9 +147,10 @@ LRESULT CALLBACK SettingsGroupProc(HWND group, UINT message, WPARAM wparam, LPAR
 }
 
 void ShowPage(State& state, int selected) {
-  for (int index = 0; index < static_cast<int>(state.pages.size()); ++index) {
-    if (state.pages[static_cast<size_t>(index)]) {
-      ShowWindow(state.pages[static_cast<size_t>(index)], index == selected ? SW_SHOW : SW_HIDE);
+  const int safe_selected = std::clamp(selected, 0, 3);
+  for (int index = 0; index < static_cast<int>(state.page_controls.size()); ++index) {
+    for (const HWND control : state.page_controls[static_cast<size_t>(index)]) {
+      if (control) ShowWindow(control, index == safe_selected ? SW_SHOW : SW_HIDE);
     }
   }
 }
@@ -387,16 +382,6 @@ void CreateControls(HWND window, State& state) {
   const UINT dpi = GetDpiForWindow(window);
   const HFONT text_font = state.font;
   const HFONT button_font = state.button_font ? state.button_font : text_font;
-  static ATOM page_atom = [] {
-    WNDCLASSW klass{};
-    klass.hInstance = GetModuleHandleW(nullptr);
-    klass.lpszClassName = kPageClassName;
-    klass.lpfnWndProc = SettingsPageProc;
-    klass.hCursor = LoadCursor(nullptr, IDC_ARROW);
-    klass.hbrBackground = reinterpret_cast<HBRUSH>(COLOR_WINDOW + 1);
-    return RegisterClassW(&klass);
-  }();
-  (void)page_atom;
   static ATOM group_atom = [] {
     WNDCLASSW klass{};
     klass.hInstance = GetModuleHandleW(nullptr);
@@ -407,7 +392,7 @@ void CreateControls(HWND window, State& state) {
     return RegisterClassW(&klass);
   }();
   (void)group_atom;
-  state.tabs = CreateControl(window, WC_TABCONTROLW, L"", WS_TABSTOP,
+  state.tabs = CreateControl(window, WC_TABCONTROLW, L"", WS_TABSTOP | WS_CLIPSIBLINGS,
       10, 10, 700, 540, kSettingsTabs, text_font, dpi);
   const std::array<std::wstring_view, 4> tab_labels = {
       L"Интерфейс", L"Запуск", L"Данные", L"Профиль"};
@@ -420,146 +405,167 @@ void CreateControls(HWND window, State& state) {
   RECT page_rect{};
   GetClientRect(state.tabs, &page_rect);
   TabCtrl_AdjustRect(state.tabs, FALSE, &page_rect);
-  for (size_t index = 0; index < state.pages.size(); ++index) {
-    state.pages[index] = CreateWindowExW(0, kPageClassName, L"",
-        WS_CHILD | WS_CLIPCHILDREN | (index == 0 ? WS_VISIBLE : 0),
-        page_rect.left, page_rect.top, page_rect.right - page_rect.left,
-        page_rect.bottom - page_rect.top, state.tabs, nullptr,
-        GetModuleHandleW(nullptr), nullptr);
-    SetControlFont(state.pages[index], text_font);
-  }
-  const HWND interface_page = state.pages[static_cast<size_t>(SettingsPage::interface_page)];
-  const HWND launch_page = state.pages[static_cast<size_t>(SettingsPage::launch)];
-  const HWND data_page = state.pages[static_cast<size_t>(SettingsPage::data)];
-  const HWND profile_page = state.pages[static_cast<size_t>(SettingsPage::profile)];
-  const auto checkbox = [&](HWND parent, std::wstring_view text, int x, int y, int width,
+  POINT page_origin{page_rect.left, page_rect.top};
+  MapWindowPoints(state.tabs, window, &page_origin, 1);
+  const auto to_logical = [dpi](int value) {
+    return MulDiv(value, 96, static_cast<int>(dpi == 0 ? 96 : dpi));
+  };
+  const int page_x = to_logical(page_origin.x);
+  const int page_y = to_logical(page_origin.y);
+  const auto page_control = [&](SettingsPage page, HWND control) {
+    state.page_controls[static_cast<size_t>(page)].push_back(control);
+    return control;
+  };
+  const auto create_page_control = [&](SettingsPage page, const wchar_t* class_name,
+      std::wstring_view text, DWORD style, int x, int y, int width, int height, int id,
+      HFONT font, DWORD extended_style = 0) {
+    // Keep page controls as direct dialog children so IsDialogMessage can reach
+    // them. The tab control is moved behind these siblings after creation.
+    return page_control(page, CreateControl(window, class_name, text, style,
+        page_x + x, page_y + y, width, height, id, font, dpi, extended_style));
+  };
+  const auto checkbox = [&](SettingsPage page, std::wstring_view text, int x, int y, int width,
                             int id, bool checked) {
-    const HWND control = CreateControl(parent, L"BUTTON", text,
-        WS_TABSTOP | BS_AUTOCHECKBOX, x, y, width, 22, id, text_font, dpi);
+    const HWND control = create_page_control(page, L"BUTTON", text,
+        WS_TABSTOP | BS_AUTOCHECKBOX, x, y, width, 22, id, text_font);
     SendMessageW(control, BM_SETCHECK, checked ? BST_CHECKED : BST_UNCHECKED, 0);
     return control;
   };
-  const auto button = [&](HWND parent, std::wstring_view text, int x, int y, int width, int id) {
-    return CreateControl(parent, L"BUTTON", text, WS_TABSTOP, x, y, width, 27, id,
-        button_font, dpi);
+  const auto button = [&](SettingsPage page, std::wstring_view text, int x, int y, int width, int id) {
+    return create_page_control(page, L"BUTTON", text, WS_TABSTOP, x, y, width, 27, id,
+        button_font);
   };
-  const auto group = [&](HWND parent, std::wstring_view text, int x, int y, int width, int height) {
-    return CreateControl(parent, kGroupClassName, text, 0, x, y, width, height, 0,
-        text_font, dpi);
+  const auto group = [&](SettingsPage page, std::wstring_view text, int x, int y, int width, int height) {
+    return create_page_control(page, kGroupClassName, text, 0, x, y, width, height, 0,
+        text_font);
   };
 
-  group(interface_page, L"Основные", 12, 12, 670, 104);
-  state.simple_mode = checkbox(interface_page, L"Использовать простой режим", 24, 36, 620,
+  group(SettingsPage::interface_page, L"Основные", 12, 12, 670, 104);
+  state.simple_mode = checkbox(SettingsPage::interface_page, L"Использовать простой режим", 24, 36, 620,
       kSimpleMode, state.settings.simple_mode);
-  state.show_tags = checkbox(interface_page, L"Показывать теги в списке баз", 24, 62, 620,
+  state.show_tags = checkbox(SettingsPage::interface_page, L"Показывать теги в списке баз", 24, 62, 620,
       kShowTags, state.settings.show_tags_in_list);
-  state.folders_first = checkbox(interface_page, L"Показывать группы сверху при сортировке", 24, 88, 620,
+  state.folders_first = checkbox(SettingsPage::interface_page, L"Показывать группы сверху при сортировке", 24, 88, 620,
       kFoldersFirst,
       state.settings.folders_first_when_sorting);
 
-  group(interface_page, L"Отображение", 12, 126, 670, 170);
-  state.show_details = checkbox(interface_page, L"Показывать карточку выбранной базы", 24, 150, 620,
+  group(SettingsPage::interface_page, L"Отображение", 12, 126, 670, 170);
+  state.show_details = checkbox(SettingsPage::interface_page, L"Показывать карточку выбранной базы", 24, 150, 620,
       kShowDetails, state.settings.show_details_panel);
-  state.show_status = checkbox(interface_page, L"Показывать строку состояния", 24, 176, 620,
+  state.show_status = checkbox(SettingsPage::interface_page, L"Показывать строку состояния", 24, 176, 620,
       kShowStatus, state.settings.show_status_bar);
-  CreateControl(interface_page, L"STATIC", L"Плотность дерева:", 0, 24, 214, 220, 20, 0, text_font, dpi);
-  state.tree_density = CreateControl(interface_page, WC_COMBOBOXW, L"", WS_TABSTOP | CBS_DROPDOWNLIST,
-      260, 210, 250, 140, kTreeDensity, text_font, dpi);
+  create_page_control(SettingsPage::interface_page, L"STATIC", L"Плотность дерева:", 0,
+      24, 214, 220, 20, 0, text_font);
+  state.tree_density = create_page_control(SettingsPage::interface_page, WC_COMBOBOXW, L"",
+      WS_TABSTOP | CBS_DROPDOWNLIST, 260, 210, 250, 140, kTreeDensity, text_font);
   for (const auto label : {L"Компактная", L"Обычная", L"Увеличенная"})
     SendMessageW(state.tree_density, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label));
   SendMessageW(state.tree_density, CB_SETCURSEL, std::clamp(state.settings.tree_density, 0, 2), 0);
 
-  group(launch_page, L"Запуск при старте", 12, 12, 670, 96);
-  state.open_last_list = checkbox(launch_page, L"Открывать последний список баз при запуске", 24, 36, 620,
+  group(SettingsPage::launch, L"Запуск при старте", 12, 12, 670, 96);
+  state.open_last_list = checkbox(SettingsPage::launch, L"Открывать последний список баз при запуске", 24, 36, 620,
       kOpenLastList, state.settings.open_last_list_on_startup);
-  state.restore_selection = checkbox(launch_page, L"Восстанавливать последнюю выбранную базу", 24, 62, 620,
+  state.restore_selection = checkbox(SettingsPage::launch, L"Восстанавливать последнюю выбранную базу", 24, 62, 620,
       kRestoreSelection, state.settings.restore_last_selection);
 
-  group(launch_page, L"Параметры по умолчанию", 12, 120, 670, 164);
-  CreateControl(launch_page, L"STATIC", L"Клиент по умолчанию:", 0, 24, 146, 220, 20, 0, text_font, dpi);
-  state.default_client = CreateControl(launch_page, WC_COMBOBOXW, L"", WS_TABSTOP | CBS_DROPDOWNLIST,
-      260, 140, 380, 140, kDefaultClient, text_font, dpi);
+  group(SettingsPage::launch, L"Параметры по умолчанию", 12, 120, 670, 164);
+  create_page_control(SettingsPage::launch, L"STATIC", L"Клиент по умолчанию:", 0,
+      24, 146, 220, 20, 0, text_font);
+  state.default_client = create_page_control(SettingsPage::launch, WC_COMBOBOXW, L"",
+      WS_TABSTOP | CBS_DROPDOWNLIST, 260, 140, 380, 140, kDefaultClient, text_font);
   for (const auto label : {L"Авто", L"Тонкий клиент", L"Толстый клиент", L"Веб-клиент"})
     SendMessageW(state.default_client, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label));
   SendMessageW(state.default_client, CB_SETCURSEL, ClientTypeIndex(state.settings.default_client_type), 0);
-  CreateControl(launch_page, L"STATIC", L"Разрядность по умолчанию:", 0, 24, 178, 220, 20, 0, text_font, dpi);
-  state.default_architecture = CreateControl(launch_page, WC_COMBOBOXW, L"", WS_TABSTOP | CBS_DROPDOWNLIST,
-      260, 172, 380, 140, kDefaultArchitecture, text_font, dpi);
+  create_page_control(SettingsPage::launch, L"STATIC", L"Разрядность по умолчанию:", 0,
+      24, 178, 220, 20, 0, text_font);
+  state.default_architecture = create_page_control(SettingsPage::launch, WC_COMBOBOXW, L"",
+      WS_TABSTOP | CBS_DROPDOWNLIST, 260, 172, 380, 140, kDefaultArchitecture, text_font);
   for (const auto label : {L"Авто", L"Только x86", L"Только x64", L"Приоритет x86", L"Приоритет x64"})
     SendMessageW(state.default_architecture, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label));
   SendMessageW(state.default_architecture, CB_SETCURSEL, static_cast<int>(state.settings.default_architecture), 0);
-  CreateControl(launch_page, L"STATIC", L"Версия платформы:", 0, 24, 210, 220, 20, 0, text_font, dpi);
-  state.default_version = CreateControl(launch_page, L"EDIT", state.settings.default_platform_version,
-      WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL, 260, 204, 380, 22, kDefaultVersion, text_font, dpi, WS_EX_CLIENTEDGE);
-  CreateControl(launch_page, L"STATIC", L"Пустое значение — настройки базы или автоопределение.", 0,
-      260, 232, 380, 20, 0, text_font, dpi);
+  create_page_control(SettingsPage::launch, L"STATIC", L"Версия платформы:", 0,
+      24, 210, 220, 20, 0, text_font);
+  state.default_version = create_page_control(SettingsPage::launch, L"EDIT",
+      state.settings.default_platform_version, WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL,
+      260, 204, 380, 22, kDefaultVersion, text_font, WS_EX_CLIENTEDGE);
+  create_page_control(SettingsPage::launch, L"STATIC",
+      L"Пустое значение — настройки базы или автоопределение.", 0,
+      260, 232, 380, 20, 0, text_font);
 
-  group(launch_page, L"Подтверждения и история", 12, 300, 670, 184);
-  state.confirm_destructive = checkbox(launch_page, L"Подтверждать удаление и очистку данных", 24, 324, 620,
+  group(SettingsPage::launch, L"Подтверждения и история", 12, 300, 670, 184);
+  state.confirm_destructive = checkbox(SettingsPage::launch, L"Подтверждать удаление и очистку данных", 24, 324, 620,
       kConfirmDestructive, state.settings.confirm_destructive_actions);
-  state.confirm_secret = checkbox(launch_page, L"Предупреждать перед запуском с секретами", 24, 350, 620,
+  state.confirm_secret = checkbox(SettingsPage::launch, L"Предупреждать перед запуском с секретами", 24, 350, 620,
       kConfirmSecret, state.settings.confirm_secret_launch);
-  state.remember_history = checkbox(launch_page, L"Сохранять историю запусков", 24, 376, 620,
+  state.remember_history = checkbox(SettingsPage::launch, L"Сохранять историю запусков", 24, 376, 620,
       kRememberHistory, state.settings.remember_launch_history);
-  CreateControl(launch_page, L"STATIC", L"Показывать списков в меню:", 0, 24, 416, 220, 20, 0, text_font, dpi);
-  state.recent_limit = CreateControl(launch_page, WC_COMBOBOXW, L"", WS_TABSTOP | CBS_DROPDOWNLIST,
-      260, 410, 120, 140, kRecentLimit, text_font, dpi);
+  create_page_control(SettingsPage::launch, L"STATIC", L"Показывать списков в меню:", 0,
+      24, 416, 220, 20, 0, text_font);
+  state.recent_limit = create_page_control(SettingsPage::launch, WC_COMBOBOXW, L"",
+      WS_TABSTOP | CBS_DROPDOWNLIST, 260, 410, 120, 140, kRecentLimit, text_font);
   for (int count = 1; count <= 9; ++count) {
     const auto label = std::to_wstring(count);
     SendMessageW(state.recent_limit, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
   }
   SendMessageW(state.recent_limit, CB_SETCURSEL,
       std::clamp(state.settings.recent_lists_limit, 1, 9) - 1, 0);
-  CreateControl(launch_page, L"STATIC", L"Хранить запусков:", 0, 410, 416, 140, 20, 0, text_font, dpi);
-  state.history_limit = CreateControl(launch_page, WC_COMBOBOXW, L"", WS_TABSTOP | CBS_DROPDOWNLIST,
-      550, 410, 120, 140, kHistoryLimit, text_font, dpi);
+  create_page_control(SettingsPage::launch, L"STATIC", L"Хранить запусков:", 0,
+      410, 416, 140, 20, 0, text_font);
+  state.history_limit = create_page_control(SettingsPage::launch, WC_COMBOBOXW, L"",
+      WS_TABSTOP | CBS_DROPDOWNLIST, 550, 410, 120, 140, kHistoryLimit, text_font);
   for (const auto label : {L"5", L"10", L"20"})
     SendMessageW(state.history_limit, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label));
   const int history_index = state.settings.launch_history_limit <= 5 ? 0 : state.settings.launch_history_limit <= 10 ? 1 : 2;
   SendMessageW(state.history_limit, CB_SETCURSEL, history_index, 0);
 
-  group(data_page, L"Учётные записи и теги", 12, 12, 670, 96);
-  button(data_page, L"Настроить учётные записи…", 24, 38, 240, kEditCredentials);
-  CreateControl(data_page, L"STATIC", L"Данные для подключения к информационным базам.",
-      0, 278, 43, 370, 18, 0, text_font, dpi);
-  button(data_page, L"Настроить теги…", 24, 70, 240, kEditTags);
-  CreateControl(data_page, L"STATIC", L"Названия, цвета и наборы тегов для списка баз.",
-      0, 278, 75, 370, 18, 0, text_font, dpi);
+  group(SettingsPage::data, L"Учётные записи и теги", 12, 12, 670, 96);
+  button(SettingsPage::data, L"Настроить учётные записи…", 24, 38, 240, kEditCredentials);
+  create_page_control(SettingsPage::data, L"STATIC", L"Данные для подключения к информационным базам.",
+      0, 278, 43, 370, 18, 0, text_font);
+  button(SettingsPage::data, L"Настроить теги…", 24, 70, 240, kEditTags);
+  create_page_control(SettingsPage::data, L"STATIC", L"Названия, цвета и наборы тегов для списка баз.",
+      0, 278, 75, 370, 18, 0, text_font);
 
-  group(data_page, L"Дополнительные пути поиска платформ 1С", 12, 120, 670, 154);
-  CreateControl(data_page, L"STATIC", L"Эти каталоги добавляются к стандартному поиску платформ и реестра.",
-      0, 24, 142, 620, 18, 0, text_font, dpi);
-  state.platform_paths = CreateControl(data_page, L"LISTBOX", L"",
-      WS_TABSTOP | WS_BORDER | WS_VSCROLL | LBS_NOTIFY, 24, 167, 450, 82, kPlatformPaths, text_font, dpi,
-      WS_EX_CLIENTEDGE);
-  button(data_page, L"Добавить…", 500, 167, 160, kAddPlatformPath);
-  button(data_page, L"Удалить", 500, 200, 160, kRemovePlatformPath);
-  button(data_page, L"Вверх", 500, 233, 76, kMovePlatformPathUp);
-  button(data_page, L"Вниз", 584, 233, 76, kMovePlatformPathDown);
+  group(SettingsPage::data, L"Дополнительные пути поиска платформ 1С", 12, 120, 670, 154);
+  create_page_control(SettingsPage::data, L"STATIC",
+      L"Эти каталоги добавляются к стандартному поиску платформ и реестра.",
+      0, 24, 142, 620, 18, 0, text_font);
+  state.platform_paths = create_page_control(SettingsPage::data, L"LISTBOX", L"",
+      WS_TABSTOP | WS_BORDER | WS_VSCROLL | LBS_NOTIFY, 24, 167, 450, 82,
+      kPlatformPaths, text_font, WS_EX_CLIENTEDGE);
+  button(SettingsPage::data, L"Добавить…", 500, 167, 160, kAddPlatformPath);
+  button(SettingsPage::data, L"Удалить", 500, 200, 160, kRemovePlatformPath);
+  button(SettingsPage::data, L"Вверх", 500, 233, 76, kMovePlatformPathUp);
+  button(SettingsPage::data, L"Вниз", 584, 233, 76, kMovePlatformPathDown);
   RefreshPlatformPaths(state);
 
-  group(data_page, L"Недавно открытые списки баз", 12, 290, 670, 190);
-  state.recent_lists = CreateControl(data_page, L"LISTBOX", L"",
-      WS_TABSTOP | WS_BORDER | WS_VSCROLL | LBS_NOTIFY, 24, 320, 450, 100, kRecentLists, text_font, dpi,
-      WS_EX_CLIENTEDGE);
-  button(data_page, L"Удалить выбранный", 500, 320, 160, kRemoveRecentList);
-  button(data_page, L"Очистить список", 500, 353, 160, kClearRecentLists);
-  button(data_page, L"Очистить историю запусков", 500, 386, 160, kClearRecentBases);
+  group(SettingsPage::data, L"Недавно открытые списки баз", 12, 290, 670, 190);
+  state.recent_lists = create_page_control(SettingsPage::data, L"LISTBOX", L"",
+      WS_TABSTOP | WS_BORDER | WS_VSCROLL | LBS_NOTIFY, 24, 320, 450, 100,
+      kRecentLists, text_font, WS_EX_CLIENTEDGE);
+  button(SettingsPage::data, L"Удалить выбранный", 500, 320, 160, kRemoveRecentList);
+  button(SettingsPage::data, L"Очистить список", 500, 353, 160, kClearRecentLists);
+  button(SettingsPage::data, L"Очистить историю запусков", 500, 386, 160, kClearRecentBases);
   RefreshRecentLists(state);
 
-  group(profile_page, L"Профиль", 12, 12, 670, 164);
+  group(SettingsPage::profile, L"Профиль", 12, 12, 670, 164);
   const std::wstring profile = L"Папка профиля: " + state.profile_root.wstring() +
       (state.portable ? L" (portable)" : L" (обычный режим)");
-  CreateControl(profile_page, L"STATIC", profile, 0, 24, 38, 620, 20, 0, text_font, dpi);
+  create_page_control(SettingsPage::profile, L"STATIC", profile, 0,
+      24, 38, 620, 20, 0, text_font);
   const std::wstring files = L"Файлы: settings.json и catalog-state.json";
-  CreateControl(profile_page, L"STATIC", files, 0, 24, 66, 430, 20, 0, text_font, dpi);
-  button(profile_page, L"Открыть папку профиля", 24, 96, 195, kOpenProfileFolder);
-  button(profile_page, L"Экспортировать…", 230, 96, 160, kExportProfile);
-  button(profile_page, L"Импортировать…", 397, 96, 160, kImportProfile);
-  button(profile_page, L"Сбросить размер и положение", 24, 129, 226, kResetWindowLayout);
+  create_page_control(SettingsPage::profile, L"STATIC", files, 0,
+      24, 66, 430, 20, 0, text_font);
+  button(SettingsPage::profile, L"Открыть папку профиля", 24, 96, 195, kOpenProfileFolder);
+  button(SettingsPage::profile, L"Экспортировать…", 230, 96, 160, kExportProfile);
+  button(SettingsPage::profile, L"Импортировать…", 397, 96, 160, kImportProfile);
+  button(SettingsPage::profile, L"Сбросить размер и положение", 24, 129, 226, kResetWindowLayout);
 
-  button(window, L"ОК", 530, 565, 80, IDOK);
-  button(window, L"Отмена", 620, 565, 80, IDCANCEL);
+  CreateControl(window, L"BUTTON", L"ОК", WS_TABSTOP, 530, 565, 80, 27, IDOK, button_font, dpi);
+  CreateControl(window, L"BUTTON", L"Отмена", WS_TABSTOP, 620, 565, 80, 27, IDCANCEL, button_font, dpi);
+  SetWindowPos(state.tabs, HWND_BOTTOM, 0, 0, 0, 0,
+      SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE);
+  ShowPage(state, 0);
 }
 
 }  // namespace
