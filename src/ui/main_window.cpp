@@ -1307,7 +1307,8 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   const bool specialRoot = selectedData == TreeViewController::kRecentRootItemData ||
       selectedData == TreeViewController::kFavoritesRootItemData;
   const bool recentRoot = tree_view_.SelectedItemIsRecentRoot();
-  const bool recentItem = tree_view_.BranchData(selectedItem) == TreeViewController::kRecentRootItemData;
+  const bool recentItem = !recentRoot &&
+      tree_view_.BranchData(selectedItem) == TreeViewController::kRecentRootItemData;
   const auto entry = specialRoot ? std::optional<domain::Entry>() : SelectedCatalogEntry();
   if (!specialRoot && tree_view_.SelectedSectionIndex() && !entry) {
     ResetStaleSelectionIfNeeded();
