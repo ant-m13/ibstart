@@ -331,7 +331,6 @@ std::optional<credentials::Credential> EditOne(HWND owner, const credentials::Cr
   }
   CloseModalDialog(s.w, owner);
   if (s.images) ImageList_Destroy(s.images);
-  RestoreModalOwner(owner);
   if (s.font) DeleteObject(s.font);
   if (s.button_font) DeleteObject(s.button_font);
   if (r == 0) PostQuitMessage(static_cast<int>(msg.wParam));

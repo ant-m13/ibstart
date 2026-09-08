@@ -74,6 +74,7 @@ target_compile_options(ibstart_core PRIVATE /W4 /WX /permissive- /EHsc /Zc:__cpl
 target_link_libraries(ibstart_core PUBLIC Advapi32 Shell32 Ole32 Winhttp Ws2_32)
 
 add_executable(IBStart WIN32
+  src/ui/application_settings_dialog.cpp
   src/ui/credential_manager_dialog.cpp
   src/app/main.cpp
   src/ui/advanced_database_options_dialog.cpp

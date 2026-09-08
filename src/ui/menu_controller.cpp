@@ -3,6 +3,7 @@
 #include "app/resource.h"
 #include "ui/command_ids.hpp"
 
+#include <algorithm>
 #include <utility>
 
 namespace ibstart::ui {
@@ -99,9 +100,13 @@ void MenuController::RefreshFile(const storage::Settings& settings) {
   if (recent) {
     size_t count = 0;
     for (const auto& path : settings.recent_ibases) {
-      if (count >= 9) break;
-      const UINT command = kRecentList1 + static_cast<UINT>(count++);
-      AppendMenuW(recent, MF_STRING, command, path.wstring().c_str());
+      if (count >= static_cast<size_t>(std::clamp(settings.recent_lists_limit, 1, 9))) break;
+      HMENU item = CreatePopupMenu();
+      if (!item) continue;
+      const UINT index = static_cast<UINT>(count++);
+      AppendMenuW(item, MF_STRING, kRecentList1 + index, L"Открыть");
+      AppendMenuW(item, MF_STRING, kRemoveRecentList1 + index, L"Удалить из списка последних");
+      AppendMenuW(recent, MF_POPUP, reinterpret_cast<UINT_PTR>(item), path.wstring().c_str());
     }
     if (count == 0) AppendMenuW(recent, MF_STRING | MF_GRAYED, 0, L"Нет недавно открытых списков");
     append_popup(recent, kRecentListsMenu, IDI_ACTION_REFRESH, L"Недавно открытые списки");
@@ -133,6 +138,8 @@ void MenuController::RefreshMain(const storage::Settings& settings) {
   if (settings.simple_mode) {
     append(view_menu_, kSimpleMode, 0, L"Выйти из простого режима", L"Ctrl+Alt+M", true);
   } else {
+    append(settings_menu_, kConfigureApplicationSettings, 0, L"Параметры приложения…");
+    AppendMenuW(settings_menu_, MF_SEPARATOR, 0, nullptr);
     append(settings_menu_, kConfigureCredentials, 0, L"Учётные записи…");
     append(view_menu_, kToggleFavorite, IDI_ACTION_FAVORITE,
         L"Добавить/убрать из избранного", L"Ctrl+Alt+I");

@@ -126,11 +126,14 @@ void CloseModalDialog(HWND dialog, HWND owner) {
   // restore activation in one transition, without a visible owner redraw.
   if (owner && IsWindow(owner)) EnableWindow(owner, TRUE);
   if (dialog && IsWindow(dialog)) DestroyWindow(dialog);
+  if (owner && IsWindow(owner)) SetActiveWindow(owner);
 }
 
 void RestoreModalOwner(HWND owner) {
   if (!owner || !IsWindow(owner)) return;
   EnableWindow(owner, TRUE);
+  // Restore only the active window. Do not force the process into the global
+  // foreground, which can cause another visible activation transition.
   SetActiveWindow(owner);
 }
 

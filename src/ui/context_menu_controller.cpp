@@ -143,7 +143,11 @@ UINT ContextMenuController::ShowTree(HWND owner, POINT screen, const TreeContext
     append(state.editable, false, kMoveUp, 0, L"Переместить вверх", L"Ctrl+Shift+Up");
     append(state.editable, false, kMoveDown, 0, L"Переместить вниз", L"Ctrl+Shift+Down");
     append(state.editable, false, kMoveToFolder, IDI_TREE_FOLDER, L"Переместить в папку…");
-    append(state.editable, false, kDelete, IDI_ACTION_DELETE, L"Удалить…", L"Alt+Shift+Del");
+    if (state.recent_item) {
+      append(true, false, kRemoveRecentDatabase, IDI_ACTION_DELETE, L"Удалить из недавних", L"Alt+Shift+Del");
+    } else {
+      append(state.editable, false, kDelete, IDI_ACTION_DELETE, L"Удалить…", L"Alt+Shift+Del");
+    }
   }
   if (state.sort_target) {
     if (!state.catalog_root) separator();

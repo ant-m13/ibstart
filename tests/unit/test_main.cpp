@@ -2023,9 +2023,9 @@ void TestPortableMode() {
   ibstart::storage::CatalogStateRepository repository(layout);
   CHECK(repository.Read().favorites.empty());
   std::error_code removeLegacyError; std::filesystem::remove(layout.root / L"favorites.json", removeLegacyError);
-  ibstart::storage::Settings settings; settings.active_ibases = directory / L"База 😀.v8i"; settings.selected_entry = L"Выбранная база 😀"; settings.simple_mode = true; settings.show_tags_in_list = false; settings.folders_first_when_sorting = false; settings.recent_ibases = {directory / L"Недавняя 1.v8i", directory / L"Недавняя 2.v8i"}; settings.platform_search_paths = {directory / L"Платформа"}; settings.window_width = 1234;
+  ibstart::storage::Settings settings; settings.active_ibases = directory / L"База 😀.v8i"; settings.selected_entry = L"Выбранная база 😀"; settings.simple_mode = true; settings.show_tags_in_list = false; settings.folders_first_when_sorting = false; settings.open_last_list_on_startup = false; settings.restore_last_selection = false; settings.default_client_type = ibstart::domain::ClientType::thin; settings.default_architecture = ibstart::domain::ClientArchitecture::x64_priority; settings.default_platform_version = L"8.3.27"; settings.confirm_destructive_actions = false; settings.confirm_secret_launch = false; settings.show_details_panel = false; settings.show_status_bar = false; settings.tree_density = 2; settings.remember_launch_history = false; settings.launch_history_limit = 5; settings.recent_lists_limit = 3; settings.recent_ibases = {directory / L"Недавняя 1.v8i", directory / L"Недавняя 2.v8i"}; settings.platform_search_paths = {directory / L"Платформа"}; settings.window_width = 1234;
   ibstart::storage::SaveSettings(layout, settings); const auto loaded = ibstart::storage::LoadSettings(layout);
-  CHECK(loaded.active_ibases == settings.active_ibases); CHECK(loaded.selected_entry == settings.selected_entry); CHECK(loaded.simple_mode); CHECK(!loaded.show_tags_in_list); CHECK(!loaded.folders_first_when_sorting); CHECK(loaded.recent_ibases == settings.recent_ibases); CHECK(loaded.platform_search_paths == settings.platform_search_paths); CHECK(loaded.window_width == 1234);
+  CHECK(loaded.active_ibases == settings.active_ibases); CHECK(loaded.selected_entry == settings.selected_entry); CHECK(loaded.simple_mode); CHECK(!loaded.show_tags_in_list); CHECK(!loaded.folders_first_when_sorting); CHECK(!loaded.open_last_list_on_startup); CHECK(!loaded.restore_last_selection); CHECK(loaded.default_client_type == ibstart::domain::ClientType::thin); CHECK(loaded.default_architecture == ibstart::domain::ClientArchitecture::x64_priority); CHECK(loaded.default_platform_version == L"8.3.27"); CHECK(!loaded.confirm_destructive_actions); CHECK(!loaded.confirm_secret_launch); CHECK(!loaded.show_details_panel); CHECK(!loaded.show_status_bar); CHECK(loaded.tree_density == 2); CHECK(!loaded.remember_launch_history); CHECK(loaded.launch_history_limit == 5); CHECK(loaded.recent_lists_limit == 3); CHECK(loaded.recent_ibases == settings.recent_ibases); CHECK(loaded.platform_search_paths == settings.platform_search_paths); CHECK(loaded.window_width == 1234);
   const std::vector<std::wstring> favorites = {L"База 😀", L"Строка\nс переводом"};
   const ibstart::storage::DatabaseTags tags = {{L"id-😀", {L"Продуктив", L"[Клиент] \"А\""}}, {L"id-2", {L"Тест"}}};
   const ibstart::storage::TagStyles tagStyles = {{L"[Клиент] \"А\"", {RGB(236, 217, 245), RGB(75, 20, 95)}}};
@@ -2078,6 +2078,34 @@ void TestWindowsPathLimit() {
   CHECK(portablePathRejected);
 }
 
+void TestProfileTransfer() {
+  const auto directory = Temp(L"profile-transfer");
+  const ibstart::storage::StorageLayout source{directory / L"source", false};
+  const ibstart::storage::StorageLayout target{directory / L"target", false};
+  ibstart::storage::EnsureWritable(source);
+  ibstart::storage::Settings source_settings;
+  source_settings.active_ibases = L"C:\\catalog.v8i";
+  source_settings.credentials = {{L"source-id", L"Source", L"user", L"secret", ibstart::credentials::ScopeMode::all, {}}};
+  ibstart::storage::SaveSettings(source, source_settings);
+  ibstart::storage::CatalogState source_state;
+  source_state.favorites = {L"source-db"};
+  ibstart::storage::SaveCatalogState(source, source_state);
+
+  ibstart::storage::ExportProfile(source, target.root, false);
+  CHECK(ibstart::storage::LoadSettings(target).credentials.empty());
+  CHECK(ibstart::storage::LoadCatalogState(target).favorites == source_state.favorites);
+
+  ibstart::storage::Settings target_settings;
+  target_settings.credentials = {{L"target-id", L"Target", L"user", L"target-secret", ibstart::credentials::ScopeMode::all, {}}};
+  ibstart::storage::SaveSettings(target, target_settings);
+  ibstart::storage::ImportProfile(source.root, target, false);
+  CHECK(ibstart::storage::LoadSettings(target).credentials == target_settings.credentials);
+  ibstart::storage::ImportProfile(source.root, target, true);
+  CHECK(ibstart::storage::LoadSettings(target).credentials == source_settings.credentials);
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
 void TestCatalogStateRepository() {
   const auto directory = Temp(L"catalog-state-repository");
   const ibstart::storage::StorageLayout layout{directory, true};
@@ -2101,6 +2129,10 @@ void TestCatalogStateRepository() {
   CHECK(persisted.tag_styles.contains(L"Продуктив"));
   CHECK(persisted.history.size() == 1 && persisted.history.front().database_id == L"database-id");
   CHECK(persisted.last_launches.contains(L"database-id"));
+
+  repository.RemoveHistory(L"DATABASE-ID");
+  CHECK(repository.Read().history.empty());
+  CHECK(repository.Read().last_launches.contains(L"database-id"));
 
   repository.ClearHistory();
   CHECK(repository.Read().history.empty());
@@ -2631,6 +2663,7 @@ void TestStorageSkipsMalformedRecords() {
     "active_ibases": "C:\\valid.v8i",
     "selected_entry": "Valid database",
     "simple_mode": 1,
+    "recent_lists_limit": 0,
     "recent_lists": [{"recent_list": "bad\q"}, {"recent_list": "C:\\recent.v8i"}],
     "platform_paths": [{"platform_path": "C:\\platform"}],
     "unknown_settings": {"recent_list": "C:\\unexpected.v8i", "platform_path": "C:\\unexpected-platform"}
@@ -2639,6 +2672,7 @@ void TestStorageSkipsMalformedRecords() {
   CHECK(settings.active_ibases == L"C:\\valid.v8i");
   CHECK(settings.selected_entry == L"Valid database");
   CHECK(settings.simple_mode);
+  CHECK(settings.recent_lists_limit == 1);
   CHECK(settings.recent_ibases == std::vector<std::filesystem::path>{L"C:\\recent.v8i"});
   CHECK(settings.platform_search_paths == std::vector<std::filesystem::path>{L"C:\\platform"});
 
@@ -3047,6 +3081,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"CacheContinuesWithActiveOneCProcess", TestCacheContinuesWithActiveOneCProcess);
   run(L"CacheIdentifiersDoNotCollide", TestCacheIdentifiersDoNotCollide);
   run(L"PortableMode", TestPortableMode);
+  run(L"ProfileTransfer", TestProfileTransfer);
   run(L"WindowsPathLimit", TestWindowsPathLimit);
   run(L"StorageFileSizeLimit", TestStorageFileSizeLimit);
   run(L"CatalogStateRepository", TestCatalogStateRepository);
