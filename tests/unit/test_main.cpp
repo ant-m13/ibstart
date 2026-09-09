@@ -2139,6 +2139,7 @@ void TestProfileTransfer() {
   CHECK(ibstart::storage::LoadSettings(source).credentials == source_settings.credentials);
 
   ibstart::storage::ExportProfile(source, target.root, false);
+  CHECK(ibstart::storage::HasCompleteProfileFiles(target.root));
   CHECK(ibstart::storage::LoadSettings(target).credentials.empty());
   CHECK(ibstart::storage::LoadCatalogState(target).favorites == source_state.favorites);
 
@@ -2184,11 +2185,13 @@ void TestProfileTransfer() {
   const ibstart::storage::StorageLayout settings_only{directory / L"settings-only", false};
   ibstart::storage::EnsureWritable(settings_only);
   ibstart::storage::SaveSettings(settings_only, source_settings);
+  CHECK(!ibstart::storage::HasCompleteProfileFiles(settings_only.root));
   expect_import_rejected(settings_only.root);
 
   const ibstart::storage::StorageLayout state_only{directory / L"state-only", false};
   ibstart::storage::EnsureWritable(state_only);
   ibstart::storage::SaveCatalogState(state_only, source_state);
+  CHECK(!ibstart::storage::HasCompleteProfileFiles(state_only.root));
   expect_import_rejected(state_only.root);
 
   const ibstart::storage::StorageLayout malformed{directory / L"malformed", false};
