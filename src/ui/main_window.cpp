@@ -1030,6 +1030,13 @@ void MainWindow::ToggleFoldersFirstWhenSorting() {
 void MainWindow::PopulateTree() {
   if (!tree_) return;
   if (window_) KillTimer(window_, kSearchRefreshTimer);
+  const bool selecting_initial_launch = initial_launch_id_.has_value();
+  if (selecting_initial_launch) {
+    suppress_search_refresh_ = true;
+    if (search_ && GetWindowTextLengthW(search_) != 0) SetWindowTextW(search_, L"");
+    suppress_search_refresh_ = false;
+    if (tag_filter_) SendMessageW(tag_filter_, CB_SETCURSEL, 0, 0);
+  }
   search_filter_ = ReadWindowText(search_);
   RefreshSearchClearButton();
   if (catalog_) {
@@ -1039,9 +1046,10 @@ void MainWindow::PopulateTree() {
     tree_view_.Clear();
   }
   if (initial_launch_id_ && catalog_) {
-    auto wanted = *initial_launch_id_; initial_launch_id_.reset();
+    auto wanted = *initial_launch_id_;
     if (const auto* entry = catalog_->FindById(wanted)) wanted = entry->name;
     if (tree_view_.SelectItem(wanted)) {
+      initial_launch_id_.reset();
       logger_.Info(L"Выбрана база по ярлыку: " + wanted);
       // During application startup the main window receives focus after WM_CREATE.
       // Posting this message makes the shortcut target the active tree row both for
