@@ -125,6 +125,7 @@ class CatalogStateRepository {
 
   [[nodiscard]] const CatalogState& Read();
   [[nodiscard]] const CatalogState& Reload();
+  void Adopt(CatalogState state);
   void Update(const std::function<void(CatalogState&)>& mutation);
   void AppendHistory(domain::HistoryItem item, std::size_t max_history = kMaxHistory);
   void RemoveHistory(std::wstring_view database_id);

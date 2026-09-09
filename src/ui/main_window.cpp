@@ -804,30 +804,37 @@ void MainWindow::LoadCatalog(bool report_error, bool startup_load) {
   const bool hasInitialLaunch = initial_launch_id_.has_value();
   try {
     if (startup_load && !settings_.open_last_list_on_startup && !hasInitialLaunch) {
+      auto next_state = storage::LoadCatalogState(layout_);
+      catalog_state_.Adopt(std::move(next_state));
       catalog_.emplace();
       store_.reset();
       platforms_.clear();
-      static_cast<void>(catalog_state_.Reload());
       RefreshTagFilter();
       PopulateTree();
       SetStatus(L"Автоматическое открытие списка отключено. Выберите список через меню «Файл». | " + CatalogStatistics());
       return;
     }
-    if (settings_.active_ibases.empty()) { if (const auto standard = storage::FindStandardIbases()) settings_.active_ibases = *standard; }
-    auto session = catalog::LoadSession(settings_.active_ibases, settings_.platform_search_paths);
+    auto active_ibases = settings_.active_ibases;
+    if (active_ibases.empty()) {
+      if (const auto standard = storage::FindStandardIbases()) active_ibases = *standard;
+    }
+    auto session = catalog::LoadSession(active_ibases, settings_.platform_search_paths);
+    auto next_state = storage::LoadCatalogState(layout_);
+    auto next_store = std::move(session.store);
+    auto next_catalog = std::move(session.catalog);
+    auto next_platforms = std::move(session.platforms);
+    catalog_state_.Adopt(std::move(next_state));
+    store_ = std::move(next_store);
+    catalog_ = std::move(next_catalog);
+    platforms_ = std::move(next_platforms);
+    if (!active_ibases.empty()) settings_.active_ibases = active_ibases;
     if (!session.loaded) {
-      catalog_ = std::move(session.catalog);
       store_.reset();
-      platforms_ = std::move(session.platforms);
       SetStatus(L"Список ibases.v8i не найден — выберите файл или добавьте базу. | " + CatalogStatistics());
     } else {
-      store_ = std::move(session.store);
-      catalog_ = std::move(session.catalog);
-      platforms_ = std::move(session.platforms);
-      SetStatus(settings_.active_ibases.wstring() + L" | " + CatalogStatistics());
-      logger_.Info(L"Загружен список баз: " + settings_.active_ibases.wstring() + L" | " + CatalogStatistics());
+      SetStatus(active_ibases.wstring() + L" | " + CatalogStatistics());
+      logger_.Info(L"Загружен список баз: " + active_ibases.wstring() + L" | " + CatalogStatistics());
     }
-    static_cast<void>(catalog_state_.Reload());
     if (catalog_) {
       const auto& diagnostics = catalog_->diagnostics();
       for (const auto& diagnostic : diagnostics) {
