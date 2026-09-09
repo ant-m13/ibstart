@@ -170,7 +170,7 @@ bool CopyTextToClipboard(HWND owner, std::wstring_view text) {
 }
 
 bool ConfirmSecretLaunch(HWND owner, const domain::LaunchCommand& command, bool enabled) {
-  if (!enabled || !logging::ContainsSecretArguments(command)) return true;
+  if (!logging::NeedsSecretLaunchConfirmation(command, enabled)) return true;
   return MessageBoxW(owner,
       L"В параметрах запуска обнаружен пароль или токен. Значение будет видно в ibases.v8i и интерфейсе, "
       L"а в журналах и автоматически создаваемых диагностических сообщениях будет замаскировано. Продолжить?",

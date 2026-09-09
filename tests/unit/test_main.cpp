@@ -1760,6 +1760,9 @@ void TestSecretMasking() {
   const ibstart::domain::LaunchCommand connectionWithoutSecret{
       L"1cv8.exe", {L"ENTERPRISE", L"/IBConnection", L"DBSrvr=\"srv\";DB=\"base\""}};
   CHECK(!ibstart::logging::ContainsSecretArguments(safeParameters));
+  CHECK(!ibstart::logging::NeedsSecretLaunchConfirmation(safeParameters, true));
+  CHECK(ibstart::logging::NeedsSecretLaunchConfirmation(namedPassword, true));
+  CHECK(!ibstart::logging::NeedsSecretLaunchConfirmation(namedPassword, false));
   const auto redactedSafeParameters = ibstart::logging::RedactedCommandLine(safeParameters);
   CHECK(redactedSafeParameters.find(L"/Path") != std::wstring::npos);
   CHECK(redactedSafeParameters.find(L"/Port") != std::wstring::npos);
