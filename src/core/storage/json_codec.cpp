@@ -264,6 +264,27 @@ std::optional<std::vector<std::wstring>> StringArray(const Value* value) {
   }
 }
 
+std::optional<std::vector<Object>> ObjectArray(const Value* value) {
+  if (!value || value->kind != ValueKind::array || value->raw.size() < 2) return std::nullopt;
+  std::size_t position = 1;
+  std::vector<Object> result;
+  for (;;) {
+    SkipWhitespace(value->raw, position);
+    if (position >= value->raw.size()) return std::nullopt;
+    if (value->raw[position] == ']') return result;
+    const auto item = ReadValue(value->raw, position);
+    if (!item || item->kind != ValueKind::object) return std::nullopt;
+    std::size_t object_position = 0;
+    const auto object = ReadObject(item->raw, object_position);
+    if (!object || object_position != item->raw.size()) return std::nullopt;
+    result.push_back(*object);
+    SkipWhitespace(value->raw, position);
+    if (position >= value->raw.size()) return std::nullopt;
+    if (value->raw[position] == ']') return result;
+    if (value->raw[position++] != ',') return std::nullopt;
+  }
+}
+
 void ForEachArrayObject(const Object& root, std::string_view array_key,
     const std::function<void(const Object&)>& visitor) {
   const auto* array = ObjectValue(root, array_key);

@@ -478,8 +478,60 @@ Settings ParseSettings(std::string_view contents) {
   return result;
 }
 
+void RequireProfileProperty(const json::Object& root, std::string_view name, json::ValueKind kind) {
+  const auto* value = json::ObjectValue(root, name);
+  if (!value || value->kind != kind) {
+    throw std::runtime_error("Imported profile has an invalid or missing property: " + std::string(name));
+  }
+}
+
+void ValidateSettingsProfile(std::string_view contents) {
+  const auto root = json::RootObject(contents);
+  if (!root) throw std::runtime_error("Imported settings.json is not a valid JSON object.");
+
+  if (const auto schema = json::ObjectInt(*root, "schema_version"); schema && *schema != 1) {
+    throw std::runtime_error("Imported settings.json uses an unsupported schema version.");
+  }
+  const auto require_string = [&](std::string_view name) { RequireProfileProperty(*root, name, json::ValueKind::string); };
+  const auto require_integer = [&](std::string_view name) { RequireProfileProperty(*root, name, json::ValueKind::scalar); };
+  const auto require_objects = [&](std::string_view name) {
+    const auto* value = json::ObjectValue(*root, name);
+    if (!json::ObjectArray(value)) {
+      throw std::runtime_error("Imported settings.json has an invalid array: " + std::string(name));
+    }
+  };
+
+  require_string("active_ibases");
+  require_string("selected_entry");
+  require_integer("open_last_list_on_startup");
+  require_integer("restore_last_selection");
+  require_integer("default_client_type");
+  require_integer("default_architecture");
+  require_objects("recent_lists");
+  require_objects("platform_paths");
+  require_integer("credentials_schema_version");
+  require_objects("credentials");
+  if (const auto schema = json::ObjectInt(*root, "credentials_schema_version"); !schema || *schema != 1) {
+    throw std::runtime_error("Imported settings.json uses an unsupported credentials schema version.");
+  }
+}
+
+void ValidateCatalogStateProfile(std::string_view contents) {
+  const auto root = json::RootObject(contents);
+  if (!root) throw std::runtime_error("Imported catalog-state.json is not a valid JSON object.");
+  const auto schema = json::ObjectInt(*root, "schema_version");
+  if (!schema || *schema != 1) throw std::runtime_error("Imported catalog-state.json uses an unsupported schema version.");
+  for (const std::string_view name : {"favorites", "history", "last_launches", "tags", "tag_styles"}) {
+    const auto* value = json::ObjectValue(*root, name);
+    if (!json::ObjectArray(value)) {
+      throw std::runtime_error("Imported catalog-state.json has an invalid array: " + std::string(name));
+    }
+  }
+}
+
 std::string SerializeSettings(const Settings& settings) {
-  std::string json = "{\n  \"active_ibases\": \"" + ::ibstart::storage::json::Escape(settings.active_ibases.wstring()) + "\",\n";
+  std::string json = "{\n  \"schema_version\": 1,\n  \"active_ibases\": \"" +
+      ::ibstart::storage::json::Escape(settings.active_ibases.wstring()) + "\",\n";
   json += "  \"selected_entry\": \"" + ::ibstart::storage::json::Escape(settings.selected_entry) + "\",\n";
   json += "  \"simple_mode\": " + std::string(settings.simple_mode ? "1" : "0") + ",\n";
   json += "  \"show_tags_in_list\": " + std::string(settings.show_tags_in_list ? "1" : "0") + ",\n";
@@ -754,10 +806,14 @@ void ImportProfile(const std::filesystem::path& source, const StorageLayout& tar
     throw std::runtime_error("Selected directory does not contain a complete IBStart profile.");
   }
   EnsureProfileDirectory(target.root);
-  auto imported = LoadSettings({source, false});
+  const auto source_settings = ReadFileSnapshot(source / L"settings.json");
+  const auto source_state = ReadFileSnapshot(source / L"catalog-state.json");
+  ValidateSettingsProfile(source_settings.contents);
+  ValidateCatalogStateProfile(source_state.contents);
+  auto imported = ParseSettings(source_settings.contents);
   if (!include_credentials) imported.credentials = LoadSettings(target).credentials;
   SaveSettings(target, imported);
-  SaveCatalogState(target, LoadCatalogState({source, false}));
+  SaveCatalogState(target, ParseCatalogState(source_state.contents));
 }
 
 CatalogState LoadCatalogState(const StorageLayout& layout) {

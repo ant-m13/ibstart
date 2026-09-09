@@ -31,6 +31,7 @@ using Object = std::vector<Property>;
 [[nodiscard]] std::optional<long long> ObjectInteger(const Object& object, std::string_view key);
 [[nodiscard]] std::optional<int> ObjectInt(const Object& object, std::string_view key);
 [[nodiscard]] std::optional<std::vector<std::wstring>> StringArray(const Value* value);
+[[nodiscard]] std::optional<std::vector<Object>> ObjectArray(const Value* value);
 void ForEachArrayObject(const Object& root, std::string_view array_key,
     const std::function<void(const Object&)>& visitor);
 
