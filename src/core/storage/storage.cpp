@@ -580,8 +580,11 @@ void ValidateSettingsProfile(std::string_view contents) {
   const auto root = json::RootObject(contents);
   if (!root) throw std::runtime_error("Imported settings.json is not a valid JSON object.");
 
-  if (const auto schema = json::ObjectInt(*root, "schema_version"); schema && *schema != 1) {
-    throw std::runtime_error("Imported settings.json uses an unsupported schema version.");
+  if (const auto* schema_value = json::ObjectValue(*root, "schema_version")) {
+    const auto schema = json::ObjectInt(*root, "schema_version");
+    if (!schema || *schema != 1) {
+      throw std::runtime_error("Imported settings.json uses an unsupported schema version.");
+    }
   }
   const auto require_string = [&](std::string_view name) { RequireProfileProperty(*root, name, json::ValueKind::string); };
   const auto require_integer = [&](std::string_view name) { RequireProfileProperty(*root, name, json::ValueKind::scalar); };
