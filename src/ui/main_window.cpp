@@ -309,6 +309,12 @@ int MainWindow::Show(int show_command) {
   window_ = CreateWindowExW(0, kClassName, L"ИБ Старт — IBStart", WS_OVERLAPPEDWINDOW | WS_CLIPCHILDREN,
       windowX, windowY, windowWidth, windowHeight, nullptr, nullptr, instance_, this);
   if (!window_) return 1;
+  if (!SetPropW(window_, app::kProfileIdentityProperty,
+      reinterpret_cast<HANDLE>(static_cast<ULONG_PTR>(storage::InstanceIdentity(layout_))))) {
+    DestroyWindow(window_);
+    window_ = nullptr;
+    return 1;
+  }
   ShowWindow(window_, show_command); UpdateWindow(window_);
   constexpr BYTE control = FVIRTKEY | FCONTROL;
   constexpr BYTE controlAlt = FVIRTKEY | FCONTROL | FALT;
@@ -538,6 +544,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       BeginClose();
       return 0;
     case WM_DESTROY: {
+      RemovePropW(window, app::kProfileIdentityProperty);
       KillTimer(window, kBackgroundPollTimer);
       KillTimer(window, kSearchRefreshTimer);
       KillTimer(window, kRecentLaunchRefreshTimer);

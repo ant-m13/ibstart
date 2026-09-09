@@ -7,6 +7,7 @@
 namespace ibstart::app {
 
 inline constexpr ULONG_PTR kLaunchCopyData = 0x49425354;
+inline constexpr wchar_t kProfileIdentityProperty[] = L"IBStart.ProfileIdentity";
 inline constexpr std::size_t kMaximumLaunchIdLength = 256;
 
 constexpr bool IsValidLaunchIdLength(std::size_t length) noexcept {

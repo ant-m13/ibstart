@@ -413,6 +413,10 @@ std::wstring InstanceMutexName(const StorageLayout& layout) {
   return ProfileMutexName(L"Instance", layout);
 }
 
+std::uint64_t InstanceIdentity(const StorageLayout& layout) {
+  return StoragePathHash(layout);
+}
+
 void NormalizeCatalogState(CatalogState& state) {
   std::vector<std::wstring> favorites;
   favorites.reserve(std::min(state.favorites.size(), kMaxFavorites));

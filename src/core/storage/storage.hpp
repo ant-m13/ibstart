@@ -52,6 +52,7 @@ class StorageConflictError final : public std::runtime_error {
 // transaction mutex so a short external storage operation cannot look like a
 // running application to the instance-forwarding code.
 [[nodiscard]] std::wstring InstanceMutexName(const StorageLayout& layout);
+[[nodiscard]] std::uint64_t InstanceIdentity(const StorageLayout& layout);
 
 struct Settings {
   std::filesystem::path active_ibases;

@@ -2278,6 +2278,7 @@ void TestStorageRepositoryMergesStaleSnapshots() {
   CHECK(ibstart::storage::StorageMutexName(layout).starts_with(L"Global\\IBStart.Storage."));
   CHECK(ibstart::storage::InstanceMutexName(layout).starts_with(L"Global\\IBStart.Instance."));
   CHECK(ibstart::storage::StorageMutexName(layout) != ibstart::storage::StorageMutexName({directory / L"other", true}));
+  CHECK(ibstart::storage::InstanceIdentity(layout) != ibstart::storage::InstanceIdentity({directory / L"other", true}));
 
   ibstart::storage::CatalogStateRepository firstState(layout);
   ibstart::storage::CatalogStateRepository secondState(layout);
