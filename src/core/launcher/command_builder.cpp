@@ -85,6 +85,17 @@ void AddParameterConflict(std::vector<std::wstring>& errors, std::wstring messag
 void ValidateParameterText(std::wstring_view text, std::map<std::wstring, size_t, CaseInsensitiveLess>& occurrences,
     std::vector<std::wstring>& errors) {
   const auto arguments = SplitCommandArguments(text);
+  const auto is_connection_parameter = [](std::wstring_view name) {
+    constexpr std::wstring_view connection_names[] = {
+        L"F", L"S", L"WS", L"IBConnection", L"IBConnectionString", L"URL"};
+    return std::any_of(std::begin(connection_names), std::end(connection_names),
+        [&](const auto value) { return EqualNoCase(name, value); });
+  };
+  const auto requires_value = [&](std::wstring_view name) {
+    return is_connection_parameter(name) || EqualNoCase(name, L"AppArch") ||
+        EqualNoCase(name, L"Proxy") || EqualNoCase(name, L"Execute") ||
+        EqualNoCase(name, L"ExecuteAfter") || EqualNoCase(name, L"N") || EqualNoCase(name, L"P");
+  };
   for (size_t index = 0; index < arguments.size(); ++index) {
     const auto& argument = arguments[index];
     if (EqualNoCase(argument, L"ENTERPRISE") || EqualNoCase(argument, L"DESIGNER") ||
@@ -95,10 +106,7 @@ void ValidateParameterText(std::wstring_view text, std::map<std::wstring, size_t
 
     const auto name = SwitchName(argument);
     if (name.empty()) continue;
-    constexpr std::wstring_view connection_names[] = {
-        L"F", L"S", L"WS", L"IBConnection", L"IBConnectionString", L"URL"};
-    const bool connection_parameter = std::any_of(std::begin(connection_names), std::end(connection_names),
-        [&](const auto value) { return EqualNoCase(name, value); });
+    const bool connection_parameter = is_connection_parameter(name);
     const bool tracked_parameter = connection_parameter ||
         EqualNoCase(name, L"AppArch") || EqualNoCase(name, L"Proxy") ||
         EqualNoCase(name, L"NoProxy") || EqualNoCase(name, L"Execute") ||
@@ -117,26 +125,22 @@ void ValidateParameterText(std::wstring_view text, std::map<std::wstring, size_t
       AddParameterConflict(errors, L"Параметры /Proxy и /NoProxy взаимоисключающие.");
     }
 
-    if (EqualNoCase(name, L"AppArch")) {
-      std::wstring value;
-      constexpr std::wstring_view prefix = L"/AppArch=";
-      if (argument.size() >= prefix.size() && _wcsnicmp(argument.c_str(), prefix.data(), prefix.size()) == 0) {
-        value = argument.substr(prefix.size());
-      } else if (index + 1 < arguments.size() && !SwitchName(arguments[index + 1]).empty()) {
-        AddParameterConflict(errors, L"У параметра /AppArch отсутствует значение.");
-      } else if (index + 1 < arguments.size()) {
-        value = arguments[++index];
-      } else {
-        AddParameterConflict(errors, L"У параметра /AppArch отсутствует значение.");
-      }
-      if (value.empty()) {
-        AddParameterConflict(errors, L"У параметра /AppArch отсутствует допустимое значение.");
-      } else if (!ParseAppArchitecture(value)) {
-        AddParameterConflict(errors, L"Недопустимое значение /AppArch: " + value + L".");
-      }
-    } else if (EqualNoCase(name, L"Execute") &&
-        (index + 1 >= arguments.size() || !SwitchName(arguments[index + 1]).empty())) {
-      AddParameterConflict(errors, L"У параметра /Execute отсутствует команда.");
+    if (!requires_value(name)) continue;
+    std::wstring value;
+    const auto equals = argument.find(L'=');
+    if (equals != std::wstring::npos) {
+      value = argument.substr(equals + 1);
+    } else if (index + 1 < arguments.size() && !SwitchName(arguments[index + 1]).empty()) {
+      AddParameterConflict(errors, L"У параметра /" + name + L" отсутствует значение.");
+    } else if (index + 1 < arguments.size()) {
+      value = arguments[++index];
+    } else {
+      AddParameterConflict(errors, L"У параметра /" + name + L" отсутствует значение.");
+    }
+    if (value.empty()) {
+      AddParameterConflict(errors, L"У параметра /" + name + L" отсутствует значение.");
+    } else if (EqualNoCase(name, L"AppArch") && !ParseAppArchitecture(value)) {
+      AddParameterConflict(errors, L"Недопустимое значение /AppArch: " + value + L".");
     }
   }
 }
