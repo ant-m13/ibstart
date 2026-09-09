@@ -2109,6 +2109,26 @@ void TestProfileTransfer() {
   CHECK(ibstart::storage::LoadSettings(target).credentials.empty());
   CHECK(ibstart::storage::LoadCatalogState(target).favorites == source_state.favorites);
 
+  const ibstart::storage::StorageLayout transaction_target{directory / L"transaction-target", false};
+  ibstart::storage::EnsureWritable(transaction_target);
+  ibstart::storage::Settings transaction_settings;
+  transaction_settings.selected_entry = L"before";
+  ibstart::storage::SaveSettings(transaction_target, transaction_settings);
+  ibstart::storage::SaveCatalogState(transaction_target, {});
+  const auto settings_before_failed_export = ReadBytes(transaction_target.root / L"settings.json");
+  std::filesystem::remove(transaction_target.root / L"catalog-state.json");
+  std::filesystem::create_directory(transaction_target.root / L"catalog-state.json");
+  bool transaction_rejected = false;
+  try {
+    ibstart::storage::ExportProfile(source, transaction_target.root, false);
+  } catch (const std::runtime_error&) {
+    transaction_rejected = true;
+  }
+  CHECK(transaction_rejected);
+  CHECK(ReadBytes(transaction_target.root / L"settings.json") == settings_before_failed_export);
+  std::error_code transaction_error;
+  std::filesystem::remove(transaction_target.root / L"catalog-state.json", transaction_error);
+
   ibstart::storage::Settings target_settings;
   target_settings.credentials = {{L"target-id", L"Target", L"user", L"target-secret", ibstart::credentials::ScopeMode::all, {}}};
   ibstart::storage::SaveSettings(target, target_settings);

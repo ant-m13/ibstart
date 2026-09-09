@@ -235,6 +235,93 @@ class StorageMutex final {
   bool acquired_{false};
 };
 
+void WriteProfileTemporary(const std::filesystem::path& path, std::string_view contents) {
+  if (contents.size() > kMaxStorageFileSize) {
+    throw std::runtime_error(FileSizeLimitFailure("Cannot save application data file", path,
+        contents.size(), kMaxStorageFileSize));
+  }
+  std::ofstream output(path, std::ios::binary | std::ios::trunc);
+  if (!output) throw std::runtime_error("Cannot write temporary profile data.");
+  output.write(contents.data(), static_cast<std::streamsize>(contents.size()));
+  output.flush();
+  if (!output) throw std::runtime_error("Cannot write temporary profile data.");
+}
+
+void MoveProfileFile(const std::filesystem::path& source, const std::filesystem::path& target,
+    DWORD flags, std::wstring_view action) {
+  if (MoveFileExW(source.c_str(), target.c_str(), flags | MOVEFILE_WRITE_THROUGH)) return;
+  const auto error = GetLastError();
+  throw std::runtime_error(utf::ToUtf8(std::wstring(action) + L": " + target.wstring() + L": " + utf::LastErrorMessage(error)));
+}
+
+void ReplaceProfileFiles(const StorageLayout& layout, std::string_view settings_contents,
+    std::string_view state_contents) {
+  EnsureProfileDirectory(layout.root);
+  const auto settings_path = layout.root / L"settings.json";
+  const auto state_path = layout.root / L"catalog-state.json";
+  const auto settings_temp = layout.root / (L"settings.json.profile-txn." + std::to_wstring(GetCurrentProcessId()));
+  const auto state_temp = layout.root / (L"catalog-state.json.profile-txn." + std::to_wstring(GetCurrentProcessId()));
+  const auto settings_backup = layout.root / (L"settings.json.profile-backup." + std::to_wstring(GetCurrentProcessId()));
+  const auto state_backup = layout.root / (L"catalog-state.json.profile-backup." + std::to_wstring(GetCurrentProcessId()));
+
+  std::error_code error;
+  std::filesystem::remove(settings_temp, error);
+  std::filesystem::remove(state_temp, error);
+  std::filesystem::remove(settings_backup, error);
+  std::filesystem::remove(state_backup, error);
+  WriteProfileTemporary(settings_temp, settings_contents);
+  try {
+    WriteProfileTemporary(state_temp, state_contents);
+    StorageMutex mutex(layout);
+    const auto expected_settings = FingerprintOf(settings_path);
+    const auto expected_state = FingerprintOf(state_path);
+    const bool had_settings = expected_settings.has_value();
+    const bool had_state = expected_state.has_value();
+    bool settings_backed_up = false;
+    bool state_backed_up = false;
+    bool settings_replaced = false;
+    bool state_replaced = false;
+    try {
+      VerifyFingerprint(settings_path, expected_settings);
+      VerifyFingerprint(state_path, expected_state);
+      if (had_settings) {
+        MoveProfileFile(settings_path, settings_backup, 0, L"Cannot stage settings.json");
+        settings_backed_up = true;
+      }
+      if (had_state) {
+        MoveProfileFile(state_path, state_backup, 0, L"Cannot stage catalog-state.json");
+        state_backed_up = true;
+      }
+      MoveProfileFile(settings_temp, settings_path, MOVEFILE_REPLACE_EXISTING, L"Cannot commit settings.json");
+      settings_replaced = true;
+      MoveProfileFile(state_temp, state_path, MOVEFILE_REPLACE_EXISTING, L"Cannot commit catalog-state.json");
+      state_replaced = true;
+      if (settings_backed_up) std::filesystem::remove(settings_backup, error);
+      if (state_backed_up) std::filesystem::remove(state_backup, error);
+    } catch (...) {
+      if (settings_replaced || settings_backed_up) std::filesystem::remove(settings_path, error);
+      if (state_replaced || state_backed_up) std::filesystem::remove(state_path, error);
+      if (settings_backed_up) {
+        static_cast<void>(MoveFileExW(settings_backup.c_str(), settings_path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH));
+      } else if (!had_settings && settings_replaced) {
+        std::filesystem::remove(settings_path, error);
+      }
+      if (state_backed_up) {
+        static_cast<void>(MoveFileExW(state_backup.c_str(), state_path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH));
+      } else if (!had_state && state_replaced) {
+        std::filesystem::remove(state_path, error);
+      }
+      throw;
+    }
+  } catch (...) {
+    std::filesystem::remove(settings_temp, error);
+    std::filesystem::remove(state_temp, error);
+    std::filesystem::remove(settings_backup, error);
+    std::filesystem::remove(state_backup, error);
+    throw;
+  }
+}
+
 bool IsValidHistoryItem(const domain::HistoryItem& item) noexcept {
   const auto mode = static_cast<int>(item.mode);
   return !item.database_id.empty() &&
@@ -797,8 +884,7 @@ void ExportProfile(const StorageLayout& source, const std::filesystem::path& tar
     if (!include_credentials) value.credentials.clear();
     return value;
   }();
-  SaveSettings({target, false}, settings);
-  SaveCatalogState({target, false}, LoadCatalogState(source));
+  ReplaceProfileFiles({target, false}, SerializeSettings(settings), SerializeCatalogState(LoadCatalogState(source)));
 }
 
 void ImportProfile(const std::filesystem::path& source, const StorageLayout& target, bool include_credentials) {
@@ -812,8 +898,7 @@ void ImportProfile(const std::filesystem::path& source, const StorageLayout& tar
   ValidateCatalogStateProfile(source_state.contents);
   auto imported = ParseSettings(source_settings.contents);
   if (!include_credentials) imported.credentials = LoadSettings(target).credentials;
-  SaveSettings(target, imported);
-  SaveCatalogState(target, ParseCatalogState(source_state.contents));
+  ReplaceProfileFiles(target, SerializeSettings(imported), SerializeCatalogState(ParseCatalogState(source_state.contents)));
 }
 
 CatalogState LoadCatalogState(const StorageLayout& layout) {
