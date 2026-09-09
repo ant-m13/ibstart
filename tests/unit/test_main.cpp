@@ -921,10 +921,16 @@ void TestCatalogOrderingAndCycles() {
   ibstart::catalog::Catalog catalog(std::move(document));
   const auto tree = catalog.Tree(); CHECK(tree.size() == 2); CHECK(tree.size() > 1 && tree[0].name == L"Two");
   CHECK(!catalog.AddGroup(L" \t"));
+  CHECK(!catalog.AddGroup(L"Slash/Group"));
+  CHECK(!catalog.AddGroup(L"Line\nGroup"));
+  CHECK(!catalog.AddGroup(std::wstring(L"Nul") + L'\0' + L"Group"));
   CHECK(!catalog.AddServerDatabase(L"\r\n", L"Srvr=\"server\";Ref=\"base\""));
   CHECK(!catalog.AddGroup(L"Orphan", L"Missing"));
   CHECK(catalog.AddGroup(L"Parent")); CHECK(catalog.AddGroup(L"Child", L"Parent")); CHECK(!catalog.Move(L"Parent", L"Child", 0));
   CHECK(!catalog.RenameGroup(L"Parent", L"   "));
+  CHECK(!catalog.RenameGroup(L"Parent", L"Renamed/Group"));
+  CHECK(catalog.AddServerDatabase(L"Database", L"Srvr=\"server\";Ref=\"base\"", L"Parent"));
+  CHECK(!catalog.RenameDatabase(L"Database", L"Renamed\nDatabase"));
   const auto url = ibstart::catalog::Catalog::WebUrl(L"WS=\"https://example.test/base\";WA=1");
   CHECK(url && *url == L"https://example.test/base"); CHECK(!ibstart::catalog::Catalog::IsWebConnection(L"WS=not-a-url"));
   CHECK(ibstart::catalog::IsBareWebConnection(L" https://example.test/base "));
