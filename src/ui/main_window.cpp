@@ -169,6 +169,14 @@ bool CopyTextToClipboard(HWND owner, std::wstring_view text) {
   return false;
 }
 
+bool ConfirmSecretLaunch(HWND owner, const domain::LaunchCommand& command, bool enabled) {
+  if (!enabled || !logging::ContainsSecretArguments(command)) return true;
+  return MessageBoxW(owner,
+      L"В параметрах запуска обнаружен пароль или токен. Значение будет видно в ibases.v8i и интерфейсе, "
+      L"а в журналах и автоматически создаваемых диагностических сообщениях будет замаскировано. Продолжить?",
+      L"Предупреждение", MB_YESNO | MB_ICONWARNING) == IDYES;
+}
+
 }  // namespace
 
 MainWindow::MainWindow(HINSTANCE instance, std::filesystem::path executable, storage::StorageLayout layout,
@@ -348,7 +356,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
   switch (message) {
     case WM_CREATE:
       CreateControls();
-      LoadCatalog();
+      LoadCatalog(true, true);
       static_cast<void>(SetTimer(window, kRecentLaunchRefreshTimer, kRecentLaunchRefreshIntervalMilliseconds, nullptr));
       return 0;
     case WM_SIZE: Layout(LOWORD(lparam), HIWORD(lparam)); return 0;
@@ -790,12 +798,12 @@ bool MainWindow::DrawSearchClearButton(const DRAWITEMSTRUCT* draw) const {
   return true;
 }
 
-void MainWindow::LoadCatalog(bool report_error) {
+void MainWindow::LoadCatalog(bool report_error, bool startup_load) {
   const auto selected_database = CaptureDatabaseSelection();
   const bool had_tree_selection = tree_ && TreeView_GetSelection(tree_);
   const bool hasInitialLaunch = initial_launch_id_.has_value();
   try {
-    if (!settings_.open_last_list_on_startup && !hasInitialLaunch) {
+    if (startup_load && !settings_.open_last_list_on_startup && !hasInitialLaunch) {
       catalog_.emplace();
       store_.reset();
       platforms_.clear();
@@ -1453,10 +1461,7 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
       return;
     }
     const auto command = launcher::BuildCommand(database, *selected, options);
-    if (logging::ContainsSecretArguments(command) && settings_.confirm_secret_launch &&
-        MessageBoxW(window_, L"В параметрах запуска обнаружен пароль или токен. Значение будет видно в ibases.v8i и интерфейсе, "
-                             L"а в журналах и автоматически создаваемых диагностических сообщениях будет замаскировано. Продолжить?",
-            L"Предупреждение", MB_YESNO | MB_ICONWARNING) != IDYES) return;
+    if (!ConfirmSecretLaunch(window_, command, settings_.confirm_secret_launch)) return;
     if (usedNewestThinClient) logger_.Info(L"Требуемая версия " + selectedVersion + L" не найдена; для веб-базы выбран тонкий клиент " + selected->version + L".");
     launcher::Launch(command);
     launchSucceeded = true;
@@ -1550,6 +1555,7 @@ void MainWindow::LaunchWithParameters() {
       return;
     }
     const auto command = launcher::BuildCommand(database, *selected, *options);
+    if (!ConfirmSecretLaunch(window_, command, settings_.confirm_secret_launch)) return;
     launcher::Launch(command);
     launchSucceeded = true;
     logger_.Info(L"Запуск с параметрами: " + logging::RedactedCommandLine(command));

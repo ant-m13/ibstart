@@ -2091,6 +2091,20 @@ void TestProfileTransfer() {
   source_state.favorites = {L"source-db"};
   ibstart::storage::SaveCatalogState(source, source_state);
 
+  const auto expect_export_rejected = [&](const std::filesystem::path& destination) {
+    bool rejected = false;
+    try {
+      ibstart::storage::ExportProfile(source, destination, false);
+    } catch (const std::runtime_error&) {
+      rejected = true;
+    }
+    CHECK(rejected);
+  };
+  expect_export_rejected(source.root);
+  expect_export_rejected(source.root / L".");
+  expect_export_rejected(source.root.parent_path() / L"SOURCE");
+  CHECK(ibstart::storage::LoadSettings(source).credentials == source_settings.credentials);
+
   ibstart::storage::ExportProfile(source, target.root, false);
   CHECK(ibstart::storage::LoadSettings(target).credentials.empty());
   CHECK(ibstart::storage::LoadCatalogState(target).favorites == source_state.favorites);
@@ -2102,6 +2116,28 @@ void TestProfileTransfer() {
   CHECK(ibstart::storage::LoadSettings(target).credentials == target_settings.credentials);
   ibstart::storage::ImportProfile(source.root, target, true);
   CHECK(ibstart::storage::LoadSettings(target).credentials == source_settings.credentials);
+
+  const auto expect_import_rejected = [&](const std::filesystem::path& partial_root) {
+    bool rejected = false;
+    try {
+      ibstart::storage::ImportProfile(partial_root, target, false);
+    } catch (const std::runtime_error&) {
+      rejected = true;
+    }
+    CHECK(rejected);
+    CHECK(ibstart::storage::LoadSettings(target).credentials == source_settings.credentials);
+    CHECK(ibstart::storage::LoadCatalogState(target).favorites == source_state.favorites);
+  };
+  const ibstart::storage::StorageLayout settings_only{directory / L"settings-only", false};
+  ibstart::storage::EnsureWritable(settings_only);
+  ibstart::storage::SaveSettings(settings_only, source_settings);
+  expect_import_rejected(settings_only.root);
+
+  const ibstart::storage::StorageLayout state_only{directory / L"state-only", false};
+  ibstart::storage::EnsureWritable(state_only);
+  ibstart::storage::SaveCatalogState(state_only, source_state);
+  expect_import_rejected(state_only.root);
+
   std::error_code error;
   std::filesystem::remove_all(directory, error);
 }
