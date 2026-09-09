@@ -810,7 +810,7 @@ void MainWindow::LoadCatalog(bool report_error, bool startup_load) {
   const bool had_tree_selection = tree_ && TreeView_GetSelection(tree_);
   const bool hasInitialLaunch = initial_launch_id_.has_value();
   try {
-    if (startup_load && !settings_.open_last_list_on_startup && !hasInitialLaunch) {
+    if (startup_load && !app::ShouldLoadCatalogOnStartup(settings_.open_last_list_on_startup, hasInitialLaunch)) {
       auto next_state = storage::LoadCatalogState(layout_);
       catalog_state_.Adopt(std::move(next_state));
       catalog_.emplace();
