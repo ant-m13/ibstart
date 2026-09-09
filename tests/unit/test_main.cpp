@@ -2138,6 +2138,18 @@ void TestProfileTransfer() {
   ibstart::storage::SaveCatalogState(state_only, source_state);
   expect_import_rejected(state_only.root);
 
+  const ibstart::storage::StorageLayout malformed{directory / L"malformed", false};
+  ibstart::storage::EnsureWritable(malformed);
+  WriteBytes(malformed.root / L"settings.json", "{\"active_ibases\": ");
+  WriteBytes(malformed.root / L"catalog-state.json", ReadBytes(source.root / L"catalog-state.json"));
+  expect_import_rejected(malformed.root);
+
+  const ibstart::storage::StorageLayout unsupported{directory / L"unsupported", false};
+  ibstart::storage::EnsureWritable(unsupported);
+  WriteBytes(unsupported.root / L"settings.json", "{\"schema_version\": 99}");
+  WriteBytes(unsupported.root / L"catalog-state.json", ReadBytes(source.root / L"catalog-state.json"));
+  expect_import_rejected(unsupported.root);
+
   std::error_code error;
   std::filesystem::remove_all(directory, error);
 }
