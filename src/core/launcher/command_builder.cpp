@@ -358,6 +358,7 @@ std::optional<domain::PlatformInstallation> SelectPlatform(
     const int leftRank = left.bitness == (prefer64 ? domain::ClientBitness::x64 : domain::ClientBitness::x86) ? 0 : 1;
     const int rightRank = right.bitness == (prefer64 ? domain::ClientBitness::x64 : domain::ClientBitness::x86) ? 0 : 1;
     if (leftRank != rightRank) return leftRank < rightRank;
+    if (left.source_priority != right.source_priority) return left.source_priority < right.source_priority;
     return left.executable.wstring() < right.executable.wstring();
   });
   if (filtered.empty()) return std::nullopt;

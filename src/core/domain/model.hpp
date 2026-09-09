@@ -56,6 +56,7 @@ struct PlatformInstallation {
   std::wstring version;
   ClientBitness bitness{ClientBitness::automatic};
   bool has_thin_client{false};
+  std::size_t source_priority{0};
 };
 
 struct LaunchOptions {

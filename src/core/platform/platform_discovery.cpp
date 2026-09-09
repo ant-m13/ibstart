@@ -44,7 +44,8 @@ bool IsThinClientExecutable(const std::filesystem::path& executable) {
 }
 
 void AddClient(const std::filesystem::path& executable, std::vector<domain::PlatformInstallation>& output,
-    std::set<std::wstring>& known, std::optional<domain::ClientBitness> bitness = std::nullopt) {
+    std::set<std::wstring>& known, std::size_t source_priority,
+    std::optional<domain::ClientBitness> bitness = std::nullopt) {
   if (!IsValidExecutableFile(executable)) return;
   std::error_code error;
   const auto canonical = std::filesystem::weakly_canonical(executable, error);
@@ -60,40 +61,42 @@ void AddClient(const std::filesystem::path& executable, std::vector<domain::Plat
   const auto detectedBitness = ExecutableBitness(executable).value_or(
       bitness.value_or(x86Path ? domain::ClientBitness::x86 : domain::ClientBitness::x64));
   error.clear();
-  output.push_back({executable, version, detectedBitness, FindThinClient(executable).has_value()});
+  output.push_back({executable, version, detectedBitness, FindThinClient(executable).has_value(), source_priority});
 }
 
 // A separate installation of the thin client contains 1cv8c.exe but not
 // 1cv8.exe.  It is sufficient for web bases, so it must participate in the
 // same discovery flow as a full platform installation.
 void AddInstallation(const std::filesystem::path& directory, std::vector<domain::PlatformInstallation>& output,
-    std::set<std::wstring>& known, std::optional<domain::ClientBitness> bitness = std::nullopt) {
+    std::set<std::wstring>& known, std::size_t source_priority,
+    std::optional<domain::ClientBitness> bitness = std::nullopt) {
   const auto thick = directory / L"1cv8.exe";
   if (IsValidExecutableFile(thick)) {
-    AddClient(thick, output, known, bitness);
+    AddClient(thick, output, known, source_priority, bitness);
     return;
   }
-  AddClient(directory / L"1cv8c.exe", output, known, bitness);
+  AddClient(directory / L"1cv8c.exe", output, known, source_priority, bitness);
 }
 
-void ScanRoot(const std::filesystem::path& root, std::vector<domain::PlatformInstallation>& output, std::set<std::wstring>& known) {
+void ScanRoot(const std::filesystem::path& root, std::vector<domain::PlatformInstallation>& output,
+    std::set<std::wstring>& known, std::size_t source_priority) {
   std::error_code error;
   if (!std::filesystem::exists(root, error)) return;
-  if (root.filename() == L"1cv8.exe" || root.filename() == L"1cv8c.exe") AddInstallation(root.parent_path(), output, known);
-  AddInstallation(root, output, known);
-  AddInstallation(root / L"bin", output, known);
+  if (root.filename() == L"1cv8.exe" || root.filename() == L"1cv8c.exe") AddInstallation(root.parent_path(), output, known, source_priority);
+  AddInstallation(root, output, known, source_priority);
+  AddInstallation(root / L"bin", output, known, source_priority);
   error.clear();
   for (std::filesystem::directory_iterator firstIt(root, std::filesystem::directory_options::skip_permission_denied, error), end; firstIt != end; firstIt.increment(error)) {
     if (error) { error.clear(); continue; }
     const auto& first = *firstIt;
     if (!first.is_directory(error)) { error.clear(); continue; }
-    AddInstallation(first.path() / L"bin", output, known);
+    AddInstallation(first.path() / L"bin", output, known, source_priority);
     error.clear();
     for (std::filesystem::directory_iterator secondIt(first.path(), std::filesystem::directory_options::skip_permission_denied, error), secondEnd; secondIt != secondEnd; secondIt.increment(error)) {
       if (error) { error.clear(); continue; }
       const auto& second = *secondIt;
       if (!second.is_directory(error)) { error.clear(); continue; }
-      AddInstallation(second.path() / L"bin", output, known);
+      AddInstallation(second.path() / L"bin", output, known, source_priority);
     }
     error.clear();
   }
@@ -118,7 +121,8 @@ std::optional<std::filesystem::path> RegistryInstallLocation(HKEY key) {
   return std::filesystem::path(value);
 }
 
-void ScanRegistry(HKEY hive, REGSAM view, std::vector<domain::PlatformInstallation>& output, std::set<std::wstring>& known) {
+void ScanRegistry(HKEY hive, REGSAM view, std::vector<domain::PlatformInstallation>& output,
+    std::set<std::wstring>& known, std::size_t source_priority) {
   HKEY root{};
   if (RegOpenKeyExW(hive, L"SOFTWARE\\1C\\1Cv8", 0, KEY_READ | view, &root) != ERROR_SUCCESS) return;
   for (DWORD firstIndex = 0;; ++firstIndex) {
@@ -127,13 +131,13 @@ void ScanRegistry(HKEY hive, REGSAM view, std::vector<domain::PlatformInstallati
     HKEY version{};
     if (RegOpenKeyExW(root, firstName, 0, KEY_READ | view, &version) != ERROR_SUCCESS) continue;
     const auto bitness = view == KEY_WOW64_32KEY ? domain::ClientBitness::x86 : domain::ClientBitness::x64;
-    if (const auto location = RegistryInstallLocation(version)) { AddInstallation(*location, output, known, bitness); AddInstallation(*location / L"bin", output, known, bitness); }
+    if (const auto location = RegistryInstallLocation(version)) { AddInstallation(*location, output, known, source_priority, bitness); AddInstallation(*location / L"bin", output, known, source_priority, bitness); }
     for (DWORD secondIndex = 0;; ++secondIndex) {
       wchar_t secondName[256]; DWORD secondLength = 256;
       if (RegEnumKeyExW(version, secondIndex, secondName, &secondLength, nullptr, nullptr, nullptr, nullptr) != ERROR_SUCCESS) break;
       HKEY install{};
       if (RegOpenKeyExW(version, secondName, 0, KEY_READ | view, &install) != ERROR_SUCCESS) continue;
-      if (const auto location = RegistryInstallLocation(install)) { AddInstallation(*location, output, known, bitness); AddInstallation(*location / L"bin", output, known, bitness); }
+      if (const auto location = RegistryInstallLocation(install)) { AddInstallation(*location, output, known, source_priority, bitness); AddInstallation(*location / L"bin", output, known, source_priority, bitness); }
       RegCloseKey(install);
     }
     RegCloseKey(version);
@@ -168,17 +172,19 @@ std::vector<domain::PlatformInstallation> Discover(
   std::set<std::wstring> known;
   auto roots = include_system_sources ? StandardSearchRoots() : std::vector<std::filesystem::path>{};
   roots.insert(roots.end(), user_roots.begin(), user_roots.end());
-  for (const auto& root : roots) {
+  for (std::size_t source_priority = 0; source_priority < roots.size(); ++source_priority) {
+    const auto& root = roots[source_priority];
     if (!windows_path::IsWithinLimit(root)) {
       throw std::invalid_argument(utf::ToUtf8(windows_path::LengthError(root)));
     }
-    ScanRoot(root, result, known);
+    ScanRoot(root, result, known, source_priority);
   }
   if (include_system_sources) {
-    ScanRegistry(HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY, result, known);
-    ScanRegistry(HKEY_LOCAL_MACHINE, KEY_WOW64_32KEY, result, known);
-    ScanRegistry(HKEY_CURRENT_USER, KEY_WOW64_64KEY, result, known);
-    ScanRegistry(HKEY_CURRENT_USER, KEY_WOW64_32KEY, result, known);
+    const auto registry_priority = roots.size();
+    ScanRegistry(HKEY_LOCAL_MACHINE, KEY_WOW64_64KEY, result, known, registry_priority);
+    ScanRegistry(HKEY_LOCAL_MACHINE, KEY_WOW64_32KEY, result, known, registry_priority);
+    ScanRegistry(HKEY_CURRENT_USER, KEY_WOW64_64KEY, result, known, registry_priority);
+    ScanRegistry(HKEY_CURRENT_USER, KEY_WOW64_32KEY, result, known, registry_priority);
   }
   std::sort(result.begin(), result.end(), [](const auto& left, const auto& right) { return IsNewerVersion(left.version, right.version); });
   return result;
