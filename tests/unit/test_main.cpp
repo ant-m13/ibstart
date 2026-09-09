@@ -689,6 +689,12 @@ void TestLaunchParameterConflicts() {
   CHECK(rawConnectionOverride);
   database.additional_parameters = L"ENTERPRISE";
   CHECK(!ibstart::launcher::ValidateLaunchParameters(database, options).empty());
+  database.additional_parameters = L"/N DESIGNER /P CREATEINFOBASE /Execute DESIGNER";
+  CHECK(ibstart::launcher::ValidateLaunchParameters(database, options).empty());
+  database.additional_parameters = L"/N /P";
+  CHECK(!ibstart::launcher::ValidateLaunchParameters(database, options).empty());
+  database.additional_parameters = L"/Execute";
+  CHECK(!ibstart::launcher::ValidateLaunchParameters(database, options).empty());
   database.additional_parameters = L"/Proxy proxy /NoProxy";
   CHECK(!ibstart::launcher::ValidateLaunchParameters(database, options).empty());
   database.additional_parameters = L"/AppArch invalid";
