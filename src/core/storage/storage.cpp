@@ -974,6 +974,11 @@ const CatalogState& CatalogStateRepository::Reload() {
   return *state_;
 }
 
+void CatalogStateRepository::Adopt(CatalogState state) {
+  NormalizeCatalogState(state);
+  state_ = std::move(state);
+}
+
 void CatalogStateRepository::Update(const std::function<void(CatalogState&)>& mutation) {
   StorageMutex mutex(layout_);
   const auto path = PathFor(layout_, L"catalog-state.json");

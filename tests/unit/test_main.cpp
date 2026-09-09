@@ -2227,6 +2227,11 @@ void TestCatalogStateRepository() {
   CHECK(repository.Read().favorites == std::vector<std::wstring>{L"Основная база"});
   CHECK(repository.Reload().favorites == std::vector<std::wstring>{L"Внешнее изменение"});
 
+  ibstart::storage::CatalogState replacement;
+  replacement.favorites = {L"Принятое состояние"};
+  repository.Adopt(replacement);
+  CHECK(repository.Read().favorites == std::vector<std::wstring>{L"Принятое состояние"});
+
   std::error_code error;
   std::filesystem::remove_all(directory, error);
 }
