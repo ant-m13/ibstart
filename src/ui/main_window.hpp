@@ -53,7 +53,7 @@ class MainWindow {
   void Layout(int width, int height);
   void PositionSearchClearButton(int x, int y, int width, int height);
   void RefreshSearchClearButton();
-  void LoadCatalog(bool report_error = true);
+  void LoadCatalog(bool report_error = true, bool startup_load = false);
   bool SaveCatalog(catalog::Catalog candidate);
   [[nodiscard]] bool EnsureCatalogValid(const catalog::Catalog& catalog, std::wstring_view operation) const;
   void PopulateTree();

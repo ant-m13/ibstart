@@ -736,6 +736,9 @@ bool ProfileFileExists(const std::filesystem::path& root, std::wstring_view name
 }
 
 void ExportProfile(const StorageLayout& source, const std::filesystem::path& target, bool include_credentials) {
+  if (NormalizedStoragePath(source.root) == NormalizedStoragePath(target)) {
+    throw std::runtime_error("Export destination must differ from the active profile.");
+  }
   EnsureProfileDirectory(target);
   const auto settings = [&] {
     auto value = LoadSettings(source);
@@ -747,8 +750,8 @@ void ExportProfile(const StorageLayout& source, const std::filesystem::path& tar
 }
 
 void ImportProfile(const std::filesystem::path& source, const StorageLayout& target, bool include_credentials) {
-  if (!ProfileFileExists(source, L"settings.json") && !ProfileFileExists(source, L"catalog-state.json")) {
-    throw std::runtime_error("Selected directory does not contain an IBStart profile.");
+  if (!ProfileFileExists(source, L"settings.json") || !ProfileFileExists(source, L"catalog-state.json")) {
+    throw std::runtime_error("Selected directory does not contain a complete IBStart profile.");
   }
   EnsureProfileDirectory(target.root);
   auto imported = LoadSettings({source, false});
