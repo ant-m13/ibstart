@@ -1839,9 +1839,10 @@ void MainWindow::ConfigureApplicationSettings() {
     }
     return;
   }
+  bool settings_persisted = false;
   try {
-    settings_ = result->settings;
-    PersistSettings(settings_);
+    PersistSettings(result->settings);
+    settings_persisted = true;
     if (result->reset_window_layout && window_) {
       RECT work_area{};
       SystemParametersInfoW(SPI_GETWORKAREA, 0, &work_area, 0);
@@ -1880,6 +1881,13 @@ void MainWindow::ConfigureApplicationSettings() {
     }
     SetStatus(L"Настройки приложения сохранены.");
   } catch (const std::exception& error) {
+    if (settings_persisted) {
+      try {
+        PersistSettings(original);
+      } catch (const std::exception& rollback_error) {
+        logger_.Error(L"Не удалось откатить настройки после ошибки UI: " + ibstart::utf::FromUtf8(rollback_error.what()));
+      }
+    }
     settings_ = original;
     logger_.Error(L"Ошибка сохранения настроек приложения: " + ibstart::utf::FromUtf8(error.what()));
     Message(window_, L"Не удалось сохранить настройки приложения.\n\n" + WideErrorText(error.what()),
