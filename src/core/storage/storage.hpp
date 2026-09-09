@@ -141,6 +141,7 @@ class CatalogStateRepository {
 [[nodiscard]] std::optional<std::filesystem::path> FindStandardIbases();
 void EnsureWritable(const StorageLayout& layout);
 [[nodiscard]] bool HasCompleteProfileFiles(const std::filesystem::path& root);
+[[nodiscard]] bool IsSameProfilePath(const std::filesystem::path& left, const std::filesystem::path& right);
 [[nodiscard]] Settings LoadSettings(const StorageLayout& layout);
 void SaveSettings(const StorageLayout& layout, const Settings& settings);
 // Copies the profile's own JSON state to a user-selected directory. Credentials

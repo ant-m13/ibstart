@@ -882,8 +882,12 @@ bool HasCompleteProfileFiles(const std::filesystem::path& root) {
   return ProfileFileExists(root, L"settings.json") && ProfileFileExists(root, L"catalog-state.json");
 }
 
+bool IsSameProfilePath(const std::filesystem::path& left, const std::filesystem::path& right) {
+  return NormalizedStoragePath(left) == NormalizedStoragePath(right);
+}
+
 void ExportProfile(const StorageLayout& source, const std::filesystem::path& target, bool include_credentials) {
-  if (NormalizedStoragePath(source.root) == NormalizedStoragePath(target)) {
+  if (IsSameProfilePath(source.root, target)) {
     throw std::runtime_error("Export destination must differ from the active profile.");
   }
   EnsureProfileDirectory(target);
