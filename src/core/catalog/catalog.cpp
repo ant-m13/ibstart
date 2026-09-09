@@ -62,6 +62,12 @@ bool StartsWithNoCase(std::wstring_view value, std::wstring_view prefix) {
 bool IsBlankName(std::wstring_view value) {
   return value.empty() || std::all_of(value.begin(), value.end(), [](wchar_t character) { return std::iswspace(character) != 0; });
 }
+bool IsValidEntryName(std::wstring_view value) {
+  if (IsBlankName(value)) return false;
+  return std::none_of(value.begin(), value.end(), [](wchar_t character) {
+    return character == L'/' || character == L'\r' || character == L'\n' || character == L'\0';
+  });
+}
 bool IsMissingPathError(const std::error_code& error) {
   switch (error.value()) {
     case ERROR_FILE_NOT_FOUND:
@@ -428,7 +434,7 @@ std::vector<TreeItem> Catalog::Tree() const {
 }
 
 bool Catalog::AddGroup(std::wstring name, std::wstring parent) {
-  if (IsBlankName(name) || Find(name) != nullptr || !ValidParent(document_, parent)) return false;
+  if (!IsValidEntryName(name) || Find(name) != nullptr || !ValidParent(document_, parent)) return false;
   auto& entry = document_.Add(std::move(name)).entry;
   entry.Set(L"Folder", FolderForParent(document_, parent));
   Renumber(parent);
@@ -442,7 +448,7 @@ std::wstring Catalog::QuoteConnectionPath(const std::filesystem::path& path) {
 }
 
 bool Catalog::AddFileDatabase(std::wstring name, const std::filesystem::path& directory, std::wstring parent) {
-  if (IsBlankName(name) || Find(name) != nullptr || !ValidParent(document_, parent) ||
+  if (!IsValidEntryName(name) || Find(name) != nullptr || !ValidParent(document_, parent) ||
       CheckFileDatabasePath(directory) != FileDatabasePathStatus::valid) return false;
   auto& entry = document_.Add(std::move(name)).entry;
   entry.Set(L"Connect", QuoteConnectionPath(directory));
@@ -453,7 +459,7 @@ bool Catalog::AddFileDatabase(std::wstring name, const std::filesystem::path& di
 }
 
 bool Catalog::AddServerDatabase(std::wstring name, std::wstring connect, std::wstring parent) {
-  if (IsBlankName(name) || connect.empty() || Find(name) != nullptr || !ValidParent(document_, parent)) return false;
+  if (!IsValidEntryName(name) || connect.empty() || Find(name) != nullptr || !ValidParent(document_, parent)) return false;
   auto& entry = document_.Add(std::move(name)).entry;
   entry.Set(L"Connect", std::move(connect));
   entry.Set(L"ID", NewDatabaseId());
@@ -464,7 +470,7 @@ bool Catalog::AddServerDatabase(std::wstring name, std::wstring connect, std::ws
 
 bool Catalog::RenameDatabase(std::wstring_view name, std::wstring new_name) {
   auto* entry = Find(name);
-  if (entry == nullptr || !entry->IsDatabase() || IsBlankName(new_name)) return false;
+  if (entry == nullptr || !entry->IsDatabase() || !IsValidEntryName(new_name)) return false;
   const auto* existing = Find(new_name);
   if (existing != nullptr && existing != entry) return false;
   entry->name = std::move(new_name);
@@ -473,7 +479,7 @@ bool Catalog::RenameDatabase(std::wstring_view name, std::wstring new_name) {
 
 bool Catalog::RenameGroup(std::wstring_view name, std::wstring new_name) {
   auto* entry = Find(name);
-  if (entry == nullptr || entry->IsDatabase() || IsBlankName(new_name)) return false;
+  if (entry == nullptr || entry->IsDatabase() || !IsValidEntryName(new_name)) return false;
   if (const auto* existing = Find(new_name); existing != nullptr && existing != entry) return false;
   const std::wstring old_name = entry->name;
   const std::wstring old_path = FolderForParent(document_, old_name);
