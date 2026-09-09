@@ -576,6 +576,21 @@ void RequireProfileProperty(const json::Object& root, std::string_view name, jso
   }
 }
 
+std::vector<json::Object> RequireObjectArray(const json::Object& root, std::string_view name) {
+  const auto objects = json::ObjectArray(json::ObjectValue(root, name));
+  if (!objects) throw std::runtime_error("Imported profile has an invalid array: " + std::string(name));
+  return *objects;
+}
+
+void RequireObjectProperty(const json::Object& object, std::string_view name, json::ValueKind kind,
+    std::string_view context) {
+  const auto* value = json::ObjectValue(object, name);
+  if (!value || value->kind != kind) {
+    throw std::runtime_error("Imported profile has an invalid or missing property: " +
+        std::string(context) + "." + std::string(name));
+  }
+}
+
 void ValidateSettingsProfile(std::string_view contents) {
   const auto root = json::RootObject(contents);
   if (!root) throw std::runtime_error("Imported settings.json is not a valid JSON object.");
@@ -588,23 +603,34 @@ void ValidateSettingsProfile(std::string_view contents) {
   }
   const auto require_string = [&](std::string_view name) { RequireProfileProperty(*root, name, json::ValueKind::string); };
   const auto require_integer = [&](std::string_view name) { RequireProfileProperty(*root, name, json::ValueKind::scalar); };
-  const auto require_objects = [&](std::string_view name) {
-    const auto* value = json::ObjectValue(*root, name);
-    if (!json::ObjectArray(value)) {
-      throw std::runtime_error("Imported settings.json has an invalid array: " + std::string(name));
-    }
-  };
-
   require_string("active_ibases");
   require_string("selected_entry");
   require_integer("open_last_list_on_startup");
   require_integer("restore_last_selection");
   require_integer("default_client_type");
   require_integer("default_architecture");
-  require_objects("recent_lists");
-  require_objects("platform_paths");
+  const auto recent_lists = RequireObjectArray(*root, "recent_lists");
+  for (const auto& object : recent_lists) RequireObjectProperty(object, "recent_list", json::ValueKind::string, "recent_lists[]");
+  const auto platform_paths = RequireObjectArray(*root, "platform_paths");
+  for (const auto& object : platform_paths) RequireObjectProperty(object, "platform_path", json::ValueKind::string, "platform_paths[]");
   require_integer("credentials_schema_version");
-  require_objects("credentials");
+  const auto credentials = RequireObjectArray(*root, "credentials");
+  for (const auto& credential : credentials) {
+    for (const std::string_view property : {"id", "title", "user_name", "password"}) {
+      RequireObjectProperty(credential, property, json::ValueKind::string, "credentials[]");
+    }
+    RequireObjectProperty(credential, "scope", json::ValueKind::object, "credentials[]");
+    const auto* scope_value = json::ObjectValue(credential, "scope");
+    const auto scope = json::RootObject(scope_value->raw);
+    if (!scope) throw std::runtime_error("Imported credentials contain an invalid scope object.");
+    RequireObjectProperty(*scope, "mode", json::ValueKind::string, "credentials[].scope");
+    const auto targets = RequireObjectArray(*scope, "targets");
+    for (const auto& target : targets) {
+      for (const std::string_view property : {"catalog_path", "kind", "entry_id", "last_known_name"}) {
+        RequireObjectProperty(target, property, json::ValueKind::string, "credentials[].scope.targets[]");
+      }
+    }
+  }
   if (const auto schema = json::ObjectInt(*root, "credentials_schema_version"); !schema || *schema != 1) {
     throw std::runtime_error("Imported settings.json uses an unsupported credentials schema version.");
   }
@@ -615,11 +641,31 @@ void ValidateCatalogStateProfile(std::string_view contents) {
   if (!root) throw std::runtime_error("Imported catalog-state.json is not a valid JSON object.");
   const auto schema = json::ObjectInt(*root, "schema_version");
   if (!schema || *schema != 1) throw std::runtime_error("Imported catalog-state.json uses an unsupported schema version.");
-  for (const std::string_view name : {"favorites", "history", "last_launches", "tags", "tag_styles"}) {
-    const auto* value = json::ObjectValue(*root, name);
-    if (!json::ObjectArray(value)) {
-      throw std::runtime_error("Imported catalog-state.json has an invalid array: " + std::string(name));
+  const auto favorites = RequireObjectArray(*root, "favorites");
+  for (const auto& object : favorites) RequireObjectProperty(object, "favorite", json::ValueKind::string, "favorites[]");
+  const auto history = RequireObjectArray(*root, "history");
+  for (const auto& object : history) {
+    RequireObjectProperty(object, "history_id", json::ValueKind::string, "history[]");
+    RequireObjectProperty(object, "time", json::ValueKind::scalar, "history[]");
+    RequireObjectProperty(object, "mode", json::ValueKind::scalar, "history[]");
+  }
+  const auto last_launches = RequireObjectArray(*root, "last_launches");
+  for (const auto& object : last_launches) {
+    RequireObjectProperty(object, "last_launch_id", json::ValueKind::string, "last_launches[]");
+    RequireObjectProperty(object, "time", json::ValueKind::scalar, "last_launches[]");
+  }
+  const auto tags = RequireObjectArray(*root, "tags");
+  for (const auto& object : tags) {
+    RequireObjectProperty(object, "tag_id", json::ValueKind::string, "tags[]");
+    if (!json::StringArray(json::ObjectValue(object, "values"))) {
+      throw std::runtime_error("Imported catalog-state.json has an invalid tags[].values array.");
     }
+  }
+  const auto tag_styles = RequireObjectArray(*root, "tag_styles");
+  for (const auto& object : tag_styles) {
+    RequireObjectProperty(object, "tag_style", json::ValueKind::string, "tag_styles[]");
+    RequireObjectProperty(object, "background", json::ValueKind::scalar, "tag_styles[]");
+    RequireObjectProperty(object, "text", json::ValueKind::scalar, "tag_styles[]");
   }
 }
 
