@@ -249,10 +249,6 @@ bool ContainsSecretArguments(const domain::LaunchCommand& command) {
   return false;
 }
 
-bool NeedsSecretLaunchConfirmation(const domain::LaunchCommand& command, bool enabled) {
-  return enabled && ContainsSecretArguments(command);
-}
-
 Logger::Logger(std::filesystem::path directory) : directory_(std::move(directory)) {
   std::error_code error;
   std::filesystem::create_directories(directory_, error);

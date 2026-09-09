@@ -169,14 +169,6 @@ bool CopyTextToClipboard(HWND owner, std::wstring_view text) {
   return false;
 }
 
-bool ConfirmSecretLaunch(HWND owner, const domain::LaunchCommand& command, bool enabled) {
-  if (!logging::NeedsSecretLaunchConfirmation(command, enabled)) return true;
-  return MessageBoxW(owner,
-      L"В параметрах запуска обнаружен пароль или токен. Значение будет видно в ibases.v8i и интерфейсе, "
-      L"а в журналах и автоматически создаваемых диагностических сообщениях будет замаскировано. Продолжить?",
-      L"Предупреждение", MB_YESNO | MB_ICONWARNING) == IDYES;
-}
-
 }  // namespace
 
 MainWindow::MainWindow(HINSTANCE instance, std::filesystem::path executable, storage::StorageLayout layout,
@@ -1467,8 +1459,6 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
     }
     if (!selected) {
       if (const auto browser_url = launcher::BrowserFallbackUrl(database, options)) {
-        const domain::LaunchCommand browser_command{executable_, {L"/WS", *browser_url}};
-        if (!ConfirmSecretLaunch(window_, browser_command, settings_.confirm_secret_launch)) return;
         const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", browser_url->c_str(), nullptr, nullptr, SW_SHOWNORMAL));
         if (result <= 32) {
           logger_.Error(L"Не удалось открыть веб-базу в браузере: " + database.name);
@@ -1485,7 +1475,6 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
       return;
     }
     const auto command = launcher::BuildCommand(database, *selected, options);
-    if (!ConfirmSecretLaunch(window_, command, settings_.confirm_secret_launch)) return;
     if (usedNewestThinClient) logger_.Info(L"Требуемая версия " + selectedVersion + L" не найдена; для веб-базы выбран тонкий клиент " + selected->version + L".");
     launcher::Launch(command);
     launchSucceeded = true;
@@ -1579,7 +1568,6 @@ void MainWindow::LaunchWithParameters() {
       return;
     }
     const auto command = launcher::BuildCommand(database, *selected, *options);
-    if (!ConfirmSecretLaunch(window_, command, settings_.confirm_secret_launch)) return;
     launcher::Launch(command);
     launchSucceeded = true;
     logger_.Info(L"Запуск с параметрами: " + logging::RedactedCommandLine(command));

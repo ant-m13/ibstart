@@ -12,7 +12,6 @@ namespace ibstart::logging {
 [[nodiscard]] std::wstring MaskSecrets(std::wstring_view arguments);
 [[nodiscard]] std::wstring RedactedCommandLine(const domain::LaunchCommand& command);
 [[nodiscard]] bool ContainsSecretArguments(const domain::LaunchCommand& command);
-[[nodiscard]] bool NeedsSecretLaunchConfirmation(const domain::LaunchCommand& command, bool enabled);
 
 class Logger {
  public:
