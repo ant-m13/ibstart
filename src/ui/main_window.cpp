@@ -1445,6 +1445,8 @@ void MainWindow::LaunchSelected(domain::LaunchMode mode) {
     }
     if (!selected) {
       if (const auto browser_url = launcher::BrowserFallbackUrl(database, options)) {
+        const domain::LaunchCommand browser_command{executable_, {L"/WS", *browser_url}};
+        if (!ConfirmSecretLaunch(window_, browser_command, settings_.confirm_secret_launch)) return;
         const auto result = reinterpret_cast<INT_PTR>(ShellExecuteW(window_, L"open", browser_url->c_str(), nullptr, nullptr, SW_SHOWNORMAL));
         if (result <= 32) {
           logger_.Error(L"Не удалось открыть веб-базу в браузере: " + database.name);
