@@ -104,6 +104,8 @@ const storage::CatalogState& CatalogMetadataService::Read() const { return repos
 
 const storage::CatalogState& CatalogMetadataService::Reload() { return repository_.Reload(); }
 
+void CatalogMetadataService::Adopt(storage::CatalogState state) { repository_.Adopt(std::move(state)); }
+
 bool CatalogMetadataService::ToggleFavorite(std::wstring database_id, std::wstring legacy_database_name) {
   if (database_id.empty()) return false;
   bool added = false;

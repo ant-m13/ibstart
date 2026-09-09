@@ -33,21 +33,20 @@ constexpr int kResetWindowLayout = 1813;
 constexpr int kOpenLastList = 1814;
 constexpr int kRestoreSelection = 1815;
 constexpr int kConfirmDestructive = 1816;
-constexpr int kConfirmSecret = 1817;
-constexpr int kDefaultClient = 1818;
-constexpr int kDefaultArchitecture = 1819;
-constexpr int kDefaultVersion = 1820;
-constexpr int kShowDetails = 1821;
-constexpr int kShowStatus = 1822;
-constexpr int kRememberHistory = 1823;
-constexpr int kTreeDensity = 1824;
-constexpr int kHistoryLimit = 1825;
-constexpr int kMovePlatformPathUp = 1826;
-constexpr int kMovePlatformPathDown = 1827;
-constexpr int kOpenProfileFolder = 1828;
-constexpr int kExportProfile = 1829;
-constexpr int kImportProfile = 1830;
-constexpr int kSettingsTabs = 1831;
+constexpr int kDefaultClient = 1817;
+constexpr int kDefaultArchitecture = 1818;
+constexpr int kDefaultVersion = 1819;
+constexpr int kShowDetails = 1820;
+constexpr int kShowStatus = 1821;
+constexpr int kRememberHistory = 1822;
+constexpr int kTreeDensity = 1823;
+constexpr int kHistoryLimit = 1824;
+constexpr int kMovePlatformPathUp = 1825;
+constexpr int kMovePlatformPathDown = 1826;
+constexpr int kOpenProfileFolder = 1827;
+constexpr int kExportProfile = 1828;
+constexpr int kImportProfile = 1829;
+constexpr int kSettingsTabs = 1830;
 
 enum class SettingsPage : int {
   interface_page,
@@ -68,7 +67,6 @@ struct State {
   HWND open_last_list{};
   HWND restore_selection{};
   HWND confirm_destructive{};
-  HWND confirm_secret{};
   HWND default_client{};
   HWND default_architecture{};
   HWND default_version{};
@@ -259,7 +257,6 @@ void Collect(State& state) {
   state.settings.open_last_list_on_startup = SendMessageW(state.open_last_list, BM_GETCHECK, 0, 0) == BST_CHECKED;
   state.settings.restore_last_selection = SendMessageW(state.restore_selection, BM_GETCHECK, 0, 0) == BST_CHECKED;
   state.settings.confirm_destructive_actions = SendMessageW(state.confirm_destructive, BM_GETCHECK, 0, 0) == BST_CHECKED;
-  state.settings.confirm_secret_launch = SendMessageW(state.confirm_secret, BM_GETCHECK, 0, 0) == BST_CHECKED;
   state.settings.show_details_panel = SendMessageW(state.show_details, BM_GETCHECK, 0, 0) == BST_CHECKED;
   state.settings.show_status_bar = SendMessageW(state.show_status, BM_GETCHECK, 0, 0) == BST_CHECKED;
   state.settings.remember_launch_history = SendMessageW(state.remember_history, BM_GETCHECK, 0, 0) == BST_CHECKED;
@@ -495,9 +492,7 @@ void CreateControls(HWND window, State& state) {
   group(SettingsPage::launch, L"Подтверждения и история", 12, 300, 670, 184);
   state.confirm_destructive = checkbox(SettingsPage::launch, L"Подтверждать удаление и очистку данных", 24, 324, 620,
       kConfirmDestructive, state.settings.confirm_destructive_actions);
-  state.confirm_secret = checkbox(SettingsPage::launch, L"Предупреждать перед запуском с секретами", 24, 350, 620,
-      kConfirmSecret, state.settings.confirm_secret_launch);
-  state.remember_history = checkbox(SettingsPage::launch, L"Сохранять историю запусков", 24, 376, 620,
+  state.remember_history = checkbox(SettingsPage::launch, L"Сохранять историю запусков", 24, 350, 620,
       kRememberHistory, state.settings.remember_launch_history);
   create_page_control(SettingsPage::launch, L"STATIC", L"Показывать списков в меню:", 0,
       24, 416, 220, 20, 0, text_font);

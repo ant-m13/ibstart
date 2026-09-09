@@ -21,6 +21,9 @@
 #include <utility>
 
 namespace ibstart::storage {
+
+void EnsureProfileDirectory(const std::filesystem::path& path);
+
 namespace {
 
 std::filesystem::path PathFor(const StorageLayout& layout, std::wstring_view name) {
@@ -499,7 +502,6 @@ Settings ParseSettings(std::string_view contents) {
     }
     if (const auto version = json::ObjectString(*root, "default_platform_version")) result.default_platform_version = *version;
     if (const auto confirm = json::ObjectInt(*root, "confirm_destructive_actions")) result.confirm_destructive_actions = *confirm != 0;
-    if (const auto confirm = json::ObjectInt(*root, "confirm_secret_launch")) result.confirm_secret_launch = *confirm != 0;
     if (const auto details = json::ObjectInt(*root, "show_details_panel")) result.show_details_panel = *details != 0;
     if (const auto status = json::ObjectInt(*root, "show_status_bar")) result.show_status_bar = *status != 0;
     if (const auto density = json::ObjectInt(*root, "tree_density")) result.tree_density = std::clamp(*density, 0, 2);
@@ -682,7 +684,6 @@ std::string SerializeSettings(const Settings& settings) {
   json += "  \"default_architecture\": " + std::to_string(ClientArchitectureSettingValue(settings.default_architecture)) + ",\n";
   json += "  \"default_platform_version\": \"" + json::Escape(settings.default_platform_version) + "\",\n";
   json += "  \"confirm_destructive_actions\": " + std::string(settings.confirm_destructive_actions ? "1" : "0") + ",\n";
-  json += "  \"confirm_secret_launch\": " + std::string(settings.confirm_secret_launch ? "1" : "0") + ",\n";
   json += "  \"show_details_panel\": " + std::string(settings.show_details_panel ? "1" : "0") + ",\n";
   json += "  \"show_status_bar\": " + std::string(settings.show_status_bar ? "1" : "0") + ",\n";
   json += "  \"tree_density\": " + std::to_string(std::clamp(settings.tree_density, 0, 2)) + ",\n";
@@ -845,7 +846,6 @@ void MergeChangedSettings(Settings& target, const Settings& baseline, const Sett
   if (requested.default_architecture != baseline.default_architecture) target.default_architecture = requested.default_architecture;
   if (requested.default_platform_version != baseline.default_platform_version) target.default_platform_version = requested.default_platform_version;
   if (requested.confirm_destructive_actions != baseline.confirm_destructive_actions) target.confirm_destructive_actions = requested.confirm_destructive_actions;
-  if (requested.confirm_secret_launch != baseline.confirm_secret_launch) target.confirm_secret_launch = requested.confirm_secret_launch;
   if (requested.show_details_panel != baseline.show_details_panel) target.show_details_panel = requested.show_details_panel;
   if (requested.show_status_bar != baseline.show_status_bar) target.show_status_bar = requested.show_status_bar;
   if (requested.tree_density != baseline.tree_density) target.tree_density = std::clamp(requested.tree_density, 0, 2);

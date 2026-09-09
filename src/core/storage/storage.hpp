@@ -66,7 +66,6 @@ struct Settings {
   domain::ClientArchitecture default_architecture{domain::ClientArchitecture::automatic};
   std::wstring default_platform_version;
   bool confirm_destructive_actions{true};
-  bool confirm_secret_launch{true};
   bool show_details_panel{true};
   bool show_status_bar{true};
   int tree_density{1};
