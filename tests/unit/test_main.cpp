@@ -792,6 +792,18 @@ void TestPlatformDiscoveryLargeVersions() {
   CHECK(largerPosition != discovered.end());
   if (smallerPosition != discovered.end() && largerPosition != discovered.end()) CHECK(largerPosition < smallerPosition);
 
+  const auto first_root = root / L"first" / L"8.3.27" / L"bin";
+  const auto second_root = root / L"second" / L"8.3.27" / L"bin";
+  std::filesystem::create_directories(first_root);
+  std::filesystem::create_directories(second_root);
+  if (CopySystemExecutable(first_root / L"1cv8.exe") && CopySystemExecutable(second_root / L"1cv8.exe")) {
+    const auto priority_discovered = ibstart::platform::Discover({root / L"second", root / L"first"}, false);
+    ibstart::domain::LaunchOptions priority_options;
+    priority_options.version = L"8.3.27";
+    const auto selected = ibstart::launcher::SelectPlatform(priority_discovered, priority_options);
+    CHECK(selected && selected->executable == second_root / L"1cv8.exe");
+  }
+
   std::error_code error;
   std::filesystem::remove_all(root, error);
 }
