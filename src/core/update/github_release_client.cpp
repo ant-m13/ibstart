@@ -5,7 +5,6 @@
 #include <Windows.h>
 #include <winhttp.h>
 
-#include <algorithm>
 #include <array>
 #include <condition_variable>
 #include <cstddef>
@@ -63,7 +62,6 @@ class InternetHandle {
 enum class CompletionKind {
   send_request,
   headers_available,
-  data_available,
   read_complete,
   request_error,
 };
@@ -109,15 +107,6 @@ void CALLBACK AsyncStatusCallback(HINTERNET, DWORD_PTR context, DWORD status,
         break;
       case WINHTTP_CALLBACK_STATUS_HEADERS_AVAILABLE:
         completion.kind = CompletionKind::headers_available;
-        break;
-      case WINHTTP_CALLBACK_STATUS_DATA_AVAILABLE:
-        completion.kind = CompletionKind::data_available;
-        if (!status_information || status_information_length < sizeof(DWORD)) {
-          completion.kind = CompletionKind::request_error;
-          completion.error = ERROR_WINHTTP_INTERNAL_ERROR;
-        } else {
-          completion.value = *static_cast<const DWORD*>(status_information);
-        }
         break;
       case WINHTTP_CALLBACK_STATUS_READ_COMPLETE:
         completion.kind = CompletionKind::read_complete;
@@ -248,26 +237,17 @@ bool StartAsyncOperation(const std::shared_ptr<AsyncRequestState>& state,
           throw std::runtime_error("GitHub version asset returned HTTP status " +
               std::to_string(*status) + ".");
         }
-        if (!StartAsyncOperation(state, "WinHttpQueryDataAvailable", [](HINTERNET request) {
-              return WinHttpQueryDataAvailable(request, nullptr);
+        // Read directly into the fixed-size buffer. WinHTTP can complete a
+        // direct read asynchronously and reports EOF as a zero-length
+        // READ_COMPLETE, so no availability snapshot can race the read.
+        if (!StartAsyncOperation(state, "WinHttpReadData", [state](HINTERNET request) {
+              return WinHttpReadData(request, state->read_buffer.data(),
+                  static_cast<DWORD>(state->read_buffer.size()), nullptr);
             })) {
           return std::nullopt;
         }
         break;
       }
-
-      case CompletionKind::data_available:
-        if (completion->value == 0) return response;
-        if (completion->value > kMaximumResponseSize - response.size()) {
-          throw std::runtime_error("GitHub version asset exceeds the 1 MiB safety limit.");
-        }
-        if (!StartAsyncOperation(state, "WinHttpReadData", [state, read_size = std::min<DWORD>(
-                completion->value, static_cast<DWORD>(state->read_buffer.size()))](HINTERNET request) {
-              return WinHttpReadData(request, state->read_buffer.data(), read_size, nullptr);
-            })) {
-          return std::nullopt;
-        }
-        break;
 
       case CompletionKind::read_complete:
         if (completion->value == 0) return response;
@@ -276,8 +256,9 @@ bool StartAsyncOperation(const std::shared_ptr<AsyncRequestState>& state,
           throw std::runtime_error("GitHub version asset exceeds the 1 MiB safety limit.");
         }
         response.append(state->read_buffer.data(), completion->value);
-        if (!StartAsyncOperation(state, "WinHttpQueryDataAvailable", [](HINTERNET request) {
-              return WinHttpQueryDataAvailable(request, nullptr);
+        if (!StartAsyncOperation(state, "WinHttpReadData", [state](HINTERNET request) {
+              return WinHttpReadData(request, state->read_buffer.data(),
+                  static_cast<DWORD>(state->read_buffer.size()), nullptr);
             })) {
           return std::nullopt;
         }
