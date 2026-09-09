@@ -2136,6 +2136,9 @@ void TestProfileTransfer() {
   expect_export_rejected(source.root);
   expect_export_rejected(source.root / L".");
   expect_export_rejected(source.root.parent_path() / L"SOURCE");
+  CHECK(ibstart::storage::IsSameProfilePath(source.root, source.root / L"."));
+  CHECK(ibstart::storage::IsSameProfilePath(source.root, source.root.parent_path() / L"SOURCE"));
+  CHECK(!ibstart::storage::IsSameProfilePath(source.root, target.root));
   CHECK(ibstart::storage::LoadSettings(source).credentials == source_settings.credentials);
 
   ibstart::storage::ExportProfile(source, target.root, false);
