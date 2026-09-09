@@ -1738,6 +1738,8 @@ void TestSecretMasking() {
       L"1cv8.exe", {L"ENTERPRISE", L"/WS", L"https://example.test/?AccessToken=url-token&UC=url-code"}};
   const ibstart::domain::LaunchCommand webUserInfoSecret{
       L"1cv8.exe", {L"ENTERPRISE", L"/WS", L"https://login:url-password@example.test/base"}};
+  const ibstart::domain::LaunchCommand browserUserInfoSecret{
+      L"", {L"/WS", L"https://login:url-password@example.test/base"}};
   const ibstart::domain::LaunchCommand connectionSecret{
       L"1cv8.exe", {L"ENTERPRISE", L"/IBConnection", L"DBSrvr=\"srv\";Pwd = \"alpha\""}};
   const ibstart::domain::LaunchCommand connectionWithoutSecret{
@@ -1755,6 +1757,7 @@ void TestSecretMasking() {
   CHECK(redactedWeb.find(L"url-code") == std::wstring::npos);
   CHECK(redactedWeb.find(L"AccessToken=***") != std::wstring::npos);
   CHECK(ibstart::logging::ContainsSecretArguments(webUserInfoSecret));
+  CHECK(ibstart::logging::ContainsSecretArguments(browserUserInfoSecret));
   const auto redactedWebUserInfo = ibstart::logging::RedactedCommandLine(webUserInfoSecret);
   CHECK(redactedWebUserInfo.find(L"login") == std::wstring::npos);
   CHECK(redactedWebUserInfo.find(L"url-password") == std::wstring::npos);
