@@ -10,6 +10,7 @@
 #include <shellapi.h>
 
 #include <filesystem>
+#include <iterator>
 #include <optional>
 #include <stdexcept>
 #include <string>
@@ -34,6 +35,26 @@ std::wstring ErrorText(const std::exception& error) noexcept {
     const std::string_view bytes(error.what());
     return std::wstring(bytes.begin(), bytes.end());
   }
+}
+
+HWND FindProfileWindow(std::uint64_t identity) {
+  struct Search {
+    std::uint64_t identity{};
+    HWND window{};
+  } search{identity};
+  EnumWindows([](HWND window, LPARAM parameter) -> BOOL {
+    auto& search = *reinterpret_cast<Search*>(parameter);
+    wchar_t class_name[64]{};
+    if (GetClassNameW(window, class_name, static_cast<int>(std::size(class_name))) == 0 ||
+        _wcsicmp(class_name, L"IBStart.MainWindow") != 0) {
+      return TRUE;
+    }
+    const auto value = reinterpret_cast<ULONG_PTR>(GetPropW(window, ibstart::app::kProfileIdentityProperty));
+    if (value != static_cast<ULONG_PTR>(search.identity)) return TRUE;
+    search.window = window;
+    return FALSE;
+  }, reinterpret_cast<LPARAM>(&search));
+  return search.window;
 }
 }
 
@@ -71,7 +92,10 @@ int APIENTRY wWinMain(HINSTANCE instance, HINSTANCE, PWSTR, int show_command) {
   }
   if (alreadyExists) {
     HWND existing = nullptr;
-    for (unsigned attempt = 0; attempt != 150 && !existing; ++attempt) { existing = FindWindowW(L"IBStart.MainWindow", nullptr); if (!existing) Sleep(10); }
+    for (unsigned attempt = 0; attempt != 150 && !existing; ++attempt) {
+      existing = FindProfileWindow(ibstart::storage::InstanceIdentity(layout));
+      if (!existing) Sleep(10);
+    }
     if (existing) {
       if (launchId) {
         COPYDATASTRUCT data{};
