@@ -10,6 +10,10 @@ inline constexpr ULONG_PTR kLaunchCopyData = 0x49425354;
 inline constexpr wchar_t kProfileIdentityProperty[] = L"IBStart.ProfileIdentity";
 inline constexpr std::size_t kMaximumLaunchIdLength = 256;
 
+constexpr bool ShouldLoadCatalogOnStartup(bool open_last_list, bool has_initial_launch) noexcept {
+  return open_last_list || has_initial_launch;
+}
+
 constexpr bool IsValidLaunchIdLength(std::size_t length) noexcept {
   return length <= kMaximumLaunchIdLength;
 }

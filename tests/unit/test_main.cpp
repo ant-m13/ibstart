@@ -1083,6 +1083,9 @@ void TestCatalogSortChildrenByName() {
 }
 
 void TestInstanceActivationPayload() {
+  CHECK(ibstart::app::ShouldLoadCatalogOnStartup(true, false));
+  CHECK(ibstart::app::ShouldLoadCatalogOnStartup(false, true));
+  CHECK(!ibstart::app::ShouldLoadCatalogOnStartup(false, false));
   const wchar_t valid[] = L"database-id";
   COPYDATASTRUCT data{};
   data.dwData = ibstart::app::kLaunchCopyData;
