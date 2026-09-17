@@ -95,8 +95,8 @@ UINT ContextMenuController::ShowTree(HWND owner, POINT screen, const TreeContext
 
   if (state.simple_mode) {
     if (state.sort_target) {
-      append(true, false, kSortAscending, 0, L"Сортировать по возрастанию");
-      append(true, false, kSortDescending, 0, L"Сортировать по убыванию");
+      append(state.cache_operation_available, false, kSortAscending, 0, L"Сортировать по возрастанию");
+      append(state.cache_operation_available, false, kSortDescending, 0, L"Сортировать по убыванию");
       return Track(owner, menu, screen);
     }
     if (state.database) {
@@ -105,12 +105,12 @@ UINT ContextMenuController::ShowTree(HWND owner, POINT screen, const TreeContext
       append(state.launch_available, false, kLaunchWithParameters, 0,
           L"Запуск с параметрами…");
       separator();
-      append(true, false, kEdit, IDI_ACTION_EDIT, L"Изменить…", L"F2");
-      append(true, false, kDelete, IDI_ACTION_DELETE, L"Удалить…", L"Alt+Shift+Del");
+      append(state.cache_operation_available, false, kEdit, IDI_ACTION_EDIT, L"Изменить…", L"F2");
+      append(state.cache_operation_available, false, kDelete, IDI_ACTION_DELETE, L"Удалить…", L"Alt+Shift+Del");
       separator();
-      append(true, false, kMoveToFolder, IDI_TREE_FOLDER, L"Переместить в папку…");
-      append(true, false, kMoveUp, 0, L"Переместить вверх", L"Ctrl+Shift+Up");
-      append(true, false, kMoveDown, 0, L"Переместить вниз", L"Ctrl+Shift+Down");
+      append(state.cache_operation_available, false, kMoveToFolder, IDI_TREE_FOLDER, L"Переместить в папку…");
+      append(state.cache_operation_available, false, kMoveUp, 0, L"Переместить вверх", L"Ctrl+Shift+Up");
+      append(state.cache_operation_available, false, kMoveDown, 0, L"Переместить вниз", L"Ctrl+Shift+Down");
     } else {
       DestroyMenu(menu);
       items_.Clear();
@@ -147,7 +147,12 @@ UINT ContextMenuController::ShowTree(HWND owner, POINT screen, const TreeContext
       }
     }
     append(state.editable, false, kEdit, IDI_ACTION_EDIT, L"Изменить…", L"F2");
-    append(state.database, false, kCache, IDI_ACTION_CACHE, L"Очистить кэш…", L"Ctrl+Shift+Del");
+    append(state.database && state.cache_operation_available, false, kCache, IDI_ACTION_CACHE,
+        L"Очистить кэш…", L"Ctrl+Shift+Del");
+    append(state.database && state.cache_operation_available, false, kCacheSize, IDI_ACTION_CACHE_SIZE,
+        L"Пересчитать размер кэша");
+    append(state.group && state.cache_operation_available, false, kCacheSizeFolder, IDI_ACTION_CACHE_SIZE,
+        L"Пересчитать размеры кэша в папке и подпапках");
     append(state.database, false, kShortcut, IDI_ACTION_SHORTCUT, L"Создать ярлык", L"Ctrl+Shift+S");
     append(state.file, false, kOpenFolder, IDI_TREE_FOLDER, L"Открыть папку", L"Ctrl+Shift+O");
     append(state.recent_root, false, kClearRecent, IDI_ACTION_DELETE, L"Очистить недавние базы…");
@@ -161,20 +166,22 @@ UINT ContextMenuController::ShowTree(HWND owner, POINT screen, const TreeContext
       append(state.editable && !state.recent_root, false, kDelete, IDI_ACTION_DELETE, L"Удалить…", L"Alt+Shift+Del");
     }
   }
+  append(state.catalog_root && state.cache_operation_available, false, kCacheSizeAll, IDI_ACTION_CACHE_SIZE,
+      L"Пересчитать размеры кэша всех баз");
   if (state.sort_target) {
     if (!state.catalog_root) separator();
-    append(true, false, kSortAscending, 0, L"Сортировать по возрастанию");
-    append(true, false, kSortDescending, 0, L"Сортировать по убыванию");
+    append(state.cache_operation_available, false, kSortAscending, 0, L"Сортировать по возрастанию");
+    append(state.cache_operation_available, false, kSortDescending, 0, L"Сортировать по убыванию");
   }
   separator();
   const bool can_add = !state.simple_mode && !state.recent_root &&
       (state.catalog_root || state.group || state.database);
-  append(can_add, false, kAddDatabase, IDI_ACTION_ADD,
+  append(can_add && state.cache_operation_available, false, kAddDatabase, IDI_ACTION_ADD,
       state.group ? L"Добавить базу в группу…" : L"Добавить базу…", L"Ctrl+Alt+F");
-  append(can_add, false, kAddGroup, IDI_TREE_FOLDER,
+  append(can_add && state.cache_operation_available, false, kAddGroup, IDI_TREE_FOLDER,
       state.group ? L"Добавить вложенную группу…" : L"Добавить группу…", L"Ctrl+Alt+G");
   separator();
-  append(true, false, kRefresh, IDI_ACTION_REFRESH, L"Обновить список", L"F5");
+  append(state.cache_operation_available, false, kRefresh, IDI_ACTION_REFRESH, L"Обновить список", L"F5");
   return Track(owner, menu, screen);
 }
 

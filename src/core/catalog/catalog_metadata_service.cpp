@@ -130,8 +130,10 @@ bool CatalogMetadataService::ToggleFavorite(std::wstring database_id, std::wstri
 }
 
 void CatalogMetadataService::RenameDatabaseMetadata(std::wstring previous_name, std::wstring updated_name,
-    std::wstring previous_tag_id, std::wstring updated_tag_id) {
-  if (previous_name == updated_name && EqualNoCase(previous_tag_id, updated_tag_id)) return;
+    std::wstring previous_tag_id, std::wstring updated_tag_id,
+    std::wstring previous_connect, std::wstring updated_connect) {
+  const bool connection_changed = previous_connect != updated_connect;
+  if (previous_name == updated_name && EqualNoCase(previous_tag_id, updated_tag_id) && !connection_changed) return;
   repository_.Update([&](storage::CatalogState& state) {
     if (previous_name != updated_name || !EqualNoCase(previous_tag_id, updated_tag_id)) {
       for (auto& favorite : state.favorites) {
@@ -143,6 +145,18 @@ void CatalogMetadataService::RenameDatabaseMetadata(std::wstring previous_name, 
     }
     if (!EqualNoCase(previous_tag_id, updated_tag_id)) {
       MergeTagAssignments(state.tags, previous_tag_id, updated_tag_id);
+      // A changed stable ID identifies a different database.  Do not carry a
+      // cache measurement across that boundary; an explicit ID change and a
+      // fallback name change both arrive here.
+      state.database_metrics.erase(previous_tag_id);
+      state.database_metrics.erase(updated_tag_id);
+    }
+    if (connection_changed) {
+      // Connect can point the same catalog record at another information
+      // base.  The stable ID is not sufficient to reuse a local measurement
+      // in that case.
+      state.database_metrics.erase(previous_tag_id);
+      state.database_metrics.erase(updated_tag_id);
     }
     // A database without an explicit ID uses its name as the metadata key. A
     // name change therefore changes the key, while an explicit ID remains
@@ -183,6 +197,25 @@ bool CatalogMetadataService::RemoveTags(std::wstring_view database_id) {
   bool removed = false;
   repository_.Update([&](storage::CatalogState& state) { removed = state.tags.erase(id) != 0; });
   return removed;
+}
+
+void CatalogMetadataService::SetCacheMetric(std::wstring database_id, storage::CacheMetric metric) {
+  if (database_id.empty()) return;
+  repository_.Update([&](storage::CatalogState& state) {
+    state.database_metrics[std::move(database_id)].cache = metric;
+  });
+}
+
+void CatalogMetadataService::RemoveCacheMetric(std::wstring_view database_id) {
+  if (database_id.empty()) return;
+  const std::wstring id(database_id);
+  repository_.Update([&](storage::CatalogState& state) {
+    state.database_metrics.erase(id);
+  });
+}
+
+void CatalogMetadataService::InvalidateCacheMetric(std::wstring_view database_id) {
+  RemoveCacheMetric(database_id);
 }
 
 void CatalogMetadataService::ReplaceTagConfiguration(storage::DatabaseTags tags, storage::TagStyles styles) {

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstddef>
+#include <cstdint>
 #include <functional>
 #include <optional>
 #include <string>
@@ -29,6 +30,7 @@ using Object = std::vector<Property>;
 [[nodiscard]] const Value* ObjectValue(const Object& object, std::string_view key);
 [[nodiscard]] std::optional<std::wstring> ObjectString(const Object& object, std::string_view key);
 [[nodiscard]] std::optional<long long> ObjectInteger(const Object& object, std::string_view key);
+[[nodiscard]] std::optional<std::uintmax_t> ObjectUnsigned(const Object& object, std::string_view key);
 [[nodiscard]] std::optional<int> ObjectInt(const Object& object, std::string_view key);
 [[nodiscard]] std::optional<std::vector<std::wstring>> StringArray(const Value* value);
 [[nodiscard]] std::optional<std::vector<Object>> ObjectArray(const Value* value);

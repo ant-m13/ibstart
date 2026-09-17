@@ -8,6 +8,7 @@
 #include "core/credentials/credentials.hpp"
 #include "core/v8i/v8i_file_store.hpp"
 #include "ui/cache_clear_operation.hpp"
+#include "ui/cache_size_operation.hpp"
 #include "ui/command_dispatcher.hpp"
 #include "ui/context_menu_controller.hpp"
 #include "ui/details_view_controller.hpp"
@@ -97,6 +98,14 @@ class MainWindow {
   void MoveSelected(int offset);
   void MoveSelectedToFolder();
   void ClearSelectedCache();
+  void CalculateSelectedCacheSize();
+  void CalculateAllCacheSizes();
+  void CalculateCacheSizesInFolder();
+  void ToggleCacheSizeDisplay();
+  void StartCacheSizeCalculation(std::vector<domain::Database> databases);
+  void CompleteCacheSizeOperation();
+  [[nodiscard]] std::vector<domain::Database> DatabasesForCacheFolder(std::wstring_view folder) const;
+  [[nodiscard]] bool IsCacheOperationActive() const;
   [[nodiscard]] bool IsClearingCache() const;
   void ClearRecentBases();
   void RemoveRecentDatabase();
@@ -179,6 +188,11 @@ class MainWindow {
   DetailsViewController details_view_;
   background::UpdateCheckOperation update_check_;
   background::CacheClearOperation cache_operation_;
+  background::CacheSizeOperation cache_size_operation_;
+  std::size_t cache_size_failure_count_{};
+  std::size_t cache_size_persistence_failure_count_{};
+  std::size_t cache_size_total_{};
+  std::size_t cache_size_completed_{};
   std::wstring search_filter_;
   std::wstring dragging_name_;
   std::wstring drag_target_name_;

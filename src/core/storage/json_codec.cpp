@@ -238,6 +238,15 @@ std::optional<long long> ObjectInteger(const Object& object, std::string_view ke
   return result;
 }
 
+std::optional<std::uintmax_t> ObjectUnsigned(const Object& object, std::string_view key) {
+  const auto* value = ObjectValue(object, key);
+  if (!value || value->kind != ValueKind::scalar) return std::nullopt;
+  std::uintmax_t result{};
+  const auto [end, error] = std::from_chars(value->raw.data(), value->raw.data() + value->raw.size(), result);
+  if (error != std::errc{} || end != value->raw.data() + value->raw.size()) return std::nullopt;
+  return result;
+}
+
 std::optional<int> ObjectInt(const Object& object, std::string_view key) {
   const auto value = ObjectInteger(object, key);
   if (!value || *value < std::numeric_limits<int>::min() || *value > std::numeric_limits<int>::max()) return std::nullopt;

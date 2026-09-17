@@ -35,6 +35,7 @@
 #include <initializer_list>
 #include <iterator>
 #include <limits>
+#include <set>
 #include <sstream>
 #include <stdexcept>
 #include <string_view>
@@ -57,6 +58,7 @@ constexpr UINT kActivateMessage = WM_APP + 23;
 constexpr UINT kUpdateCheckFinishedMessage = WM_APP + 24;
 constexpr UINT kFocusShortcutSelectionMessage = WM_APP + 25;
 constexpr UINT kCacheOperationFinishedMessage = WM_APP + 26;
+constexpr UINT kCacheSizeOperationFinishedMessage = WM_APP + 27;
 constexpr UINT_PTR kBackgroundPollTimer = 1;
 constexpr UINT_PTR kSearchRefreshTimer = 2;
 constexpr UINT_PTR kRecentLaunchRefreshTimer = 3;
@@ -125,6 +127,20 @@ std::wstring TrimText(std::wstring_view value) {
   size_t last = value.size();
   while (last > first && std::iswspace(value[last - 1])) --last;
   return std::wstring(value.substr(first, last - first));
+}
+std::wstring NormalizeCatalogFolder(std::wstring value) {
+  while (value.size() > 1 && value.back() == L'/') value.pop_back();
+  if (value.empty()) return L"/";
+  if (value.front() != L'/') value.insert(value.begin(), L'/');
+  return value;
+}
+bool StartsWithNoCase(std::wstring_view value, std::wstring_view prefix) {
+  return value.size() >= prefix.size() &&
+      CompareStringOrdinal(value.data(), static_cast<int>(prefix.size()), prefix.data(),
+          static_cast<int>(prefix.size()), TRUE) == CSTR_EQUAL;
+}
+std::wstring StableDatabaseId(const domain::Database& database) {
+  return database.id.empty() ? database.name : database.id;
 }
 std::wstring ReadWindowText(HWND control) {
   if (!control) return {};
@@ -197,6 +213,10 @@ void MainWindow::RegisterCommandHandlers() {
   command_dispatcher_.Register(kRefresh, [this] { LoadCatalog(); });
   command_dispatcher_.Register(kEdit, [this] { EditSelected(); });
   command_dispatcher_.Register(kCache, [this] { ClearSelectedCache(); });
+  command_dispatcher_.Register(kCacheSize, [this] { CalculateSelectedCacheSize(); });
+  command_dispatcher_.Register(kCacheSizeAll, [this] { CalculateAllCacheSizes(); });
+  command_dispatcher_.Register(kCacheSizeFolder, [this] { CalculateCacheSizesInFolder(); });
+  command_dispatcher_.Register(kShowCacheSizeInList, [this] { ToggleCacheSizeDisplay(); });
   command_dispatcher_.Register(kClearRecent, [this] { ClearRecentBases(); });
   command_dispatcher_.Register(kRemoveRecentDatabase, [this] { RemoveRecentDatabase(); });
   command_dispatcher_.Register(kShortcut, [this] { CreateShortcut(); });
@@ -245,11 +265,12 @@ MainWindow::~MainWindow() {
 void MainWindow::StopAndJoinBackgroundThreads() noexcept {
   update_check_.StopAndJoin();
   cache_operation_.StopAndJoin();
+  cache_size_operation_.StopAndJoin();
 }
 
 bool MainWindow::RefreshBackgroundPolling() {
   if (!window_ || !IsWindow(window_)) return false;
-  if (update_check_.active() || cache_operation_.active()) {
+  if (update_check_.active() || cache_operation_.active() || cache_size_operation_.active()) {
     return SetTimer(window_, kBackgroundPollTimer, kBackgroundPollIntervalMilliseconds, nullptr) != 0;
   }
   KillTimer(window_, kBackgroundPollTimer);
@@ -259,6 +280,7 @@ bool MainWindow::RefreshBackgroundPolling() {
 void MainWindow::PollBackgroundOperations() {
   if (update_check_.completed()) CompleteUpdateCheck();
   if (!window_) return;
+  if (cache_size_operation_.active()) CompleteCacheSizeOperation();
   if (cache_operation_.completed()) CompleteCacheOperation();
 }
 
@@ -267,7 +289,8 @@ void MainWindow::BeginClose() {
   closing_ = true;
   update_check_.RequestStop();
   cache_operation_.RequestStop();
-  if (update_check_.active() || cache_operation_.active()) {
+  cache_size_operation_.RequestStop();
+  if (update_check_.active() || cache_operation_.active() || cache_size_operation_.active()) {
     ShowWindow(window_, SW_HIDE);
     if (!RefreshBackgroundPolling()) {
       StopAndJoinBackgroundThreads();
@@ -277,7 +300,7 @@ void MainWindow::BeginClose() {
 }
 
 void MainWindow::TryFinishClose() {
-  if (!closing_ || update_check_.active() || cache_operation_.active()) return;
+  if (!closing_ || update_check_.active() || cache_operation_.active() || cache_size_operation_.active()) return;
   if (!window_ || !IsWindow(window_)) return;
   KillTimer(window_, kBackgroundPollTimer);
   settings_.selected_entry = SelectedCatalogName();
@@ -525,6 +548,7 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
       return 0;
     case kUpdateCheckFinishedMessage: CompleteUpdateCheck(); return 0;
     case kCacheOperationFinishedMessage: CompleteCacheOperation(); return 0;
+    case kCacheSizeOperationFinishedMessage: CompleteCacheSizeOperation(); return 0;
     case kFocusShortcutSelectionMessage:
       if (tree_) SetFocus(tree_);
       return 0;
@@ -798,6 +822,10 @@ bool MainWindow::DrawSearchClearButton(const DRAWITEMSTRUCT* draw) const {
 }
 
 void MainWindow::LoadCatalog(bool report_error, bool startup_load) {
+  if (!startup_load && IsCacheOperationActive()) {
+    SetStatus(L"Обновление списка недоступно во время операции с кэшем.");
+    return;
+  }
   const auto selected_database = CaptureDatabaseSelection();
   const bool had_tree_selection = tree_ && TreeView_GetSelection(tree_);
   const bool hasInitialLaunch = initial_launch_id_.has_value();
@@ -884,6 +912,10 @@ bool MainWindow::EnsureCatalogValid(const catalog::Catalog& value, std::wstring_
 }
 
 bool MainWindow::SaveCatalog(catalog::Catalog candidate) {
+  if (IsCacheOperationActive()) {
+    SetStatus(L"Изменение списка недоступно во время операции с кэшем.");
+    return false;
+  }
   if (!EnsureCatalogValid(candidate, L"сохранение списка баз")) return false;
   auto target = store_ ? store_->path() : settings_.active_ibases;
   bool overwriteConfirmed = false;
@@ -1108,7 +1140,8 @@ std::wstring MainWindow::SelectedCatalogName() const {
 LRESULT MainWindow::DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const {
   const auto& state = catalog_state_.Read();
   return presentation::DrawTreeSearchMatches(tree_, draw, catalog_ ? &*catalog_ : nullptr, settings_,
-      state.tags, state.tag_styles, state.history, TreeViewController::kRecentRootItemData,
+      state.tags, state.database_metrics, state.tag_styles, state.history,
+      TreeViewController::kRecentRootItemData,
       search_filter_, controls_font_, controls_bold_font_);
 }
 bool MainWindow::MeasureContextMenuItem(MEASUREITEMSTRUCT* measure) const {
@@ -1338,9 +1371,10 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
   }
   const bool database = entry && entry->IsDatabase();
   const bool web = database && catalog::Catalog::IsWebConnection(entry->ValueOr(L"Connect"));
-  const bool launch_available = database && !cache_operation_.active();
+  const bool cache_operation_available = !IsCacheOperationActive();
+  const bool launch_available = database && cache_operation_available;
   const bool group = entry && entry->IsGroup();
-  const bool editable = entry && !settings_.simple_mode;
+  const bool editable = entry && !settings_.simple_mode && cache_operation_available;
   const bool file = database && !connection::ValueOrEmpty(entry->ValueOr(L"Connect"), L"File").empty();
   const std::wstring addParent = group ? entry->name : entry ? catalog_->ParentOf(entry->name) : std::wstring();
   const bool sortTarget = catalogRoot || group;
@@ -1357,7 +1391,8 @@ void MainWindow::ShowTreeContextMenu(POINT screen) {
     }
   }
   const TreeContextMenuState state{
-      settings_.simple_mode, sortTarget, catalogRoot, database, web, launch_available, group,
+      settings_.simple_mode, sortTarget, catalogRoot, database, web, launch_available,
+      cache_operation_available, group,
       editable, file, recentRoot, recentItem, favorite, addParent, sortParent, quick_tags};
   const UINT command = context_menus_.ShowTree(window_, screen, state);
   if (!command) return;
@@ -1383,11 +1418,11 @@ void MainWindow::DisplaySelected() {
   const auto selected_index = selected_entry ? tree_view_.SelectedSectionIndex() : std::nullopt;
   details_view_.Display(catalog_ ? &*catalog_ : nullptr, &catalog_state_, selected_name,
       selected_index, selected_data == TreeViewController::kCatalogRootItemData, settings_.simple_mode,
-      cache_operation_.active());
+      IsCacheOperationActive());
 }
 
 void MainWindow::LaunchSelected(domain::LaunchMode mode) {
-  if (cache_operation_.active()) {
+  if (IsCacheOperationActive()) {
     SetStatus(L"Запуск базы недоступен до завершения операции с кэшем.");
     return;
   }
@@ -1737,12 +1772,14 @@ void MainWindow::EditSelected() {
       Message(window_, L"База переименована, но учётные записи не удалось обновить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
     }
   }
-  if (selected != edited->name || !domain::EqualIdentifier(previousTagId, updatedTagId)) {
+  const bool connectionChanged = before.ValueOr(L"Connect") != after.ValueOr(L"Connect");
+  if (selected != edited->name || !domain::EqualIdentifier(previousTagId, updatedTagId) || connectionChanged) {
     try {
-      catalog_state_.RenameDatabaseMetadata(selected, edited->name, previousTagId, updatedTagId);
+      catalog_state_.RenameDatabaseMetadata(selected, edited->name, previousTagId, updatedTagId,
+          before.ValueOr(L"Connect"), after.ValueOr(L"Connect"));
     } catch (const std::exception& error) {
       logger_.Error(L"Ошибка обновления метаданных после переименования: " + ibstart::utf::FromUtf8(error.what()));
-      Message(window_, L"База переименована, но её избранное или теги не удалось сохранить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
+      Message(window_, L"База переименована, но её метаданные не удалось сохранить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
     }
   }
   RefreshTagFilter();
@@ -1942,6 +1979,18 @@ void MainWindow::DeleteSelected() {
   const std::wstring name = entry->name;
   if (settings_.simple_mode && !entry->IsDatabase()) return;
   const auto tagId = entry->IsDatabase() ? TagId(*entry) : std::wstring();
+  std::vector<std::wstring> cache_metric_ids;
+  if (!tagId.empty()) {
+    cache_metric_ids.push_back(tagId);
+  } else if (entry->IsGroup()) {
+    for (const auto& database : DatabasesForCacheFolder(name)) {
+      const auto database_id = StableDatabaseId(database);
+      if (!database_id.empty() && std::none_of(cache_metric_ids.begin(), cache_metric_ids.end(),
+          [&](const auto& existing) { return domain::EqualIdentifier(existing, database_id); })) {
+        cache_metric_ids.push_back(database_id);
+      }
+    }
+  }
   const auto item = entry->IsDatabase() ? L"информационную базу" : L"группу";
   const auto message = L"Удалить " + std::wstring(item) + L" \"" + name + L"\" из списка.";
   if (settings_.confirm_destructive_actions && MessageBoxW(window_, message.c_str(), L"ИБ Старт", MB_YESNO) != IDYES) return;
@@ -1957,6 +2006,17 @@ void MainWindow::DeleteSelected() {
     } catch (const std::exception& error) {
       logger_.Error(L"Ошибка удаления тегов: " + ibstart::utf::FromUtf8(error.what()));
       Message(window_, L"База удалена из списка, но её теги не удалось удалить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
+    }
+  }
+  if (!cache_metric_ids.empty()) {
+    try {
+      for (const auto& database_id : cache_metric_ids) catalog_state_.RemoveCacheMetric(database_id);
+    } catch (const std::exception& error) {
+      logger_.Error(L"Ошибка удаления размера кэша: " + ibstart::utf::FromUtf8(error.what()));
+      Message(window_, L"Запись удалена из списка, но её размер кэша не удалось удалить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
+    } catch (...) {
+      logger_.Error(L"Ошибка удаления размера кэша из-за неизвестной ошибки.");
+      Message(window_, L"Запись удалена из списка, но её размер кэша не удалось удалить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
     }
   }
   RefreshTagFilter();
@@ -2017,7 +2077,7 @@ void MainWindow::MoveSelectedToFolder() {
 }
 void MainWindow::ClearSelectedCache() {
   if (settings_.simple_mode || !catalog_) return;
-  if (cache_operation_.active()) {
+  if (IsCacheOperationActive()) {
     SetStatus(L"Операция с кэшем уже выполняется…");
     return;
   }
@@ -2046,6 +2106,133 @@ void MainWindow::ClearSelectedCache() {
     Message(window_, L"Выберите базу для очистки кэша.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
   }
 }
+
+std::vector<domain::Database> MainWindow::DatabasesForCacheFolder(std::wstring_view folder) const {
+  std::vector<domain::Database> result;
+  if (!catalog_) return result;
+
+  std::wstring folder_prefix;
+  if (!folder.empty()) {
+    const auto* group = catalog_->Find(folder);
+    if (!group || !group->IsGroup()) return result;
+    const auto parent = NormalizeCatalogFolder(group->ValueOr(L"Folder"));
+    folder_prefix = parent == L"/" ? L"/" + group->name : parent + L"/" + group->name;
+  }
+
+  std::set<std::wstring, domain::IdentifierLess> seen_ids;
+  for (const auto* entry : catalog_->Databases()) {
+    if (!entry) continue;
+    const auto database = catalog_->DatabaseFor(entry->name);
+    if (!folder_prefix.empty()) {
+      const auto parent = NormalizeCatalogFolder(database.folder);
+      const std::wstring descendant_prefix = folder_prefix + L"/";
+      if (!EqualNoCase(parent, folder_prefix) && !StartsWithNoCase(parent, descendant_prefix)) continue;
+    }
+    const auto database_id = StableDatabaseId(database);
+    if (database_id.empty() || !seen_ids.insert(database_id).second) continue;
+    result.push_back(database);
+  }
+  return result;
+}
+
+void MainWindow::StartCacheSizeCalculation(std::vector<domain::Database> databases) {
+  if (settings_.simple_mode || !catalog_) return;
+  if (IsCacheOperationActive()) {
+    SetStatus(L"Операция с кэшем уже выполняется…");
+    return;
+  }
+
+  std::vector<domain::Database> unique;
+  unique.reserve(databases.size());
+  std::set<std::wstring, domain::IdentifierLess> seen_ids;
+  for (auto& database : databases) {
+    const auto database_id = StableDatabaseId(database);
+    if (database_id.empty() || !seen_ids.insert(database_id).second) continue;
+    unique.push_back(std::move(database));
+  }
+  if (unique.empty()) {
+    SetStatus(L"Нет баз для пересчёта размеров кэша.");
+    return;
+  }
+
+  cache_size_failure_count_ = 0;
+  cache_size_persistence_failure_count_ = 0;
+  cache_size_total_ = unique.size();
+  cache_size_completed_ = 0;
+  try {
+    cache_size_operation_.Start(std::move(unique), window_, kCacheSizeOperationFinishedMessage);
+    DisplaySelected();
+    SetStatus(L"Пересчёт размеров кэша: 0 из " + std::to_wstring(cache_size_total_) + L"…");
+    static_cast<void>(RefreshBackgroundPolling());
+  } catch (const std::exception& error) {
+    logger_.Error(L"Не удалось запустить пересчёт размеров кэша: " + WideErrorText(error.what()));
+    SetStatus(L"Не удалось запустить пересчёт размеров кэша.");
+    Message(window_, L"Не удалось запустить фоновый пересчёт размеров кэша.",
+        L"Размер кэша", MB_OK | MB_ICONERROR);
+  } catch (...) {
+    SetStatus(L"Не удалось запустить пересчёт размеров кэша.");
+    Message(window_, L"Не удалось запустить фоновый пересчёт размеров кэша.",
+        L"Размер кэша", MB_OK | MB_ICONERROR);
+  }
+}
+
+void MainWindow::CalculateSelectedCacheSize() {
+  if (settings_.simple_mode || !catalog_) return;
+  if (IsCacheOperationActive()) {
+    SetStatus(L"Операция с кэшем уже выполняется…");
+    return;
+  }
+  const auto entry = SelectedCatalogEntry();
+  if (!entry || !entry->IsDatabase()) {
+    if (!entry) static_cast<void>(ResetStaleSelectionIfNeeded());
+    Message(window_, L"Выберите базу для пересчёта размера кэша.", L"Размер кэша", MB_OK | MB_ICONWARNING);
+    return;
+  }
+  StartCacheSizeCalculation({catalog_->DatabaseFor(entry->name)});
+}
+
+void MainWindow::CalculateAllCacheSizes() {
+  if (settings_.simple_mode || !catalog_) return;
+  if (!EnsureCatalogValid(*catalog_, L"пересчёта размеров кэша")) return;
+  StartCacheSizeCalculation(DatabasesForCacheFolder({}));
+}
+
+void MainWindow::CalculateCacheSizesInFolder() {
+  if (settings_.simple_mode || !catalog_) return;
+  if (IsCacheOperationActive()) {
+    SetStatus(L"Операция с кэшем уже выполняется…");
+    return;
+  }
+  const auto entry = SelectedCatalogEntry();
+  if (!entry || !entry->IsGroup()) {
+    if (!entry) static_cast<void>(ResetStaleSelectionIfNeeded());
+    Message(window_, L"Выберите папку для пересчёта размеров кэша.", L"Размер кэша", MB_OK | MB_ICONWARNING);
+    return;
+  }
+  if (!EnsureCatalogValid(*catalog_, L"пересчёта размеров кэша")) return;
+  StartCacheSizeCalculation(DatabasesForCacheFolder(entry->name));
+}
+
+void MainWindow::ToggleCacheSizeDisplay() {
+  if (settings_.simple_mode) return;
+  const bool previous = settings_.show_cache_size_in_list;
+  settings_.show_cache_size_in_list = !previous;
+  try {
+    PersistSettings(settings_);
+    RefreshMainMenuBar();
+    RedrawWindow(tree_, nullptr, nullptr, RDW_INVALIDATE | RDW_UPDATENOW);
+  } catch (const std::exception& error) {
+    settings_.show_cache_size_in_list = previous;
+    logger_.Error(L"Ошибка сохранения отображения размеров кэша: " + WideErrorText(error.what()));
+    Message(window_, L"Не удалось сохранить настройку отображения размеров кэша.",
+        L"Размер кэша", MB_OK | MB_ICONERROR);
+  }
+}
+
+bool MainWindow::IsCacheOperationActive() const {
+  return cache_operation_.active() || cache_size_operation_.active();
+}
+
 bool MainWindow::IsClearingCache() const {
   return cache_operation_.clearing();
 }
@@ -2106,6 +2293,10 @@ void MainWindow::PersistSettings(const storage::Settings& settings) {
   settings_ = settings_repository_.Read();
 }
 bool MainWindow::ActivateCatalog(const std::filesystem::path& path) {
+  if (IsCacheOperationActive()) {
+    SetStatus(L"Открытие списка недоступно во время операции с кэшем.");
+    return false;
+  }
   if (!EnsurePathLength(window_, path)) return false;
   auto loadedSettings = settings_;
   std::optional<catalog::CatalogSession> loadedSession;
@@ -2422,8 +2613,15 @@ void MainWindow::CompleteCacheOperation() {
     }
     if (completed->candidates.empty()) {
       DisplaySelected();
-      SetStatus(L"Безопасных каталогов кэша для этой базы не найдено.");
-      Message(window_, L"Безопасных каталогов кэша для этой базы не найдено.");
+      if (!completed->scan_result.complete) {
+        for (const auto& item : completed->scan_result.errors) logger_.Error(L"Ошибка анализа кэша: " + item);
+        SetStatus(L"Не удалось полностью проанализировать кэш.");
+        Message(window_, L"Не удалось полностью проанализировать кэш. Очистка не запущена; подробности — в журнале.",
+            L"Очистка кэша", MB_OK | MB_ICONWARNING);
+      } else {
+        SetStatus(L"Безопасных каталогов кэша для этой базы не найдено.");
+        Message(window_, L"Безопасных каталогов кэша для этой базы не найдено.");
+      }
       return;
     }
 
@@ -2433,7 +2631,13 @@ void MainWindow::CompleteCacheOperation() {
       totalBytes += item.bytes;
       list += item.path.wstring() + L" — " + cache::FormatSize(item.bytes) + L"\n";
     }
-    list += L"\nПримерный объём для очистки: " + cache::FormatSize(totalBytes) + L".\n";
+    list += std::wstring(L"\n") + (completed->scan_result.complete ? L"Объём для очистки: " : L"Примерный объём для очистки: ") +
+        cache::FormatSize(totalBytes) + L".\n";
+    if (!completed->scan_result.complete) {
+      list += L"\nВнимание: размер определён не полностью, потому что часть файлов или каталогов недоступна. "
+              L"Очистка затронет только безопасные найденные каталоги.\n";
+      for (const auto& item : completed->scan_result.errors) logger_.Error(L"Неполный анализ кэша: " + item);
+    }
     if (cache::HasActiveOneCProcess()) {
       list += L"\nОбнаружен работающий процесс 1С. Если он ещё не завершён, некоторые файлы кэша могут быть заняты, "
               L"поэтому очистка может быть неполной, а отдельные каталоги могут остаться.\n"
@@ -2445,10 +2649,27 @@ void MainWindow::CompleteCacheOperation() {
       return;
     }
 
-    SetStatus(L"Очищаем кэш…");
     try {
-      cache_operation_.StartClearing(
-          std::move(completed->candidates), window_, kCacheOperationFinishedMessage);
+      if (!completed->database) {
+        SetStatus(L"Не удалось определить базу для повторного расчёта кэша.");
+        return;
+      }
+      // Once the user has accepted the destructive action, the previous
+      // measurement no longer describes the cache.  Remove it before the
+      // worker starts; declining the dialog above deliberately keeps it.
+      if (catalog_state_.Read().database_metrics.contains(completed->database->id)) {
+        try {
+          catalog_state_.RemoveCacheMetric(completed->database->id);
+        } catch (const std::exception& error) {
+          logger_.Error(L"Не удалось инвалидировать размер кэша перед очисткой: " + WideErrorText(error.what()));
+        } catch (...) {
+          logger_.Error(L"Не удалось инвалидировать размер кэша перед очисткой из-за неизвестной ошибки.");
+        }
+        DisplaySelected();
+      }
+      SetStatus(L"Очищаем кэш…");
+      cache_operation_.StartClearing(std::move(completed->candidates), std::move(*completed->database),
+          window_, kCacheOperationFinishedMessage);
       static_cast<void>(RefreshBackgroundPolling());
     } catch (const std::exception& exception) {
       DisplaySelected();
@@ -2463,8 +2684,8 @@ void MainWindow::CompleteCacheOperation() {
     return;
   }
 
-  DisplaySelected();
   if (!completed->error.empty()) {
+    DisplaySelected();
     logger_.Error(L"Ошибка очистки кэша: " + completed->error);
     SetStatus(L"Не удалось очистить кэш.");
     Message(window_, L"Не удалось очистить кэш. Подробности — в журнале.", L"Очистка кэша", MB_OK | MB_ICONERROR);
@@ -2477,15 +2698,114 @@ void MainWindow::CompleteCacheOperation() {
       std::to_wstring(completed->clear_result.bytes) + L" (" + size + L")" +
       (activeOneCProcess ? L", обнаружен работающий процесс 1С" : L""));
   for (const auto& item : completed->clear_result.errors) logger_.Error(L"Ошибка очистки кэша: " + item);
-  SetStatus(hasErrors ? L"Кэш очищен с предупреждениями." : L"Кэш очищен.");
+  bool metric_persistence_failed = false;
+  bool partial_rescan = false;
+  std::wstring residual_text;
+  if (completed->database && completed->rescan_result && !completed->rescan_result->cancelled) {
+    const auto& rescan = *completed->rescan_result;
+    partial_rescan = !rescan.complete;
+    for (const auto& item : rescan.errors) logger_.Error(L"Неполный повторный анализ кэша: " + item);
+    const auto residual_size = cache::FormatSize(rescan.bytes);
+    residual_text = L"\nОстаток кэша: " + std::wstring(rescan.complete ? L"" : L"≈ ") + residual_size;
+    try {
+      catalog_state_.SetCacheMetric(completed->database->id,
+          storage::CacheMetric{rescan.bytes, std::chrono::system_clock::now(), rescan.complete});
+      logger_.Info(L"Повторный расчёт размера кэша: " + completed->database->name + L" — " +
+          (rescan.complete ? L"" : L"примерно ") + residual_size);
+    } catch (const std::exception& error) {
+      metric_persistence_failed = true;
+      logger_.Error(L"Кэш очищен, но размер кэша не удалось сохранить: " + WideErrorText(error.what()));
+    } catch (...) {
+      metric_persistence_failed = true;
+      logger_.Error(L"Кэш очищен, но размер кэша не удалось сохранить из-за неизвестной ошибки.");
+    }
+  }
+  if (completed->database && (!completed->rescan_result || completed->rescan_result->cancelled)) {
+    logger_.Error(L"После очистки кэш не удалось повторно просканировать: результат отсутствует или операция отменена.");
+    metric_persistence_failed = true;
+  }
+  const bool hasWarnings = hasErrors || activeOneCProcess || partial_rescan || metric_persistence_failed;
+  DisplaySelected();
+  SetStatus(hasWarnings ? L"Кэш очищен с предупреждениями." : L"Кэш очищен.");
   const std::wstring text = L"Очищено файлов: " + std::to_wstring(completed->clear_result.files) +
-      L"\nОсвобождено: " + size + (hasErrors
+      L"\nОсвобождено: " + size + residual_text + (hasErrors
           ? L"\n\nНе удалось очистить некоторые каталоги. Подробности — в журнале."
+          : L"") + (partial_rescan
+          ? L"\n\nОстаток указан приблизительно: часть файлов или каталогов недоступна."
+          : L"") + (metric_persistence_failed
+          ? L"\n\nРезультат не удалось сохранить в состоянии профиля."
           : L"") + (activeOneCProcess
           ? L"\n\nВо время очистки был обнаружен работающий процесс 1С. Если файлы остались, закройте его и повторите очистку."
           : L"");
-  Message(window_, text, L"Очистка кэша", !hasErrors && !activeOneCProcess
+  Message(window_, text, L"Очистка кэша", !hasWarnings
       ? MB_OK | MB_ICONINFORMATION : MB_OK | MB_ICONWARNING);
+}
+
+void MainWindow::CompleteCacheSizeOperation() {
+  if (!cache_size_operation_.active()) return;
+
+  bool tree_changed = false;
+  for (auto result : cache_size_operation_.TakeResults(8)) {
+    cache_size_completed_ = std::max(cache_size_completed_, result.completed);
+    for (const auto& error : result.scan.errors) logger_.Error(L"Ошибка расчёта размера кэша: " + error);
+    if (!result.scan.complete) ++cache_size_failure_count_;
+
+    if (!catalog_) {
+      ++cache_size_failure_count_;
+      continue;
+    }
+    try {
+      const auto* entry = catalog_->FindById(result.database_id);
+      if (!entry || !entry->IsDatabase()) {
+        ++cache_size_failure_count_;
+        logger_.Error(L"Расчёт размера кэша пропущен: база больше не найдена — " + result.database_id);
+        continue;
+      }
+      const auto current = catalog_->DatabaseFor(entry->name);
+      if (!EqualNoCase(current.id, result.database_id) || current.connect != result.connect) {
+        ++cache_size_failure_count_;
+        logger_.Error(L"Расчёт размера кэша пропущен: база изменилась во время операции — " + entry->name);
+        continue;
+      }
+      catalog_state_.SetCacheMetric(result.database_id,
+          storage::CacheMetric{result.scan.bytes, std::chrono::system_clock::now(), result.scan.complete});
+      tree_changed = true;
+    } catch (const std::exception& error) {
+      ++cache_size_persistence_failure_count_;
+      logger_.Error(L"Не удалось сохранить размер кэша: " + WideErrorText(error.what()));
+    } catch (...) {
+      ++cache_size_persistence_failure_count_;
+      logger_.Error(L"Не удалось сохранить размер кэша из-за неизвестной ошибки.");
+    }
+  }
+
+  const auto processed = cache_size_operation_.processed();
+  const auto total = cache_size_operation_.total();
+  const bool finished = cache_size_operation_.completed() && !cache_size_operation_.has_pending_results();
+  if (tree_changed && !closing_) PopulateTree();
+
+  if (!finished) {
+    if (!closing_) SetStatus(L"Пересчёт размеров кэша: " + std::to_wstring(processed) + L" из " +
+        std::to_wstring(total) + L"…");
+    return;
+  }
+
+  const bool cancelled = cache_size_operation_.cancelled();
+  cache_size_operation_.StopAndJoin();
+  cache_size_completed_ = std::max(cache_size_completed_, processed);
+  static_cast<void>(RefreshBackgroundPolling());
+  if (tree_changed && !closing_) DisplaySelected();
+  if (closing_) {
+    TryFinishClose();
+    return;
+  }
+  if (cancelled) {
+    SetStatus(L"Расчёт размеров кэша отменён. Сохранены только завершённые результаты.");
+    return;
+  }
+  const auto failures = cache_size_failure_count_ + cache_size_persistence_failure_count_;
+  SetStatus(L"Размеры кэша рассчитаны: " + std::to_wstring(cache_size_completed_) + L" из " +
+      std::to_wstring(cache_size_total_) + (failures ? L"; ошибок: " + std::to_wstring(failures) : L".") );
 }
 
 void MainWindow::ShowUpdateCheckError() {

@@ -6,8 +6,10 @@
 #include "ui/tree_view_controller.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdint>
 #include <cwchar>
+#include <ctime>
 #include <filesystem>
 #include <optional>
 #include <utility>
@@ -70,6 +72,16 @@ std::wstring FormatFileModificationTime(const FILETIME& value) {
   if (!FileTimeToLocalFileTime(&value, &local) || !FileTimeToSystemTime(&local, &time)) return {};
   wchar_t text[32]{};
   swprintf_s(text, L"%02u.%02u.%04u %02u:%02u", time.wDay, time.wMonth, time.wYear, time.wHour, time.wMinute);
+  return text;
+}
+
+std::wstring FormatMeasurementTime(std::chrono::system_clock::time_point value) {
+  const auto timestamp = std::chrono::system_clock::to_time_t(value);
+  tm local{};
+  if (localtime_s(&local, &timestamp) != 0) return {};
+  wchar_t text[32]{};
+  swprintf_s(text, L"%02d.%02d.%04d %02d:%02d", local.tm_mday, local.tm_mon + 1,
+      local.tm_year + 1900, local.tm_hour, local.tm_min);
   return text;
 }
 
@@ -160,6 +172,17 @@ void DetailsViewController::Display(const catalog::Catalog* database_catalog,
     item.pszText = empty.data();
     ListView_InsertItem(controls_.details, &item);
   };
+  const auto add_section = [&](std::wstring title) {
+    LVITEMW item{};
+    item.mask = LVIF_TEXT;
+    item.iItem = ListView_GetItemCount(controls_.details);
+    item.pszText = title.data();
+    const int index = ListView_InsertItem(controls_.details, &item);
+    if (index >= 0) {
+      std::wstring empty;
+      ListView_SetItemText(controls_.details, index, 1, empty.data());
+    }
+  };
 
   add_row(L"Тип", type);
   for (const auto& field : entry->fields) {
@@ -175,6 +198,18 @@ void DetailsViewController::Display(const catalog::Catalog* database_catalog,
       for (const auto& tag : presentation::TagsFor(catalog_metadata->Read().tags, *entry)) {
         add_row(L"Тег", tag);
       }
+    }
+    add_divider();
+    add_section(L"Размеры");
+    const auto* cache_metric = catalog_metadata ?
+        presentation::CacheMetricFor(catalog_metadata->Read().database_metrics, *entry) : nullptr;
+    if (!cache_metric) {
+      add_row(L"Размер кэша", L"Не рассчитан");
+    } else {
+      add_row(L"Размер кэша", std::wstring(cache_metric->complete ? L"" : L"≈ ") +
+          cache::FormatSize(cache_metric->bytes));
+      add_row(L"Рассчитан", FormatMeasurementTime(cache_metric->measured_at));
+      add_row(L"Состояние", cache_metric->complete ? L"Полный расчёт" : L"Часть файлов недоступна");
     }
     const auto connect = entry->ValueOr(L"Connect");
     if (!connection::ValueOrEmpty(connect, L"File").empty()) {
@@ -206,8 +241,8 @@ void DetailsViewController::Display(const catalog::Catalog* database_catalog,
   const bool launch_available = database && !cache_operation_active;
   EnableWindow(controls_.enterprise, launch_available);
   EnableWindow(controls_.designer, launch_available && !web);
-  EnableWindow(controls_.edit, !simple_mode);
-  EnableWindow(controls_.remove, !simple_mode);
+  EnableWindow(controls_.edit, !simple_mode && !cache_operation_active);
+  EnableWindow(controls_.remove, !simple_mode && !cache_operation_active);
   EnableWindow(controls_.cache, database && !simple_mode && !cache_operation_active);
   EnableWindow(controls_.shortcut, database && !simple_mode);
   InvalidateRect(controls_.details, nullptr, TRUE);

@@ -16,6 +16,7 @@ struct TreeContextMenuState {
   bool database{};
   bool web{};
   bool launch_available{};
+  bool cache_operation_available{};
   bool group{};
   bool editable{};
   bool file{};

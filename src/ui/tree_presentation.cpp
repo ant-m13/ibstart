@@ -1,6 +1,7 @@
 #include "ui/tree_presentation.hpp"
 
 #include "core/domain/utf.hpp"
+#include "core/cache/cache_service.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -138,6 +139,13 @@ const std::vector<std::wstring>& TagsFor(const storage::DatabaseTags& tags, cons
   static const std::vector<std::wstring> empty;
   const auto found = tags.find(TagId(entry));
   return found == tags.end() ? empty : found->second;
+}
+
+const storage::CacheMetric* CacheMetricFor(const storage::DatabaseMetricsById& metrics,
+    const domain::Entry& entry) {
+  const auto found = metrics.find(TagId(entry));
+  if (found == metrics.end() || !found->second.cache) return nullptr;
+  return &*found->second.cache;
 }
 
 bool IsFavorite(const std::vector<std::wstring>& favorites, const domain::Entry& entry) {
@@ -298,18 +306,21 @@ bool MatchesTagFilter(const catalog::Catalog& catalog, const catalog::TreeItem& 
 
 LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Catalog* catalog,
     const storage::Settings& settings, const storage::DatabaseTags& tags_by_database,
-    const storage::TagStyles& styles, const std::vector<domain::HistoryItem>& history,
+    const storage::DatabaseMetricsById& metrics, const storage::TagStyles& styles,
+    const std::vector<domain::HistoryItem>& history,
     LPARAM recent_root_item_data, std::wstring_view search_filter, HFONT controls_font, HFONT controls_bold_font) {
   const bool show_recent_launch_times = !settings.simple_mode && !history.empty();
+  const bool show_cache_sizes = !settings.simple_mode && settings.show_cache_size_in_list;
   if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) {
-    if ((settings.simple_mode || !settings.show_tags_in_list) && search_filter.empty() && !show_recent_launch_times) {
+    if ((settings.simple_mode || (!settings.show_tags_in_list && !show_cache_sizes)) &&
+        search_filter.empty() && !show_recent_launch_times) {
       return CDRF_DODEFAULT;
     }
     return CDRF_NOTIFYITEMDRAW;
   }
   if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
-    const bool needs_postpaint = (!settings.simple_mode && settings.show_tags_in_list) || !search_filter.empty() ||
-        show_recent_launch_times;
+    const bool needs_postpaint = (!settings.simple_mode && (settings.show_tags_in_list || show_cache_sizes)) ||
+        !search_filter.empty() || show_recent_launch_times;
     if (!needs_postpaint) return CDRF_DODEFAULT;
 
     if (!search_filter.empty()) {
@@ -350,6 +361,46 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
   if (catalog) {
     if (const auto* entry = EntryForTreeRow(*catalog, TreeItemData(tree, item), label); entry && entry->IsDatabase()) {
       int trailing_x = label_rect.right + 8;
+      const auto* cache_metric = show_cache_sizes ? CacheMetricFor(metrics, *entry) : nullptr;
+      if (cache_metric) {
+        RECT client{};
+        GetClientRect(tree, &client);
+        if (trailing_x < client.right - 4) {
+          const int saved = SaveDC(draw->nmcd.hdc);
+          const HFONT font = controls_font ? controls_font :
+              reinterpret_cast<HFONT>(SendMessageW(tree, WM_GETFONT, 0, 0));
+          if (font) SelectObject(draw->nmcd.hdc, font);
+          SetBkMode(draw->nmcd.hdc, TRANSPARENT);
+          const std::wstring text = L"Кэш " + std::wstring(cache_metric->complete ? L"" : L"≈ ") +
+              cache::FormatSize(cache_metric->bytes);
+          SIZE size{};
+          GetTextExtentPoint32W(draw->nmcd.hdc, text.data(), static_cast<int>(text.size()), &size);
+          const int width = size.cx + 14;
+          if (trailing_x + width <= client.right - 4) {
+            const int label_height = static_cast<int>(label_rect.bottom - label_rect.top);
+            const int height = std::max(16, label_height - 2);
+            const int y = static_cast<int>(label_rect.top) + (label_height - height) / 2;
+            const storage::TagStyle style{RGB(224, 235, 240), RGB(48, 80, 94)};
+            const HBRUSH brush = reinterpret_cast<HBRUSH>(GetStockObject(DC_BRUSH));
+            const HPEN pen = reinterpret_cast<HPEN>(GetStockObject(DC_PEN));
+            if (brush && pen) {
+              SetDCBrushColor(draw->nmcd.hdc, style.background);
+              SetDCPenColor(draw->nmcd.hdc, style.background);
+              const auto old_brush = SelectObject(draw->nmcd.hdc, brush);
+              const auto old_pen = SelectObject(draw->nmcd.hdc, pen);
+              RoundRect(draw->nmcd.hdc, trailing_x, y, trailing_x + width, y + height, height, height);
+              SelectObject(draw->nmcd.hdc, old_brush);
+              SelectObject(draw->nmcd.hdc, old_pen);
+              SetTextColor(draw->nmcd.hdc, style.text);
+              RECT text_rect{trailing_x + 7, y, trailing_x + width - 7, y + height};
+              DrawTextW(draw->nmcd.hdc, text.data(), static_cast<int>(text.size()), &text_rect,
+                  DT_SINGLELINE | DT_VCENTER | DT_NOPREFIX);
+              trailing_x += width + 4;
+            }
+          }
+          RestoreDC(draw->nmcd.hdc, saved);
+        }
+      }
       const auto launch_time = show_recent_launch_times && IsInBranch(tree, item, recent_root_item_data) ?
           RecentLaunchTime(history, *entry) : std::nullopt;
       if (launch_time) {
