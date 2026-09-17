@@ -1982,14 +1982,6 @@ void MainWindow::DeleteSelected() {
   std::vector<std::wstring> cache_metric_ids;
   if (!tagId.empty()) {
     cache_metric_ids.push_back(tagId);
-  } else if (entry->IsGroup()) {
-    for (const auto& database : DatabasesForCacheFolder(name)) {
-      const auto database_id = StableDatabaseId(database);
-      if (!database_id.empty() && std::none_of(cache_metric_ids.begin(), cache_metric_ids.end(),
-          [&](const auto& existing) { return domain::EqualIdentifier(existing, database_id); })) {
-        cache_metric_ids.push_back(database_id);
-      }
-    }
   }
   const auto item = entry->IsDatabase() ? L"информационную базу" : L"группу";
   const auto message = L"Удалить " + std::wstring(item) + L" \"" + name + L"\" из списка.";
