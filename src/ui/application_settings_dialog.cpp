@@ -47,6 +47,7 @@ constexpr int kOpenProfileFolder = 1827;
 constexpr int kExportProfile = 1828;
 constexpr int kImportProfile = 1829;
 constexpr int kSettingsTabs = 1830;
+constexpr int kShowCacheSize = 1831;
 
 enum class SettingsPage : int {
   interface_page,
@@ -60,6 +61,7 @@ struct State {
   std::array<std::vector<HWND>, 4> page_controls{};
   HWND simple_mode{};
   HWND show_tags{};
+  HWND show_cache_size{};
   HWND folders_first{};
   HWND platform_paths{};
   HWND recent_lists{};
@@ -253,6 +255,7 @@ void RemoveSelectedRecent(State& state) {
 void Collect(State& state) {
   state.settings.simple_mode = SendMessageW(state.simple_mode, BM_GETCHECK, 0, 0) == BST_CHECKED;
   state.settings.show_tags_in_list = SendMessageW(state.show_tags, BM_GETCHECK, 0, 0) == BST_CHECKED;
+  state.settings.show_cache_size_in_list = SendMessageW(state.show_cache_size, BM_GETCHECK, 0, 0) == BST_CHECKED;
   state.settings.folders_first_when_sorting = SendMessageW(state.folders_first, BM_GETCHECK, 0, 0) == BST_CHECKED;
   state.settings.open_last_list_on_startup = SendMessageW(state.open_last_list, BM_GETCHECK, 0, 0) == BST_CHECKED;
   state.settings.restore_last_selection = SendMessageW(state.restore_selection, BM_GETCHECK, 0, 0) == BST_CHECKED;
@@ -437,24 +440,26 @@ void CreateControls(HWND window, State& state) {
         text_font);
   };
 
-  group(SettingsPage::interface_page, L"Основные", 12, 12, 670, 104);
+  group(SettingsPage::interface_page, L"Основные", 12, 12, 670, 130);
   state.simple_mode = checkbox(SettingsPage::interface_page, L"Использовать простой режим", 24, 36, 620,
       kSimpleMode, state.settings.simple_mode);
   state.show_tags = checkbox(SettingsPage::interface_page, L"Показывать теги в списке баз", 24, 62, 620,
       kShowTags, state.settings.show_tags_in_list);
-  state.folders_first = checkbox(SettingsPage::interface_page, L"Показывать группы сверху при сортировке", 24, 88, 620,
+  state.show_cache_size = checkbox(SettingsPage::interface_page, L"Показывать размеры кэша в списке баз", 24, 88, 620,
+      kShowCacheSize, state.settings.show_cache_size_in_list);
+  state.folders_first = checkbox(SettingsPage::interface_page, L"Показывать группы сверху при сортировке", 24, 114, 620,
       kFoldersFirst,
       state.settings.folders_first_when_sorting);
 
-  group(SettingsPage::interface_page, L"Отображение", 12, 126, 670, 170);
-  state.show_details = checkbox(SettingsPage::interface_page, L"Показывать карточку выбранной базы", 24, 150, 620,
+  group(SettingsPage::interface_page, L"Отображение", 12, 152, 670, 170);
+  state.show_details = checkbox(SettingsPage::interface_page, L"Показывать карточку выбранной базы", 24, 176, 620,
       kShowDetails, state.settings.show_details_panel);
-  state.show_status = checkbox(SettingsPage::interface_page, L"Показывать строку состояния", 24, 176, 620,
+  state.show_status = checkbox(SettingsPage::interface_page, L"Показывать строку состояния", 24, 202, 620,
       kShowStatus, state.settings.show_status_bar);
   create_page_control(SettingsPage::interface_page, L"STATIC", L"Плотность дерева:", 0,
-      24, 214, 220, 20, 0, text_font);
+      24, 240, 220, 20, 0, text_font);
   state.tree_density = create_page_control(SettingsPage::interface_page, WC_COMBOBOXW, L"",
-      WS_TABSTOP | CBS_DROPDOWNLIST, 260, 210, 250, 140, kTreeDensity, text_font);
+      WS_TABSTOP | CBS_DROPDOWNLIST, 260, 236, 250, 140, kTreeDensity, text_font);
   for (const auto label : {L"Компактная", L"Обычная", L"Увеличенная"})
     SendMessageW(state.tree_density, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label));
   SendMessageW(state.tree_density, CB_SETCURSEL, std::clamp(state.settings.tree_density, 0, 2), 0);

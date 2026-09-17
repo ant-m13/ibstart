@@ -59,6 +59,7 @@ struct Settings {
   std::wstring selected_entry;
   bool simple_mode{false};
   bool show_tags_in_list{true};
+  bool show_cache_size_in_list{true};
   bool folders_first_when_sorting{true};
   bool open_last_list_on_startup{true};
   bool restore_last_selection{true};
@@ -94,12 +95,32 @@ using TagStyles = std::map<std::wstring, TagStyle>;
 
 using LastLaunchTimes = std::map<std::wstring, std::chrono::system_clock::time_point, domain::IdentifierLess>;
 
+// A cache measurement is deliberately kept as raw data.  The UI formats the
+// byte count when it renders a row, so changing the display locale or unit
+// policy never requires rewriting the profile.
+struct CacheMetric {
+  std::uintmax_t bytes{};
+  std::chrono::system_clock::time_point measured_at{};
+  bool complete{true};
+
+  bool operator==(const CacheMetric&) const = default;
+};
+
+struct DatabaseMetrics {
+  std::optional<CacheMetric> cache;
+
+  bool operator==(const DatabaseMetrics&) const = default;
+};
+
+using DatabaseMetricsById = std::map<std::wstring, DatabaseMetrics, domain::IdentifierLess>;
+
 struct CatalogState {
   std::vector<std::wstring> favorites;
   std::vector<domain::HistoryItem> history;
   LastLaunchTimes last_launches;
   DatabaseTags tags;
   TagStyles tag_styles;
+  DatabaseMetricsById database_metrics;
 };
 
 class SettingsRepository {

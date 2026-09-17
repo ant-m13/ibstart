@@ -28,19 +28,12 @@ std::wstring Env(const wchar_t* name) {
   return text;
 }
 
-uintmax_t SizeOf(const std::filesystem::path& root, std::stop_token stop = {}) {
-  uintmax_t result = 0; std::error_code error;
-  for (std::filesystem::recursive_directory_iterator it(root, std::filesystem::directory_options::skip_permission_denied, error), end; it != end; it.increment(error)) {
-    if (stop.stop_requested()) return 0;
-    if (error) { error.clear(); continue; }
-    if (it->is_regular_file(error)) {
-      const auto size = it->file_size(error);
-      if (!error) result += size;
-    }
-    error.clear();
-  }
-  return result;
-}
+struct DirectorySizeResult {
+  uintmax_t bytes{};
+  bool complete{true};
+  bool cancelled{};
+  std::vector<std::wstring> errors;
+};
 
 std::optional<std::wstring> SafeIdentifier(std::wstring value) {
   if (value.empty() || value == L"." || value == L".." || value.back() == L'.' || value.back() == L' ') return std::nullopt;
@@ -222,6 +215,75 @@ std::wstring WindowsFailure(std::wstring_view action, const std::filesystem::pat
   return std::wstring(action) + L" " + path.wstring() + L": " + WindowsErrorMessage(error);
 }
 
+void AddScanError(DirectorySizeResult& result, std::wstring message) {
+  result.complete = false;
+  // A damaged or inaccessible tree can contain a very large number of
+  // entries.  Keep the persisted/UI result bounded while retaining enough
+  // diagnostics for the log and the status message.
+  constexpr std::size_t kMaximumReportedErrors = 32;
+  if (result.errors.size() < kMaximumReportedErrors) result.errors.push_back(std::move(message));
+}
+
+DirectorySizeResult SizeOf(const std::filesystem::path& root, std::stop_token stop) {
+  DirectorySizeResult result;
+  if (stop.stop_requested()) {
+    result.cancelled = true;
+    result.complete = false;
+    return result;
+  }
+
+  std::error_code error;
+  const DWORD root_attributes = GetFileAttributesW(root.c_str());
+  if (root_attributes == INVALID_FILE_ATTRIBUTES) {
+    AddScanError(result, WindowsFailure(L"Не удалось прочитать", root, GetLastError()));
+    return result;
+  }
+  if ((root_attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+    AddScanError(result, L"Пропущен reparse point в каталоге кэша: " + root.wstring());
+    return result;
+  }
+  if ((root_attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+    AddScanError(result, L"Ожидался каталог кэша: " + root.wstring());
+    return result;
+  }
+
+  std::filesystem::recursive_directory_iterator iterator(root, std::filesystem::directory_options::none, error);
+  if (error) {
+    AddScanError(result, WindowsFailure(L"Не удалось перечислить", root, GetLastError()));
+    return result;
+  }
+  const std::filesystem::recursive_directory_iterator end;
+  for (; iterator != end;) {
+    if (stop.stop_requested()) {
+      result.cancelled = true;
+      result.complete = false;
+      return result;
+    }
+
+    const auto path = iterator->path();
+    const DWORD attributes = GetFileAttributesW(path.c_str());
+    if (attributes == INVALID_FILE_ATTRIBUTES) {
+      AddScanError(result, WindowsFailure(L"Не удалось прочитать", path, GetLastError()));
+    } else if ((attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0) {
+      AddScanError(result, L"Пропущен reparse point в кэше: " + path.wstring());
+      if ((attributes & FILE_ATTRIBUTE_DIRECTORY) != 0) iterator.disable_recursion_pending();
+    } else if ((attributes & FILE_ATTRIBUTE_DIRECTORY) == 0) {
+      error.clear();
+      const auto bytes = std::filesystem::file_size(path, error);
+      if (error) AddScanError(result, L"Не удалось определить размер файла: " + path.wstring());
+      else result.bytes += bytes;
+    }
+
+    error.clear();
+    iterator.increment(error);
+    if (error) {
+      AddScanError(result, L"Не удалось продолжить перечисление кэша: " + root.wstring());
+      error.clear();
+    }
+  }
+  return result;
+}
+
 std::optional<std::wstring> FinalPath(HANDLE handle, const std::filesystem::path& path, std::wstring& failure) {
   std::wstring value(32768, L'\0');
   DWORD length = GetFinalPathNameByHandleW(handle, value.data(), static_cast<DWORD>(value.size()), FILE_NAME_NORMALIZED | VOLUME_NAME_DOS);
@@ -385,10 +447,11 @@ bool PathStillNames(const OpenEntry& entry, std::wstring& failure) {
 }
 
 bool ReadDirectoryEntries(const OpenDirectory& directory, std::vector<DirectoryEntry>& entries,
-                          std::wstring& failure) {
+                          std::wstring& failure, std::stop_token stop = {}) {
   alignas(FILE_ID_BOTH_DIR_INFO) std::array<std::byte, 64 * 1024> buffer{};
   bool restart = true;
   for (;;) {
+    if (stop.stop_requested()) return false;
     const auto info_class = restart ? FileIdBothDirectoryRestartInfo : FileIdBothDirectoryInfo;
     restart = false;
     if (!GetFileInformationByHandleEx(directory.handle.get(), info_class,
@@ -462,17 +525,19 @@ bool OpenChild(const OpenDirectory& parent, const DirectoryEntry& entry, OpenEnt
   return true;
 }
 
-bool ValidateTree(const OpenDirectory& directory, std::wstring& failure) {
+bool ValidateTree(const OpenDirectory& directory, std::wstring& failure, std::stop_token stop = {}) {
+  if (stop.stop_requested()) return false;
   if (!PathStillNames(directory, failure)) return false;
 
   std::vector<DirectoryEntry> entries;
-  if (!ReadDirectoryEntries(directory, entries, failure)) return false;
+  if (!ReadDirectoryEntries(directory, entries, failure, stop)) return false;
   for (const auto& entry : entries) {
+    if (stop.stop_requested()) return false;
     OpenEntry child;
     if (!OpenChild(directory, entry, child, failure)) return false;
     if (child.metadata.attributes & FILE_ATTRIBUTE_DIRECTORY) {
       const OpenDirectory child_directory{child.path, std::move(child.handle), child.metadata.identity};
-      if (!ValidateTree(child_directory, failure)) return false;
+      if (!ValidateTree(child_directory, failure, stop)) return false;
     }
   }
   return PathStillNames(directory, failure);
@@ -501,20 +566,23 @@ bool DeleteOpenedHandle(HANDLE handle, const std::filesystem::path& path, bool d
   return false;
 }
 
-bool DeleteTree(OpenDirectory& directory, const OpenDirectory& root, RemovalStats& stats, std::wstring& failure) {
+bool DeleteTree(OpenDirectory& directory, const OpenDirectory& root, RemovalStats& stats,
+                std::wstring& failure, std::stop_token stop = {}) {
+  if (stop.stop_requested()) return false;
   if (!IsHandleInAllowedCacheRoot(root.handle.get(), root.path, failure)) return false;
   if (!PathStillNames(directory, failure)) return false;
 
   std::vector<DirectoryEntry> entries;
-  if (!ReadDirectoryEntries(directory, entries, failure)) return false;
+  if (!ReadDirectoryEntries(directory, entries, failure, stop)) return false;
   for (const auto& entry : entries) {
+    if (stop.stop_requested()) return false;
     if (!IsHandleInAllowedCacheRoot(root.handle.get(), root.path, failure)) return false;
     OpenEntry child;
     if (!OpenChild(directory, entry, child, failure)) return false;
 
     if (child.metadata.attributes & FILE_ATTRIBUTE_DIRECTORY) {
       OpenDirectory child_directory{child.path, std::move(child.handle), child.metadata.identity};
-      if (!DeleteTree(child_directory, root, stats, failure)) return false;
+      if (!DeleteTree(child_directory, root, stats, failure, stop)) return false;
       if (!IsHandleInAllowedCacheRoot(root.handle.get(), root.path, failure) ||
           !PathStillNames(directory, failure) || !PathStillNames(child_directory, failure)) return false;
       HandleMetadata metadata;
@@ -549,12 +617,23 @@ bool DeleteTree(OpenDirectory& directory, const OpenDirectory& root, RemovalStat
 }
 }  // namespace
 
-std::vector<CacheItem> CandidatesFor(const domain::Database& database, std::stop_token stop) {
-  std::vector<CacheItem> result;
-  if (stop.stop_requested()) return result;
+ScanResult Scan(const domain::Database& database, std::stop_token stop) {
+  ScanResult result;
+  if (stop.stop_requested()) {
+    result.cancelled = true;
+    result.complete = false;
+    return result;
+  }
+
   const auto identifier = SafeIdentifier(database.id.empty() ? database.name : database.id);
-  if (!identifier) return result;
-  // IBStart only targets explicit cache subdirectories; it never derives a path from Connect and therefore cannot remove a file base.
+  if (!identifier) {
+    result.complete = false;
+    result.errors.push_back(L"Недопустимый идентификатор базы для поиска кэша.");
+    return result;
+  }
+
+  // IBStart only targets explicit cache subdirectories; it never derives a
+  // path from Connect and therefore cannot scan or remove a file base.
   std::vector<std::filesystem::path> paths;
   const auto roaming = Env(L"APPDATA");
   const auto local = Env(L"LOCALAPPDATA");
@@ -563,16 +642,67 @@ std::vector<CacheItem> CandidatesFor(const domain::Database& database, std::stop
     paths.push_back(std::filesystem::path(local) / L"1C" / L"1Cv8" / *identifier);
     paths.push_back(std::filesystem::path(local) / L"IBStart" / L"cache" / *identifier);
   }
+
+  std::vector<std::wstring> seen_paths;
   for (const auto& path : paths) {
-    if (stop.stop_requested()) return {};
+    if (stop.stop_requested()) {
+      result.cancelled = true;
+      result.complete = false;
+      result.items.clear();
+      result.bytes = 0;
+      return result;
+    }
+    const auto normalized = NormalizedLower(path);
+    if (std::find(seen_paths.begin(), seen_paths.end(), normalized) != seen_paths.end()) continue;
+    seen_paths.push_back(normalized);
+
     std::error_code error;
-    if (std::filesystem::is_directory(path, error)) {
-      const auto bytes = SizeOf(path, stop);
-      if (stop.stop_requested()) return {};
-      result.push_back({path, bytes});
+    const auto status = std::filesystem::symlink_status(path, error);
+    if (error) {
+      // A cache directory disappearing between enumeration and inspection is
+      // equivalent to an empty cache.  Other errors must remain visible as a
+      // partial result.
+      if (error.value() == ERROR_FILE_NOT_FOUND || error.value() == ERROR_PATH_NOT_FOUND ||
+          error.value() == ERROR_INVALID_NAME || error.value() == ERROR_INVALID_DRIVE) {
+        continue;
+      }
+      result.complete = false;
+      result.errors.push_back(L"Не удалось проверить каталог кэша: " + path.wstring());
+      continue;
+    }
+    if (!std::filesystem::exists(status)) continue;
+    if (!std::filesystem::is_directory(status)) {
+      result.complete = false;
+      result.errors.push_back(L"Путь кэша не является каталогом: " + path.wstring());
+      continue;
+    }
+    if (!IsSafeCachePath(path)) {
+      result.complete = false;
+      result.errors.push_back(L"Отказ от сканирования небезопасного пути кэша: " + path.wstring());
+      continue;
+    }
+
+    const auto directory = SizeOf(path, stop);
+    if (directory.cancelled) {
+      result.cancelled = true;
+      result.complete = false;
+      result.items.clear();
+      result.bytes = 0;
+      return result;
+    }
+    result.items.push_back({path, directory.bytes});
+    result.bytes += directory.bytes;
+    if (!directory.complete) result.complete = false;
+    for (const auto& error_message : directory.errors) {
+      if (result.errors.size() < 32) result.errors.push_back(error_message);
     }
   }
   return result;
+}
+
+std::vector<CacheItem> CandidatesFor(const domain::Database& database, std::stop_token stop) {
+  const auto scan = Scan(database, stop);
+  return scan.cancelled ? std::vector<CacheItem>{} : scan.items;
 }
 
 std::wstring FormatSize(uintmax_t bytes) {
@@ -607,19 +737,31 @@ bool HasActiveOneCProcess() {
   return found;
 }
 
-ClearResult Clear(const std::vector<CacheItem>& candidates) {
+ClearResult Clear(const std::vector<CacheItem>& candidates, std::stop_token stop) {
   ClearResult result;
+  if (stop.stop_requested()) {
+    result.cancelled = true;
+    return result;
+  }
   // This check is advisory only. A running 1C client may hold cache files, but it
   // must not prevent the rest of the allowlisted candidates from being attempted.
   result.active_one_c_process = HasActiveOneCProcess();
   for (const auto& item : candidates) {
+    if (stop.stop_requested()) {
+      result.cancelled = true;
+      break;
+    }
     if (_wcsicmp(item.path.filename().c_str(), L"1Cv8.1CD") == 0 || !IsSafeCachePath(item.path)) {
       result.errors.push_back(L"Отказ от небезопасного пути очистки: " + item.path.wstring()); continue;
     }
 
     std::wstring failure;
     auto root = OpenRootDirectory(item.path, failure);
-    if (!root || !ValidateTree(*root, failure)) {
+    if (!root || !ValidateTree(*root, failure, stop)) {
+      if (stop.stop_requested()) {
+        result.cancelled = true;
+        break;
+      }
       result.errors.push_back(failure.empty() ? L"Отказ от небезопасной очистки: " + item.path.wstring() : failure);
       continue;
     }
@@ -631,7 +773,12 @@ ClearResult Clear(const std::vector<CacheItem>& candidates) {
     // Keep the same root handle from validation through deletion. OpenPath also
     // denies delete sharing, so the validated objects cannot be renamed first.
     RemovalStats stats;
-    if (!DeleteTree(*root, *root, stats, failure) || !IsSafeCachePath(item.path) ||
+    const bool deleted_tree = DeleteTree(*root, *root, stats, failure, stop);
+    if (stop.stop_requested()) {
+      result.cancelled = true;
+      break;
+    }
+    if (!deleted_tree || !IsSafeCachePath(item.path) ||
         !IsHandleInAllowedCacheRoot(root->handle.get(), item.path, failure) ||
         !PathStillNames(*root, failure) ||
         !DeleteOpenedHandle(root->handle.get(), item.path, true, failure)) {
@@ -642,6 +789,7 @@ ClearResult Clear(const std::vector<CacheItem>& candidates) {
     result.bytes += stats.bytes;
   }
   result.active_one_c_process = result.active_one_c_process || HasActiveOneCProcess();
+  if (stop.stop_requested()) result.cancelled = true;
   return result;
 }
 

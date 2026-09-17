@@ -79,6 +79,7 @@ add_executable(IBStart WIN32
   src/app/main.cpp
   src/ui/advanced_database_options_dialog.cpp
   src/ui/cache_clear_operation.cpp
+  src/ui/cache_size_operation.cpp
   src/ui/command_dispatcher.cpp
   src/ui/context_menu_controller.cpp
   src/ui/database_editor_dialog.cpp
@@ -116,6 +117,7 @@ set(IBSTART_ICON_FILES
   "${IBSTART_RESOURCE_DIR}/icons/server_database.ico"
   "${IBSTART_RESOURCE_DIR}/icons/update.ico"
   "${IBSTART_RESOURCE_DIR}/icons/exit.ico"
+  "${IBSTART_RESOURCE_DIR}/icons/cache_size.ico"
 )
 set_property(SOURCE "${IBSTART_GENERATED_DIR}/IBStart.rc" PROPERTY OBJECT_DEPENDS "${IBSTART_ICON_FILES}")
 target_link_libraries(IBStart PRIVATE ibstart_core Comctl32 Comdlg32)
@@ -136,7 +138,8 @@ add_custom_command(TARGET IBStart POST_BUILD
 
 include(CTest)
 if(BUILD_TESTING)
-  add_executable(ibstart_tests tests/unit/test_main.cpp src/ui/tree_presentation.cpp src/ui/tree_view_controller.cpp)
+  add_executable(ibstart_tests tests/unit/test_main.cpp src/ui/cache_size_operation.cpp
+    src/ui/tree_presentation.cpp src/ui/tree_view_controller.cpp)
   target_link_libraries(ibstart_tests PRIVATE ibstart_core Comctl32)
   target_compile_definitions(ibstart_tests PRIVATE
     UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)

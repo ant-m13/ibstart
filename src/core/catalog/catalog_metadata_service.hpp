@@ -23,10 +23,14 @@ class CatalogMetadataService {
   void Adopt(storage::CatalogState state);
   [[nodiscard]] bool ToggleFavorite(std::wstring database_id, std::wstring legacy_database_name = {});
   void RenameDatabaseMetadata(std::wstring previous_name, std::wstring updated_name,
-      std::wstring previous_tag_id, std::wstring updated_tag_id);
+      std::wstring previous_tag_id, std::wstring updated_tag_id,
+      std::wstring previous_connect = {}, std::wstring updated_connect = {});
   void SetTags(std::wstring database_id, std::vector<std::wstring> tags);
   [[nodiscard]] bool AddTag(std::wstring database_id, std::wstring tag);
   [[nodiscard]] bool RemoveTags(std::wstring_view database_id);
+  void SetCacheMetric(std::wstring database_id, storage::CacheMetric metric);
+  void RemoveCacheMetric(std::wstring_view database_id);
+  void InvalidateCacheMetric(std::wstring_view database_id);
   void ReplaceTagConfiguration(storage::DatabaseTags tags, storage::TagStyles styles);
   void RecordLaunch(domain::HistoryItem item, std::size_t max_history = storage::kMaxHistory);
   void RemoveHistory(std::wstring_view database_id);

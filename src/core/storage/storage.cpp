@@ -449,6 +449,15 @@ void NormalizeCatalogState(CatalogState& state) {
     history.push_back(std::move(item));
   }
   state.history = std::move(history);
+
+  // A metric without a database key or without a cache payload cannot be
+  // rendered or refreshed safely.  Drop such records while retaining valid
+  // partial measurements; partial is meaningful and must not be normalized to
+  // an exact zero.
+  for (auto it = state.database_metrics.begin(); it != state.database_metrics.end();) {
+    if (it->first.empty() || !it->second.cache) it = state.database_metrics.erase(it);
+    else ++it;
+  }
 }
 
 namespace {
@@ -491,6 +500,7 @@ Settings ParseSettings(std::string_view contents) {
     if (const auto selected = json::ObjectString(*root, "selected_entry")) result.selected_entry = *selected;
     if (const auto simple = json::ObjectInt(*root, "simple_mode")) result.simple_mode = *simple != 0;
     if (const auto show_tags = json::ObjectInt(*root, "show_tags_in_list")) result.show_tags_in_list = *show_tags != 0;
+    if (const auto show_cache = json::ObjectInt(*root, "show_cache_size_in_list")) result.show_cache_size_in_list = *show_cache != 0;
     if (const auto folders_first = json::ObjectInt(*root, "folders_first_when_sorting")) result.folders_first_when_sorting = *folders_first != 0;
     if (const auto open_last = json::ObjectInt(*root, "open_last_list_on_startup")) result.open_last_list_on_startup = *open_last != 0;
     if (const auto restore_selection = json::ObjectInt(*root, "restore_last_selection")) result.restore_last_selection = *restore_selection != 0;
@@ -669,6 +679,33 @@ void ValidateCatalogStateProfile(std::string_view contents) {
     RequireObjectProperty(object, "background", json::ValueKind::scalar, "tag_styles[]");
     RequireObjectProperty(object, "text", json::ValueKind::scalar, "tag_styles[]");
   }
+  if (const auto* metrics_value = json::ObjectValue(*root, "database_metrics")) {
+    const auto metrics = json::ObjectArray(metrics_value);
+    if (!metrics) throw std::runtime_error("Imported catalog-state.json has an invalid database_metrics array.");
+    for (const auto& metric : *metrics) {
+      RequireObjectProperty(metric, "database_id", json::ValueKind::string, "database_metrics[]");
+      const auto* cache_value = json::ObjectValue(metric, "cache");
+      // DatabaseMetrics is intentionally extensible.  A profile may contain
+      // a database entry before a particular metric kind is supported by this
+      // build; the loader will ignore that entry while preserving the rest of
+      // the profile.
+      if (!cache_value) continue;
+      if (cache_value->kind != json::ValueKind::object) {
+        throw std::runtime_error("Imported catalog-state.json has an invalid database_metrics[].cache object.");
+      }
+      const auto cache = cache_value ? json::RootObject(cache_value->raw) : std::nullopt;
+      if (!cache) throw std::runtime_error("Imported catalog-state.json has an invalid database_metrics[].cache object.");
+      RequireObjectProperty(*cache, "bytes", json::ValueKind::scalar, "database_metrics[].cache");
+      RequireObjectProperty(*cache, "measured_at", json::ValueKind::scalar, "database_metrics[].cache");
+      RequireObjectProperty(*cache, "complete", json::ValueKind::scalar, "database_metrics[].cache");
+      const auto bytes = json::ObjectUnsigned(*cache, "bytes");
+      const auto measured_at = json::ObjectInteger(*cache, "measured_at");
+      const auto complete = json::ObjectInt(*cache, "complete");
+      if (!bytes || !measured_at || !complete || (*complete != 0 && *complete != 1)) {
+        throw std::runtime_error("Imported catalog-state.json has an invalid cache metric value.");
+      }
+    }
+  }
 }
 
 std::string SerializeSettings(const Settings& settings) {
@@ -677,6 +714,7 @@ std::string SerializeSettings(const Settings& settings) {
   json += "  \"selected_entry\": \"" + ::ibstart::storage::json::Escape(settings.selected_entry) + "\",\n";
   json += "  \"simple_mode\": " + std::string(settings.simple_mode ? "1" : "0") + ",\n";
   json += "  \"show_tags_in_list\": " + std::string(settings.show_tags_in_list ? "1" : "0") + ",\n";
+  json += "  \"show_cache_size_in_list\": " + std::string(settings.show_cache_size_in_list ? "1" : "0") + ",\n";
   json += "  \"folders_first_when_sorting\": " + std::string(settings.folders_first_when_sorting ? "1" : "0") + ",\n";
   json += "  \"open_last_list_on_startup\": " + std::string(settings.open_last_list_on_startup ? "1" : "0") + ",\n";
   json += "  \"restore_last_selection\": " + std::string(settings.restore_last_selection ? "1" : "0") + ",\n";
@@ -759,6 +797,19 @@ CatalogState ParseCatalogState(std::string_view contents) {
         result.tag_styles[*style_name] = {static_cast<COLORREF>(*background), static_cast<COLORREF>(*text)};
       }
     });
+    json::ForEachArrayObject(*root, "database_metrics", [&](const json::Object& object) {
+      const auto database_id = json::ObjectString(object, "database_id");
+      const auto* cache_value = json::ObjectValue(object, "cache");
+      const auto cache = cache_value && cache_value->kind == json::ValueKind::object ?
+          json::RootObject(cache_value->raw) : std::nullopt;
+      if (!database_id || database_id->empty() || !cache) return;
+      const auto bytes = json::ObjectUnsigned(*cache, "bytes");
+      const auto measured_at = json::ObjectInteger(*cache, "measured_at");
+      const auto complete = json::ObjectInt(*cache, "complete");
+      if (!bytes || !measured_at || !complete || (*complete != 0 && *complete != 1)) return;
+      result.database_metrics[*database_id].cache = CacheMetric{
+          *bytes, std::chrono::system_clock::from_time_t(static_cast<std::time_t>(*measured_at)), *complete != 0};
+    });
   }
 
   NormalizeCatalogState(result);
@@ -814,6 +865,17 @@ std::string SerializeCatalogState(const CatalogState& state) {
     json += "{\"tag_style\": \"" + ::ibstart::storage::json::Escape(tag) + "\", \"background\": " +
         std::to_string(style.background) + ", \"text\": " + std::to_string(style.text) + "}";
   }
+  json += "],\n  \"database_metrics\": [";
+  written = 0;
+  for (const auto& [database_id, metrics] : normalized.database_metrics) {
+    if (database_id.empty() || !metrics.cache) continue;
+    if (written++) json += ", ";
+    const auto& cache = *metrics.cache;
+    json += "{\"database_id\": \"" + ::ibstart::storage::json::Escape(database_id) +
+        "\", \"cache\": {\"bytes\": " + std::to_string(cache.bytes) +
+        ", \"measured_at\": " + std::to_string(std::chrono::system_clock::to_time_t(cache.measured_at)) +
+        ", \"complete\": " + std::string(cache.complete ? "1" : "0") + "}}";
+  }
   json += "]\n}\n";
   return json;
 }
@@ -837,6 +899,7 @@ void MergeChangedSettings(Settings& target, const Settings& baseline, const Sett
   if (requested.selected_entry != baseline.selected_entry) target.selected_entry = requested.selected_entry;
   if (requested.simple_mode != baseline.simple_mode) target.simple_mode = requested.simple_mode;
   if (requested.show_tags_in_list != baseline.show_tags_in_list) target.show_tags_in_list = requested.show_tags_in_list;
+  if (requested.show_cache_size_in_list != baseline.show_cache_size_in_list) target.show_cache_size_in_list = requested.show_cache_size_in_list;
   if (requested.folders_first_when_sorting != baseline.folders_first_when_sorting) {
     target.folders_first_when_sorting = requested.folders_first_when_sorting;
   }

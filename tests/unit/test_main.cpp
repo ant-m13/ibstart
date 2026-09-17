@@ -18,6 +18,7 @@
 #include "core/update/update_service.hpp"
 #include "core/v8i/v8i_file_store.hpp"
 #include "core/windows_path.hpp"
+#include "ui/cache_size_operation.hpp"
 #include "ui/tree_presentation.hpp"
 #include "ui/tree_view_controller.hpp"
 
@@ -51,6 +52,32 @@ std::string ReadBytes(const std::filesystem::path& path) { std::ifstream input(p
 void WriteBytes(const std::filesystem::path& path, std::string_view text) { std::ofstream output(path, std::ios::binary | std::ios::trunc); output.write(text.data(), static_cast<std::streamsize>(text.size())); }
 std::filesystem::path Fixture(const wchar_t* name) { return std::filesystem::current_path() / L"tests" / L"fixtures" / name; }
 std::filesystem::path Temp(const wchar_t* suffix) { auto path = std::filesystem::temp_directory_path() / (std::wstring(L"ibstart-tests-") + suffix + L"-" + std::to_wstring(GetCurrentProcessId())); std::error_code error; std::filesystem::remove_all(path, error); std::filesystem::create_directories(path); return path; }
+
+class ScopedEnvironmentVariable final {
+ public:
+  ScopedEnvironmentVariable(const wchar_t* name, const std::filesystem::path& value) : name_(name) {
+    const DWORD required = GetEnvironmentVariableW(name_.c_str(), nullptr, 0);
+    if (required != 0) {
+      previous_.resize(required);
+      const DWORD copied = GetEnvironmentVariableW(name_.c_str(), previous_.data(), required);
+      previous_.resize(copied);
+      had_previous_ = true;
+    }
+    SetEnvironmentVariableW(name_.c_str(), value.c_str());
+  }
+
+  ~ScopedEnvironmentVariable() {
+    SetEnvironmentVariableW(name_.c_str(), had_previous_ ? previous_.c_str() : nullptr);
+  }
+
+  ScopedEnvironmentVariable(const ScopedEnvironmentVariable&) = delete;
+  ScopedEnvironmentVariable& operator=(const ScopedEnvironmentVariable&) = delete;
+
+ private:
+  std::wstring name_;
+  std::wstring previous_;
+  bool had_previous_{false};
+};
 
 std::wstring WindowsSystemErrorMessage(DWORD error) {
   wchar_t buffer[512]{};
@@ -1813,6 +1840,146 @@ void TestCacheSizeFormatting() {
   CHECK(ibstart::cache::FormatSize(1024ULL * 1024ULL * 1024ULL) == L"1 ГБ");
 }
 
+void TestCacheScanResult() {
+  const auto directory = Temp(L"cache-scan-result");
+  const auto local = directory / L"local";
+  const auto roaming = directory / L"roaming";
+  const auto cache = local / L"1C" / L"1Cv8" / L"scan-id";
+  const auto fallback_cache = local / L"1C" / L"1Cv8" / L"fallback-name";
+  std::filesystem::create_directories(cache / L"nested");
+  WriteBytes(cache / L"first.dat", "12345");
+  WriteBytes(cache / L"nested" / L"second.dat", "xy");
+  std::filesystem::create_directories(fallback_cache);
+  WriteBytes(fallback_cache / L"fallback.dat", "fallback");
+  std::filesystem::create_directories(local / L"1C" / L"1Cv8" / L"empty-id");
+  ScopedEnvironmentVariable local_environment(L"LOCALAPPDATA", local);
+  ScopedEnvironmentVariable roaming_environment(L"APPDATA", roaming);
+
+  ibstart::domain::Database database;
+  database.id = L"scan-id";
+  const auto result = ibstart::cache::Scan(database);
+  CHECK(!result.cancelled);
+  CHECK(result.complete);
+  CHECK(result.bytes == 7);
+  CHECK(result.items.size() == 1);
+  CHECK(!result.items.empty() && result.items.front().bytes == 7);
+
+  ibstart::domain::Database empty;
+  empty.id = L"empty-id";
+  const auto empty_result = ibstart::cache::Scan(empty);
+  CHECK(empty_result.complete);
+  CHECK(!empty_result.cancelled);
+  CHECK(empty_result.bytes == 0);
+  CHECK(empty_result.items.size() == 1);
+
+  ibstart::domain::Database fallback;
+  fallback.name = L"fallback-name";
+  const auto fallback_result = ibstart::cache::Scan(fallback);
+  CHECK(fallback_result.complete);
+  CHECK(fallback_result.bytes == 8);
+  CHECK(fallback_result.items.size() == 1);
+
+  std::stop_source stop;
+  stop.request_stop();
+  const auto cancelled = ibstart::cache::Scan(database, stop.get_token());
+  CHECK(cancelled.cancelled);
+  CHECK(!cancelled.complete);
+  CHECK(cancelled.items.empty());
+  CHECK(cancelled.bytes == 0);
+
+  ibstart::domain::Database unsafe;
+  unsafe.id = L"bad/id";
+  const auto unsafe_result = ibstart::cache::Scan(unsafe);
+  CHECK(!unsafe_result.complete);
+  CHECK(!unsafe_result.cancelled);
+  CHECK(unsafe_result.items.empty());
+
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
+void TestCacheMetricPersistence() {
+  const auto directory = Temp(L"cache-metric-persistence");
+  const ibstart::storage::StorageLayout layout{directory, true};
+  ibstart::storage::EnsureWritable(layout);
+
+  ibstart::storage::Settings settings;
+  settings.show_cache_size_in_list = false;
+  ibstart::storage::SaveSettings(layout, settings);
+  const auto loaded_settings = ibstart::storage::LoadSettings(layout);
+  CHECK(!loaded_settings.show_cache_size_in_list);
+
+  const auto measured_at = std::chrono::system_clock::from_time_t(1787560200);
+  ibstart::storage::CatalogState state;
+  state.database_metrics[L"database-id"].cache = {123456789, measured_at, false};
+  state.database_metrics[L"empty-metric"] = {};
+  ibstart::storage::SaveCatalogState(layout, state);
+
+  const auto persisted = ibstart::storage::LoadCatalogState(layout);
+  CHECK(persisted.database_metrics.size() == 1);
+  CHECK(persisted.database_metrics.contains(L"database-id"));
+  if (persisted.database_metrics.contains(L"database-id")) {
+    const auto& metric = *persisted.database_metrics.at(L"database-id").cache;
+    CHECK(metric.bytes == 123456789);
+    CHECK(metric.measured_at == measured_at);
+    CHECK(!metric.complete);
+  }
+  const auto json = ReadBytes(layout.root / L"catalog-state.json");
+  CHECK(json.find("\"database_metrics\"") != std::string::npos);
+  CHECK(json.find("\"complete\": 0") != std::string::npos);
+
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
+void TestCacheSizeOperationProcessesQueue() {
+  const auto directory = Temp(L"cache-size-operation");
+  const auto local = directory / L"local";
+  const auto roaming = directory / L"roaming";
+  const auto first_cache = local / L"1C" / L"1Cv8" / L"first-id";
+  const auto second_cache = local / L"1C" / L"1Cv8" / L"second-id";
+  std::filesystem::create_directories(first_cache);
+  std::filesystem::create_directories(second_cache);
+  WriteBytes(first_cache / L"first.dat", "first");
+  WriteBytes(second_cache / L"second.dat", "second");
+  ScopedEnvironmentVariable local_environment(L"LOCALAPPDATA", local);
+  ScopedEnvironmentVariable roaming_environment(L"APPDATA", roaming);
+
+  ibstart::domain::Database first;
+  first.id = L"first-id";
+  first.name = L"Первая";
+  first.connect = L"File=first";
+  ibstart::domain::Database second;
+  second.id = L"second-id";
+  second.name = L"Вторая";
+  second.connect = L"File=second";
+  ibstart::domain::Database failed;
+  failed.id = L"bad/id";
+  failed.name = L"Ошибочная";
+
+  ibstart::ui::background::CacheSizeOperation operation;
+  operation.Start({first, failed, second}, nullptr, WM_APP + 91);
+  for (int attempt = 0; attempt != 2000 && !operation.completed(); ++attempt) Sleep(1);
+  CHECK(operation.completed());
+  const auto results = operation.TakeResults(8);
+  CHECK(results.size() == 3);
+  if (results.size() == 3) {
+    CHECK(results[0].database_id == L"first-id");
+    CHECK(results[0].completed == 1 && results[0].total == 3);
+    CHECK(results[0].scan.complete && results[0].scan.bytes == 5);
+    CHECK(results[1].database_id == L"bad/id");
+    CHECK(results[1].completed == 2 && results[1].total == 3);
+    CHECK(!results[1].scan.complete && !results[1].scan.cancelled);
+    CHECK(results[2].database_id == L"second-id");
+    CHECK(results[2].completed == 3 && results[2].total == 3);
+    CHECK(results[2].scan.complete && results[2].scan.bytes == 6);
+  }
+  operation.StopAndJoin();
+
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
 void TestCacheReportsLocalizedWindowsError() {
   const auto directory = Temp(L"cache-localized-error");
   const auto local = directory / L"local";
@@ -2476,6 +2643,45 @@ void TestCatalogMetadataExplicitIdChangeKeepsHistoryKey() {
   CHECK(state.history.front().database_id == L"explicit-id-old");
   CHECK(state.last_launches.contains(L"explicit-id-old"));
   CHECK(!state.last_launches.contains(L"explicit-id-new"));
+
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
+void TestCatalogMetadataCacheInvalidation() {
+  const auto directory = Temp(L"catalog-metadata-cache-invalidation");
+  const ibstart::storage::StorageLayout layout{directory, true};
+  ibstart::storage::EnsureWritable(layout);
+  ibstart::catalog::CatalogMetadataService service(layout);
+  const auto timestamp = std::chrono::system_clock::from_time_t(123456789);
+
+  service.SetCacheMetric(L"stable-id", {10, timestamp, true});
+  service.RenameDatabaseMetadata(L"База", L"Новое имя", L"stable-id", L"stable-id",
+      L"File=old", L"File=new");
+  CHECK(!service.Read().database_metrics.contains(L"stable-id"));
+
+  service.SetCacheMetric(L"stable-id", {20, timestamp, true});
+  service.RenameDatabaseMetadata(L"База", L"Новое имя", L"stable-id", L"stable-id",
+      L"File=same", L"File=same");
+  CHECK(service.Read().database_metrics.contains(L"stable-id"));
+
+  service.SetCacheMetric(L"new-id", {30, timestamp, true});
+  service.SetCacheMetric(L"old-id", {40, timestamp, true});
+  service.RenameDatabaseMetadata(L"База", L"База", L"old-id", L"new-id",
+      L"Srvr=old", L"Srvr=old");
+  CHECK(!service.Read().database_metrics.contains(L"old-id"));
+  CHECK(!service.Read().database_metrics.contains(L"new-id"));
+
+  service.SetCacheMetric(L"Старое имя", {50, timestamp, true});
+  service.SetCacheMetric(L"Новое имя", {60, timestamp, true});
+  service.RenameDatabaseMetadata(L"Старое имя", L"Новое имя", L"Старое имя", L"Новое имя",
+      L"Srvr=server;Ref=base", L"Srvr=server;Ref=base");
+  CHECK(!service.Read().database_metrics.contains(L"Старое имя"));
+  CHECK(!service.Read().database_metrics.contains(L"Новое имя"));
+
+  service.SetCacheMetric(L"remove-id", {70, timestamp, false});
+  service.RemoveCacheMetric(L"remove-id");
+  CHECK(!service.Read().database_metrics.contains(L"remove-id"));
 
   std::error_code error;
   std::filesystem::remove_all(directory, error);
@@ -3182,6 +3388,9 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"SecretMasking", TestSecretMasking);
   run(L"LogPruning", TestLogPruning);
   run(L"CacheSizeFormatting", TestCacheSizeFormatting);
+  run(L"CacheScanResult", TestCacheScanResult);
+  run(L"CacheMetricPersistence", TestCacheMetricPersistence);
+  run(L"CacheSizeOperationProcessesQueue", TestCacheSizeOperationProcessesQueue);
   run(L"CacheReportsLocalizedWindowsError", TestCacheReportsLocalizedWindowsError);
   run(L"CacheRejectsLicenseDescendants", TestCacheRejectsLicenseDescendants);
   run(L"CacheRejectsJunctions", TestCacheRejectsJunctions);
@@ -3199,6 +3408,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"CatalogMetadataService", TestCatalogMetadataService);
   run(L"CatalogMetadataRenamePreservesFallbackHistory", TestCatalogMetadataRenamePreservesFallbackHistory);
   run(L"CatalogMetadataExplicitIdChangeKeepsHistoryKey", TestCatalogMetadataExplicitIdChangeKeepsHistoryKey);
+  run(L"CatalogMetadataCacheInvalidation", TestCatalogMetadataCacheInvalidation);
   run(L"StorageSkipsMalformedRecords", TestStorageSkipsMalformedRecords);
   run(L"CatalogStateNormalization", TestCatalogStateNormalization);
   run(L"StorageRejectsUnreadableDataPath", TestStorageRejectsUnreadableDataPath);

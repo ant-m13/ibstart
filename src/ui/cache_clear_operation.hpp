@@ -18,8 +18,11 @@ class CacheClearOperation final {
 
   struct Result {
     Stage stage{Stage::finding};
+    std::optional<domain::Database> database;
     std::vector<cache::CacheItem> candidates;
+    cache::ScanResult scan_result;
     cache::ClearResult clear_result;
+    std::optional<cache::ScanResult> rescan_result;
     std::wstring error;
     bool cancelled{false};
   };
@@ -33,6 +36,8 @@ class CacheClearOperation final {
   void StartFinding(const domain::Database& database, HWND notification_window, UINT completion_message);
   void StartClearing(
       std::vector<cache::CacheItem> candidates, HWND notification_window, UINT completion_message);
+  void StartClearing(std::vector<cache::CacheItem> candidates, domain::Database database,
+      HWND notification_window, UINT completion_message);
   [[nodiscard]] bool active() const noexcept;
   [[nodiscard]] bool completed() const;
   [[nodiscard]] bool clearing() const;
@@ -41,6 +46,9 @@ class CacheClearOperation final {
   void StopAndJoin() noexcept;
 
  private:
+  void StartClearing(std::vector<cache::CacheItem> candidates,
+      std::optional<domain::Database> database, HWND notification_window, UINT completion_message);
+
   struct State;
 
   std::shared_ptr<State> state_;

@@ -149,6 +149,9 @@ void MenuController::RefreshMain(const storage::Settings& settings) {
     append(view_menu_, kEditTags, 0, L"Управление тегами выбранной базы…");
     append(view_menu_, kConfigureTagColors, 0, L"Настроить теги…");
     append(view_menu_, kShowTagsInList, 0, L"Показывать теги в списке баз", {}, settings.show_tags_in_list);
+    append(view_menu_, kCacheSizeAll, IDI_ACTION_CACHE_SIZE, L"Пересчитать размеры кэша всех баз");
+    append(view_menu_, kShowCacheSizeInList, 0, L"Показывать размеры кэша в списке баз", {},
+        settings.show_cache_size_in_list);
     append(view_menu_, kClearRecent, IDI_ACTION_DELETE, L"Очистить недавние базы…");
     append(view_menu_, kSimpleMode, 0, L"Простой режим", L"Ctrl+Alt+M");
     append(help_menu_, kCheckForUpdates, IDI_ACTION_UPDATE, L"Проверить обновления…");
