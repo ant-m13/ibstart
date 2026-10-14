@@ -4,6 +4,10 @@ site_url: https://ant-m13.github.io/ibstart/
 repo_name: ant-m13/ibstart
 repo_url: https://github.com/ant-m13/ibstart
 edit_uri: edit/main/docs/
+exclude_docs: |
+  /hooks.py
+hooks:
+  - docs/hooks.py
 
 theme:
   name: material
