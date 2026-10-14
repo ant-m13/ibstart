@@ -155,6 +155,7 @@ void MenuController::RefreshMain(const storage::Settings& settings) {
     append(view_menu_, kClearRecent, IDI_ACTION_DELETE, L"Очистить недавние базы…");
     append(view_menu_, kSimpleMode, 0, L"Простой режим", L"Ctrl+Alt+M");
     append(help_menu_, kCheckForUpdates, IDI_ACTION_UPDATE, L"Проверить обновления…");
+    append(help_menu_, kProjectWebsite, IDI_ACTION_WEBSITE, L"Сайт проекта");
     AppendMenuW(help_menu_, MF_SEPARATOR, 0, nullptr);
     append(help_menu_, kAbout, IDI_IBSTART, L"О программе…", L"F1");
   }

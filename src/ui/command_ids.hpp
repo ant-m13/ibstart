@@ -21,6 +21,7 @@ enum Id : int {
   kFocusSearch,
   kClearSearch,
   kCheckForUpdates,
+  kProjectWebsite,
   kAbout,
   kMoveUp,
   kMoveDown,

@@ -53,6 +53,7 @@ using presentation::TagId;
 using presentation::TagsFor;
 using presentation::TagsText;
 namespace {
+constexpr wchar_t kProjectWebsiteUrl[] = L"https://github.com/ant-m13/ibstart";
 constexpr wchar_t kClassName[] = L"IBStart.MainWindow";
 constexpr UINT kActivateMessage = WM_APP + 23;
 constexpr UINT kUpdateCheckFinishedMessage = WM_APP + 24;
@@ -73,6 +74,25 @@ constexpr int kSearchClearButtonHeight = 21;
 constexpr int kSearchClearButtonInset = 2;
 constexpr int kSearchClearTextGap = 4;
 void Message(HWND owner, std::wstring_view text, std::wstring_view title = L"ИБ Старт", UINT type = MB_OK | MB_ICONINFORMATION) { MessageBoxW(owner, std::wstring(text).c_str(), std::wstring(title).c_str(), type); }
+
+bool OpenUrl(HWND owner, const wchar_t* url) {
+  if (!url || !*url) return false;
+  const auto result = reinterpret_cast<INT_PTR>(
+      ShellExecuteW(owner, L"open", url, nullptr, nullptr, SW_SHOWNORMAL));
+  return result > 32;
+}
+
+HRESULT CALLBACK AboutDialogCallback(
+    HWND window, UINT notification, WPARAM, LPARAM lparam, LONG_PTR) {
+  if (notification == TDN_HYPERLINK_CLICKED && lparam) {
+    const auto* url = reinterpret_cast<LPCWSTR>(lparam);
+    if (!OpenUrl(window, url)) {
+      MessageBoxW(window, L"Не удалось открыть сайт проекта в браузере.",
+          L"ИБ Старт", MB_OK | MB_ICONWARNING);
+    }
+  }
+  return S_OK;
+}
 bool EnsurePathLength(HWND owner, const std::filesystem::path& path) {
   if (windows_path::IsWithinLimit(path)) return true;
   Message(owner, windows_path::LengthError(path), L"Слишком длинный путь", MB_OK | MB_ICONWARNING);
@@ -234,6 +254,13 @@ void MainWindow::RegisterCommandHandlers() {
   command_dispatcher_.Register(kFocusSearch, [this] { SetFocus(search_); });
   command_dispatcher_.Register(kClearSearch, [this] { ClearSearch(); });
   command_dispatcher_.Register(kCheckForUpdates, [this] { CheckForUpdates(); });
+  command_dispatcher_.Register(kProjectWebsite, [this] {
+    if (!OpenUrl(window_, kProjectWebsiteUrl)) {
+      Message(window_, L"Не удалось открыть сайт проекта в браузере.\n\n" +
+              std::wstring(kProjectWebsiteUrl),
+          L"ИБ Старт", MB_OK | MB_ICONWARNING);
+    }
+  });
   command_dispatcher_.Register(kAbout, [this] { ShowAbout(); });
   command_dispatcher_.Register(kExit, [this] { SendMessageW(window_, WM_CLOSE, 0, 0); });
   command_dispatcher_.Register(kMoveUp, [this] { MoveSelected(-1); });
@@ -2830,7 +2857,39 @@ void MainWindow::ShowUpdateCheckError() {
   Message(window_, L"Не удалось открыть текущий файл журнала. Он находится по адресу:\n" + logger_.path().wstring(),
       L"Проверка обновлений", MB_OK | MB_ICONWARNING);
 }
-void MainWindow::ShowAbout() const { const std::wstring text = L"ИБ Старт (IBStart)\nВерсия " + std::wstring(version::value) + L"\n\nМенеджер запуска 1С.\n\nЛицензия MIT. IBStart не является официальным продуктом фирмы «1С»."; MessageBoxW(window_, text.c_str(), L"О программе — ИБ Старт", MB_OK | MB_ICONINFORMATION); }
+void MainWindow::ShowAbout() const {
+  const std::wstring content =
+      L"Версия " + std::wstring(version::value) +
+      L"\n\n"
+      L"Менеджер запуска 1С.\n\n"
+      L"<a href=\"" + std::wstring(kProjectWebsiteUrl) + L"\">Сайт проекта</a>\n\n"
+      L"Лицензия MIT. IBStart не является официальным продуктом фирмы «1С».";
+
+  TASKDIALOGCONFIG config{};
+  config.cbSize = sizeof(config);
+  config.hwndParent = window_;
+  config.hInstance = instance_;
+  config.dwFlags = TDF_ENABLE_HYPERLINKS;
+  config.dwCommonButtons = TDCBF_OK_BUTTON;
+  config.pszWindowTitle = L"О программе — ИБ Старт";
+  config.pszMainInstruction = L"ИБ Старт (IBStart)";
+  config.pszContent = content.c_str();
+  config.pszMainIcon = TD_INFORMATION_ICON;
+  config.pfCallback = AboutDialogCallback;
+
+  if (FAILED(TaskDialogIndirect(&config, nullptr, nullptr, nullptr))) {
+    const std::wstring fallback =
+        L"ИБ Старт (IBStart)\n"
+        L"Версия " + std::wstring(version::value) +
+        L"\n\n"
+        L"Менеджер запуска 1С.\n\n"
+        L"Сайт проекта:\n" + std::wstring(kProjectWebsiteUrl) +
+        L"\n\n"
+        L"Лицензия MIT. IBStart не является официальным продуктом фирмы «1С».";
+    MessageBoxW(window_, fallback.c_str(), L"О программе — ИБ Старт",
+        MB_OK | MB_ICONINFORMATION);
+  }
+}
 void MainWindow::ReportUnhandledError(std::string_view message) noexcept { try { const auto wide = utf::FromUtf8(message); logger_.Error(L"Необработанная ошибка UI: " + wide); const auto text = L"Произошла непредвиденная ошибка. Подробности записаны в:\n" + logger_.path().wstring(); MessageBoxW(window_, text.c_str(), L"ИБ Старт", MB_OK | MB_ICONERROR); } catch (...) { MessageBoxW(window_, L"Произошла непредвиденная ошибка.", L"ИБ Старт", MB_OK | MB_ICONERROR); } }
 
 }  // namespace ibstart::ui
