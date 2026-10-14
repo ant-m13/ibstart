@@ -3,6 +3,13 @@ name: release
 on:
   push:
     branches: [main]
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+      - "CHANGELOG.md"
+      - "mkdocs.yml"
+      - "requirements-docs.txt"
+      - ".github/workflows/**"
 
 permissions:
   contents: write

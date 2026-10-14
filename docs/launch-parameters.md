@@ -58,11 +58,11 @@ Raw `AdditionalParameters` может временно сохранять неи
 Основные места текущей реализации:
 
 - выбор launch context и источника параметров —
-  [`MainWindow::LaunchSelected`](../src/ui/main_window.cpp);
+  [`MainWindow::LaunchSelected`](https://github.com/ant-m13/ibstart/blob/main/src/ui/main_window.cpp);
 - построение executable и аргументов —
-  [`launcher::BuildCommand`](../src/core/launcher/command_builder.cpp);
+  [`launcher::BuildCommand`](https://github.com/ant-m13/ibstart/blob/main/src/core/launcher/command_builder.cpp);
 - распознавание raw Windows-аргументов —
-  [`launcher::SplitCommandArguments`](../src/core/launcher/command_builder.cpp).
+  [`launcher::SplitCommandArguments`](https://github.com/ant-m13/ibstart/blob/main/src/core/launcher/command_builder.cpp).
 
 Полный version profile и отдельные API для batch/web/mobile/OLE/agent пока не
 реализованы; неизвестные параметры по-прежнему передаются как raw-текст после

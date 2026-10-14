@@ -1,0 +1,73 @@
+site_name: ИБ Старт — IBStart
+site_description: Лёгкий нативный менеджер запуска информационных баз 1С:Предприятие для Windows
+site_url: https://ant-m13.github.io/ibstart/
+repo_name: ant-m13/ibstart
+repo_url: https://github.com/ant-m13/ibstart
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  language: ru
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - search.suggest
+    - search.highlight
+    - content.action.edit
+    - content.action.view
+    - content.code.copy
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-7
+        name: Тёмная тема
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: custom
+      accent: custom
+      toggle:
+        icon: material/brightness-4
+        name: Светлая тема
+
+nav:
+  - Главная: index.md
+  - Возможности: features.md
+  - Скачать: download.md
+  - Что нового: changelog.md
+  - Руководство:
+      - Руководство пользователя: user-guide.md
+      - Конфигурация и данные: configuration.md
+      - Параметры запуска: launch-parameters.md
+  - Разработчикам:
+      - Архитектура: architecture.md
+      - Формат ibases.v8i: ibases-format.md
+      - Спецификация запуска: ibases-launch-spec.md
+      - Процесс выпуска: release-process.md
+      - Лицензирование материалов 1С: 1c-license-compliance.md
+  - План развития: future-features.md
+
+markdown_extensions:
+  - admonition
+  - attr_list
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.details
+  - pymdownx.superfences
+
+extra_css:
+  - stylesheets/extra.css
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/ant-m13/ibstart
+      name: IBStart на GitHub
+
+copyright: © IBStart open-source contributors · MIT License

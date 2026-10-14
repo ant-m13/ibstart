@@ -1,0 +1,29 @@
+:root {
+  --md-primary-fg-color: #007488;
+  --md-primary-fg-color--light: #168da0;
+  --md-primary-fg-color--dark: #005d6d;
+  --md-accent-fg-color: #007488;
+}
+
+.hero {
+  padding: 1rem 0 0.5rem;
+}
+
+.feature-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(230px, 1fr));
+  gap: 0.9rem;
+  margin: 1rem 0 1.5rem;
+}
+
+.feature-card {
+  border: 1px solid var(--md-default-fg-color--lightest);
+  border-radius: 0.55rem;
+  padding: 0.85rem 1rem;
+  background: var(--md-default-bg-color);
+}
+
+.feature-card h3 {
+  margin-top: 0;
+  color: var(--md-primary-fg-color);
+}
