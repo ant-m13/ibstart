@@ -44,9 +44,9 @@ HTML, CSS, изображений или исходного кода 1С.
 | Безопасность | Известные секреты маскируются в логах и автоматически создаваемых diagnostics/report; значения в `ibases.v8i`, UI и явном копировании доступны пользователю. | Расширить registry и тесты так, чтобы секреты не попадали в открытом виде в логи и автоматически создаваемые diagnostics/report; fixtures должны быть синтетическими или замаскированными. |
 
 Фактическое mapping полей в коде находится в
-[`MakeDatabase`](../src/core/catalog/catalog.cpp), выбор launch options — в
-[`MainWindow::LaunchSelected`](../src/ui/main_window.cpp), построение команды — в
-[`launcher::BuildCommand`](../src/core/launcher/command_builder.cpp).
+[`MakeDatabase`](https://github.com/ant-m13/ibstart/blob/main/src/core/catalog/catalog.cpp), выбор launch options — в
+[`MainWindow::LaunchSelected`](https://github.com/ant-m13/ibstart/blob/main/src/ui/main_window.cpp), построение команды — в
+[`launcher::BuildCommand`](https://github.com/ant-m13/ibstart/blob/main/src/core/launcher/command_builder.cpp).
 
 ## 2. Сквозная модель
 

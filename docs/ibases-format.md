@@ -134,10 +134,10 @@ Lossless-слой должен хранить исходное представ�
 ## 5. Фактическая реализация IBStart
 
 Typed-представление текущего проекта находится в
-[`domain::Database`](../src/core/domain/model.hpp), mapping выполняет
-[`MakeDatabase`](../src/core/catalog/catalog.cpp), редактор читает и записывает
-известные поля через [`DatabaseEditorDataFromEntry`](../src/ui/database_editor_dialog.cpp)
-и [`ApplyDatabaseEditorData`](../src/ui/database_editor_dialog.cpp).
+[`domain::Database`](https://github.com/ant-m13/ibstart/blob/main/src/core/domain/model.hpp), mapping выполняет
+[`MakeDatabase`](https://github.com/ant-m13/ibstart/blob/main/src/core/catalog/catalog.cpp), редактор читает и записывает
+известные поля через [`DatabaseEditorDataFromEntry`](https://github.com/ant-m13/ibstart/blob/main/src/ui/database_editor_dialog.cpp)
+и [`ApplyDatabaseEditorData`](https://github.com/ant-m13/ibstart/blob/main/src/ui/database_editor_dialog.cpp).
 
 Сейчас применяются к каталогу или запуску:
 
