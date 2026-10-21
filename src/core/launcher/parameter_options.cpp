@@ -56,6 +56,48 @@ std::wstring ChoicesForBit(std::wstring_view command, std::wstring_view option, 
   }
   return result;
 }
+std::vector<std::wstring_view> PrimaryOperandNames(std::wstring_view command, uint32_t bit) {
+  const auto found = std::find_if(std::begin(command_syntax), std::end(command_syntax),
+      [&](const auto& entry) { return Equal(command, entry.command) && (entry.versions & bit); });
+  if (found == std::end(command_syntax)) return {};
+  auto syntax = found->syntax;
+  if (Equal(command, L"/DisableExtensions") && syntax.find(L"ExtName1") != std::wstring_view::npos)
+    return {L"имена расширений через запятую"};
+  if (syntax.size() <= command.size()) return {};
+  syntax.remove_prefix(command.size());
+  const auto start = syntax.find_first_not_of(L" \t");
+  if (start == std::wstring_view::npos) return {};
+  syntax.remove_prefix(start);
+  if (syntax.starts_with(L"[<")) syntax.remove_prefix(1);
+  std::vector<std::wstring_view> names;
+  while (syntax.starts_with(L"<")) {
+    const auto end = syntax.find(L'>');
+    if (end == std::wstring_view::npos) return {};
+    auto name = syntax.substr(1, end - 1);
+    // Historical LoadConfigFiles headings copy the dump-directory label.
+    if (Equal(command, L"/LoadConfigFiles") && name == L"каталог выгрузки") name = L"каталог загрузки";
+    names.push_back(name);
+    syntax.remove_prefix(end + 1);
+    const auto next = syntax.find_first_not_of(L" \t");
+    if (next == std::wstring_view::npos) break;
+    syntax.remove_prefix(next);
+  }
+  return names;
+}
+
+std::wstring SinglePrimaryOperand(std::wstring_view value) {
+  if (value.empty()) return {};
+  // Existing editors may supply a complete explicitly quoted operand.
+  // Decode it once before serializing, rather than quote the quote marks.
+  const auto first = value.find_first_not_of(L" \t\r\n");
+  if (first != std::wstring_view::npos && value[first] == L'"') {
+    const auto tokens = TokenizeCommandArguments(value);
+    if (tokens.size() != 1) throw std::invalid_argument("Only one primary operand is allowed in this field.");
+    return QuoteWindowsArgument(tokens.front().value,
+        tokens.front().value.starts_with(L"/") || tokens.front().value.starts_with(L"-"));
+  }
+  return QuoteWindowsArgument(value, value.starts_with(L"/") || value.starts_with(L"-"));
+}
 struct OptionFragment { size_t begin{}, end{}; std::wstring value; bool has_value{false}; bool ambiguous{false}; };
 void RequireSeparateParent(std::wstring_view body, std::wstring_view command) {
   const auto tokens = TokenizeCommandArguments(body);
@@ -209,30 +251,16 @@ std::vector<NestedParameterDefinition> ParameterNestedOptions(std::wstring_view 
 }
 
 std::wstring ParameterPrimaryOperandLabel(std::wstring_view command, std::wstring_view version) {
-  auto syntax = DocumentedParameterSyntax(command, version);
-  if (Equal(command, L"/DisableExtensions") && syntax.find(L"ExtName1") != std::wstring_view::npos)
-    return L"имена расширений через запятую";
-  // Historical LoadConfigFiles headings copy the dump-directory label.
-  if (Equal(command, L"/LoadConfigFiles") && syntax.find(L"<каталог выгрузки>") != std::wstring_view::npos)
-    return L"каталог загрузки";
-  if (syntax.size() <= command.size()) return {};
-  syntax.remove_prefix(command.size());
-  const auto start = syntax.find_first_not_of(L" \t");
-  if (start == std::wstring_view::npos) return {};
-  syntax.remove_prefix(start);
-  if (syntax.starts_with(L"[<")) syntax.remove_prefix(1);
   std::wstring label;
-  while (syntax.starts_with(L"<")) {
-    const auto end = syntax.find(L'>');
-    if (end == std::wstring_view::npos) return {};
+  for (const auto name : PrimaryOperandNames(command, VersionBit(version))) {
     if (!label.empty()) label += L"; ";
-    label += syntax.substr(1, end - 1);
-    syntax.remove_prefix(end + 1);
-    const auto next = syntax.find_first_not_of(L" \t");
-    if (next == std::wstring_view::npos) break;
-    syntax.remove_prefix(next);
+    label += name;
   }
   return label;
+}
+
+size_t ParameterPrimaryOperandCount(std::wstring_view command, std::wstring_view version) {
+  return PrimaryOperandNames(command, VersionBit(version)).size();
 }
 
 bool NestedParameterRequired(std::wstring_view command, std::wstring_view option,
@@ -504,7 +532,10 @@ std::wstring SetNestedParameter(std::wstring_view text, const ParameterDefinitio
   if (found.size() > 1 || std::any_of(found.begin(), found.end(), [](const auto& item) { return item.ambiguous; }))
     throw std::invalid_argument("Ambiguous nested option.");
   std::wstring replacement = enabled ? std::wstring(option.key) : L"";
-  if (enabled && option.key.empty()) {
+  if (enabled && option.key.empty() && allowed.empty() &&
+      PrimaryOperandNames(command.key, option.profile ? option.profile : VersionBit(L"8.5.1")).size() == 1) {
+    replacement = SinglePrimaryOperand(value);
+  } else if (enabled && option.key.empty()) {
     for (const auto& token : TokenizeCommandArguments(value))
       if (!token.quoted && (token.value.starts_with(L"/") || token.value.starts_with(L"-")) && !HasChoice(allowed, token.value))
         throw std::invalid_argument("Primary operands must not contain unquoted switches.");

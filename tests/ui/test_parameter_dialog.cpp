@@ -526,6 +526,36 @@ void CALLBACK Drive(HWND, UINT, UINT_PTR, DWORD) {
       Check(primary_profiles_checked > 0, "All-profile primary editor audit ran");
       std::cout << "Primary-only editors checked: " << primary_commands.size() << " commands, "
                 << primary_profiles_checked << " command/profile pairs\n";
+      choose_version(L"8.5.1");
+      for (const auto key : {L"/DumpCfg", L"/LoadCfg", L"/DumpIB", L"/RestoreIB", L"/LoadConfigFromFiles",
+          L"/ConvertFiles", L"/DumpConfigToFiles", L"/AgentBaseDir", L"/SignCfg"}) {
+        choose_version(std::wstring_view(key) == L"/SignCfg" ? L"8.3.15" : L"8.5.1");
+        SetWindowTextW(GetDlgItem(builder, 1809), initial.c_str());
+        find.psz = key;
+        ListView_SetItemState(list, ListView_FindItem(list, -1, &find), LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+        Check(Text(GetDlgItem(builder, 1804)).find(L"Кавычки для пробелов добавляются автоматически") != std::wstring::npos,
+            "Single-value primary editor explains automatic quoting");
+        SetWindowTextW(GetDlgItem(builder, 1805), L"C:\\synthetic folder\\имя файла.cf");
+        SendMessageW(GetDlgItem(builder, 1808), BM_CLICK, 0, 0);
+        Check(Text(GetDlgItem(builder, 1809)) == initial + key + L" \"C:\\synthetic folder\\имя файла.cf\"",
+            "Real form quotes an unquoted primary path as one argument and preserves surrounding text");
+        if (std::wstring_view(key) == L"/DumpCfg") Capture(builder, L"primary-path-quoted.bmp");
+        SendMessageW(GetDlgItem(builder, 1808), BM_CLICK, 0, 0);
+        Check(Text(GetDlgItem(builder, 1809)) == initial + key + L" \"C:\\synthetic folder\\имя файла.cf\"",
+            "Applying an already quoted primary value again is stable");
+      }
+      choose_version(L"8.5.1");
+      for (const auto key : {L"/DumpExternalDataProcessorOrReportToFiles", L"/LoadExternalDataProcessorOrReportFromFiles"}) {
+        SetWindowTextW(GetDlgItem(builder, 1809), initial.c_str());
+        find.psz = key;
+        ListView_SetItemState(list, ListView_FindItem(list, -1, &find), LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
+        const std::wstring values = L"\"C:\\root folder\\root.xml\" \"C:\\processor folder\\test.epf\"";
+        SetWindowTextW(GetDlgItem(builder, 1805), values.c_str());
+        SendMessageW(GetDlgItem(builder, 1808), BM_CLICK, 0, 0);
+        Check(Text(GetDlgItem(builder, 1809)) == initial + key + L" " + values,
+            "Real form preserves two explicitly quoted primary operands as separate arguments");
+      }
+      SetWindowTextW(GetDlgItem(builder, 1809), initial.c_str());
       choose_version(L"8.3.26");
       find.psz = L"/EmailAuth";
       ListView_SetItemState(list, ListView_FindItem(list, -1, &find), LVIS_SELECTED | LVIS_FOCUSED, LVIS_SELECTED | LVIS_FOCUSED);
