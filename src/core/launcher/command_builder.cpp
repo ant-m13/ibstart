@@ -1,6 +1,7 @@
 #include "core/launcher/command_builder.hpp"
 
 #include "core/connection/connection_string.hpp"
+#include "core/launcher/parameter_catalog.hpp"
 #include "core/domain/utf.hpp"
 #include "core/platform/platform_discovery.hpp"
 #include "core/platform/platform_version.hpp"
@@ -84,7 +85,7 @@ void AddParameterConflict(std::vector<std::wstring>& errors, std::wstring messag
 
 void ValidateParameterText(std::wstring_view text, std::map<std::wstring, size_t, CaseInsensitiveLess>& occurrences,
     std::vector<std::wstring>& errors) {
-  const auto arguments = SplitCommandArguments(text);
+  const auto arguments = TokenizeCommandArguments(text);
   const auto is_connection_parameter = [](std::wstring_view name) {
     constexpr std::wstring_view connection_names[] = {
         L"F", L"S", L"WS", L"IBConnection", L"IBConnectionString", L"URL"};
@@ -97,7 +98,14 @@ void ValidateParameterText(std::wstring_view text, std::map<std::wstring, size_t
         EqualNoCase(name, L"ExecuteAfter") || EqualNoCase(name, L"N") || EqualNoCase(name, L"P");
   };
   for (size_t index = 0; index < arguments.size(); ++index) {
-    const auto& argument = arguments[index];
+    const auto& argument = arguments[index].value;
+    // /C has one opaque value: its content must never become a mode,
+    // connection override or another launch switch during validation.
+    if (EqualNoCase(argument, L"/C")) {
+      if (index + 1 < arguments.size()) ++index;
+      else AddParameterConflict(errors, L"У параметра /C отсутствует значение.");
+      continue;
+    }
     if (EqualNoCase(argument, L"ENTERPRISE") || EqualNoCase(argument, L"DESIGNER") ||
         EqualNoCase(argument, L"CREATEINFOBASE")) {
       AddParameterConflict(errors, L"Дополнительные параметры не должны задавать режим ENTERPRISE, DESIGNER или CREATEINFOBASE.");
@@ -111,7 +119,15 @@ void ValidateParameterText(std::wstring_view text, std::map<std::wstring, size_t
         EqualNoCase(name, L"AppArch") || EqualNoCase(name, L"Proxy") ||
         EqualNoCase(name, L"NoProxy") || EqualNoCase(name, L"Execute") ||
         EqualNoCase(name, L"ExecuteAfter") || EqualNoCase(name, L"N") || EqualNoCase(name, L"P");
-    if (!tracked_parameter) continue;
+    if (!tracked_parameter) {
+      const auto catalog = LaunchParameterCatalog();
+      const auto definition = std::find_if(catalog.begin(), catalog.end(),
+          [&](const auto& item) { return EqualNoCase(item.key, argument); });
+      if (definition != catalog.end() && (definition->kind == ParameterValueKind::text ||
+          definition->kind == ParameterValueKind::file || definition->kind == ParameterValueKind::choice) &&
+          index + 1 < arguments.size() && (arguments[index + 1].quoted || SwitchName(arguments[index + 1].value).empty())) ++index;
+      continue;
+    }
 
     const bool inserted = occurrences.emplace(name, index).second;
     if (!inserted) {
@@ -130,10 +146,10 @@ void ValidateParameterText(std::wstring_view text, std::map<std::wstring, size_t
     const auto equals = argument.find(L'=');
     if (equals != std::wstring::npos) {
       value = argument.substr(equals + 1);
-    } else if (index + 1 < arguments.size() && !SwitchName(arguments[index + 1]).empty()) {
+    } else if (index + 1 < arguments.size() && !arguments[index + 1].quoted && !SwitchName(arguments[index + 1].value).empty()) {
       AddParameterConflict(errors, L"У параметра /" + name + L" отсутствует значение.");
     } else if (index + 1 < arguments.size()) {
-      value = arguments[++index];
+      value = arguments[++index].value;
     } else {
       AddParameterConflict(errors, L"У параметра /" + name + L" отсутствует значение.");
     }
@@ -147,9 +163,9 @@ void ValidateParameterText(std::wstring_view text, std::map<std::wstring, size_t
 
 }  // namespace
 
-std::wstring QuoteWindowsArgument(std::wstring_view argument) {
+std::wstring QuoteWindowsArgument(std::wstring_view argument, bool force) {
   if (argument.empty()) return L"\"\"";
-  if (argument.find_first_of(L" \t\n\v\"") == std::wstring_view::npos) return std::wstring(argument);
+  if (!force && argument.find_first_of(L" \t\n\v\"") == std::wstring_view::npos) return std::wstring(argument);
   std::wstring result = L"\"";
   size_t slashes = 0;
   for (const wchar_t character : argument) {
@@ -170,14 +186,22 @@ std::wstring QuoteWindowsArgument(std::wstring_view argument) {
   return result;
 }
 
-std::vector<std::wstring> SplitCommandArguments(std::wstring_view text) {
-  std::vector<std::wstring> result;
+std::vector<CommandArgument> TokenizeCommandArguments(std::wstring_view text) {
+  std::vector<CommandArgument> result;
   std::wstring current;
   bool quoted = false;
   bool tokenStarted = false;
   size_t slashes = 0;
-  const auto flush = [&] { if (tokenStarted) { result.push_back(std::move(current)); current.clear(); tokenStarted = false; } };
-  for (const wchar_t character : text) {
+  size_t begin = 0;
+  const auto flush = [&](size_t end) {
+    if (tokenStarted) {
+      result.push_back({begin, end, std::move(current), text[begin] == L'"'});
+      current.clear(); tokenStarted = false;
+    }
+  };
+  for (size_t position = 0; position < text.size(); ++position) {
+    const wchar_t character = text[position];
+    if (!tokenStarted && !std::iswspace(character)) begin = position;
     if (character == L'\\') { ++slashes; tokenStarted = true; continue; }
     if (character == L'"') {
       tokenStarted = true;
@@ -189,12 +213,18 @@ std::vector<std::wstring> SplitCommandArguments(std::wstring_view text) {
     }
     current.append(slashes, L'\\');
     slashes = 0;
-    if (std::iswspace(character) && !quoted) flush();
+    if (std::iswspace(character) && !quoted) flush(position);
     else { current.push_back(character); tokenStarted = true; }
   }
   current.append(slashes, L'\\');
   if (quoted) throw std::invalid_argument("Unclosed quote in additional launch parameters.");
-  flush();
+  flush(text.size());
+  return result;
+}
+
+std::vector<std::wstring> SplitCommandArguments(std::wstring_view text) {
+  std::vector<std::wstring> result;
+  for (auto& argument : TokenizeCommandArguments(text)) result.push_back(std::move(argument.value));
   return result;
 }
 
@@ -208,16 +238,17 @@ std::optional<domain::ClientArchitecture> ParseAppArchitecture(std::wstring_view
 }
 
 std::optional<domain::ClientArchitecture> AppArchitectureFromParameters(std::wstring_view text) {
-  const auto arguments = SplitCommandArguments(text);
+  const auto arguments = TokenizeCommandArguments(text);
   std::optional<domain::ClientArchitecture> result;
   for (size_t index = 0; index < arguments.size(); ++index) {
-    const auto& argument = arguments[index];
+    const auto& argument = arguments[index].value;
+    if (EqualNoCase(argument, L"/C") && index + 1 < arguments.size()) { ++index; continue; }
     if (EqualNoCase(argument, L"/AppArch")) {
-      if (index + 1 >= arguments.size() || !SwitchName(arguments[index + 1]).empty()) {
+      if (index + 1 >= arguments.size() || (!arguments[index + 1].quoted && !SwitchName(arguments[index + 1].value).empty())) {
         throw std::invalid_argument("AppArch parameter has no value.");
       }
       if (result) throw std::invalid_argument("AppArch parameter is specified more than once.");
-      result = ParseAppArchitecture(arguments[++index]);
+      result = ParseAppArchitecture(arguments[++index].value);
       if (!result) throw std::invalid_argument("AppArch parameter has an invalid value.");
       continue;
     }
@@ -383,6 +414,12 @@ domain::LaunchCommand BuildCommand(const domain::Database& database,
     if (!thin) throw std::runtime_error("The selected platform has no thin client (1cv8c.exe).");
     command.executable = *thin;
   }
+  const auto parameter_text = options.common_parameters + L" " +
+      (options.override_individual_parameters ? options.individual_parameters : database.additional_parameters);
+  const auto draft_errors = ValidateParameterDraft(parameter_text,
+      {options.mode, EqualNoCase(command.executable.filename().wstring(), L"1cv8c.exe") ? domain::ClientType::thin :
+          domain::ClientType::thick, platform.version});
+  if (!draft_errors.empty()) ThrowValidation(draft_errors.front());
   if (options.mode == domain::LaunchMode::designer) command.arguments.push_back(L"DESIGNER");
   else if (options.mode == domain::LaunchMode::enterprise) command.arguments.push_back(L"ENTERPRISE");
 

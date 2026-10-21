@@ -78,6 +78,53 @@ void DrawSettingsIcon(HDC context, int icon_x, int icon_y, bool disabled, bool s
   DeleteObject(hole_pen);
 }
 
+void DrawCredentialsIcon(HDC context, int icon_x, int icon_y, bool disabled, bool selected) {
+  const COLORREF outline = disabled ? GetSysColor(COLOR_GRAYTEXT) : selected ? RGB(218, 242, 255) : RGB(0, 144, 162);
+  const COLORREF fill = disabled ? GetSysColor(COLOR_MENU) : selected ? GetSysColor(COLOR_HIGHLIGHT) : RGB(231, 246, 248);
+  const HBRUSH brush = CreateSolidBrush(fill);
+  const HPEN pen = CreatePen(PS_SOLID, 1, outline);
+  const auto previous_brush = SelectObject(context, brush);
+  const auto previous_pen = SelectObject(context, pen);
+  Ellipse(context, icon_x + 4, icon_y + 1, icon_x + 12, icon_y + 9);
+  RoundRect(context, icon_x + 1, icon_y + 10, icon_x + 15, icon_y + 19, 7, 7);
+  SelectObject(context, previous_brush);
+  SelectObject(context, previous_pen);
+  DeleteObject(brush);
+  DeleteObject(pen);
+
+  const COLORREF accent = disabled ? GetSysColor(COLOR_GRAYTEXT) : selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : RGB(214, 139, 25);
+  const HPEN key_pen = CreatePen(PS_SOLID, 2, accent);
+  const auto previous_key_pen = SelectObject(context, key_pen);
+  const auto previous_key_brush = SelectObject(context, GetStockObject(HOLLOW_BRUSH));
+  Ellipse(context, icon_x + 12, icon_y + 8, icon_x + 19, icon_y + 15);
+  MoveToEx(context, icon_x + 14, icon_y + 14, nullptr);
+  LineTo(context, icon_x + 8, icon_y + 20);
+  MoveToEx(context, icon_x + 10, icon_y + 17, nullptr);
+  LineTo(context, icon_x + 12, icon_y + 19);
+  SelectObject(context, previous_key_brush);
+  SelectObject(context, previous_key_pen);
+  DeleteObject(key_pen);
+}
+
+void DrawConfigurationsIcon(HDC context, int icon_x, int icon_y, bool disabled, bool selected) {
+  const COLORREF outline = disabled ? GetSysColor(COLOR_GRAYTEXT) : selected ? RGB(218, 242, 255) : RGB(0, 144, 162);
+  const COLORREF fill = disabled ? GetSysColor(COLOR_MENU) : selected ? GetSysColor(COLOR_HIGHLIGHT) : RGB(231, 246, 248);
+  const HBRUSH brush = CreateSolidBrush(fill);
+  const HPEN pen = CreatePen(PS_SOLID, 1, outline);
+  const auto previous_brush = SelectObject(context, brush);
+  const auto previous_pen = SelectObject(context, pen);
+  RoundRect(context, icon_x + 5, icon_y + 2, icon_x + 19, icon_y + 16, 3, 3);
+  RoundRect(context, icon_x + 1, icon_y + 6, icon_x + 16, icon_y + 20, 3, 3);
+  for (const int y : {11, 15}) {
+    MoveToEx(context, icon_x + 5, icon_y + y, nullptr);
+    LineTo(context, icon_x + 12, icon_y + y);
+  }
+  SelectObject(context, previous_brush);
+  SelectObject(context, previous_pen);
+  DeleteObject(brush);
+  DeleteObject(pen);
+}
+
 void DrawTagIcon(HDC context, int icon_x, int icon_y, bool disabled, bool selected) {
   const COLORREF outline = disabled ? GetSysColor(COLOR_GRAYTEXT) :
       selected ? GetSysColor(COLOR_HIGHLIGHTTEXT) : RGB(0, 103, 117);
@@ -243,6 +290,8 @@ bool OwnerDrawMenu::Draw(HFONT font, const OwnerDrawMenuItem& item, const DRAWIT
     case OwnerDrawMenuIcon::move_down: DrawMoveArrow(draw->hDC, item, icon_x, icon_y, disabled); break;
     case OwnerDrawMenuIcon::compact_mode: DrawCompactModeIcon(draw->hDC, icon_x, icon_y, disabled, selected); break;
     case OwnerDrawMenuIcon::settings: DrawSettingsIcon(draw->hDC, icon_x, icon_y, disabled, selected); break;
+    case OwnerDrawMenuIcon::credentials: DrawCredentialsIcon(draw->hDC, icon_x, icon_y, disabled, selected); break;
+    case OwnerDrawMenuIcon::configurations: DrawConfigurationsIcon(draw->hDC, icon_x, icon_y, disabled, selected); break;
     case OwnerDrawMenuIcon::tag: DrawTagIcon(draw->hDC, icon_x, icon_y, disabled, selected); break;
     case OwnerDrawMenuIcon::launch_parameters: DrawLaunchParametersIcon(draw->hDC, icon_x, icon_y, disabled, selected); break;
     case OwnerDrawMenuIcon::sort_ascending:

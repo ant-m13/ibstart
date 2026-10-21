@@ -28,7 +28,7 @@ bool StartsWithNoCase(std::wstring_view value, std::wstring_view prefix) {
 
 bool IsSeparateSecretSwitch(std::wstring_view argument) {
   constexpr std::wstring_view switches[] = {
-      L"/P", L"/Password", L"/WSP", L"/ModifyPassword", L"/AccessToken", L"/UC", L"/SPwd", L"/DBPwd",
+      L"/P", L"/Password", L"/WSP", L"/ModifyPassword", L"/AccessToken", L"/UC", L"/SPwd", L"/DBPwd", L"/ConfigurationRepositoryP",
       L"/PPasswd", L"WSP", L"PPasswd", L"AccessToken", L"UC", L"SPwd", L"DBPwd",
       L"--password", L"-password", L"--token", L"-token", L"--secret", L"-secret", L"--pwd", L"-pwd", L"-PPwd"};
   return std::any_of(std::begin(switches), std::end(switches), [&](auto value) { return EqualNoCase(argument, value); });
@@ -48,7 +48,7 @@ std::optional<size_t> ExplicitInlineSecretPrefixLength(std::wstring_view argumen
       L"/Password=", L"/WSP=", L"/ModifyPassword=", L"/AccessToken=", L"/UC=", L"/SPwd=", L"/DBPwd=", L"/PPasswd=",
       L"--password=", L"-password=", L"--token=", L"-token=", L"--secret=", L"-secret=", L"--pwd=", L"-pwd=", L"-PPwd=",
       L"password=", L"pwd=", L"token=", L"secret=", L"WSP=", L"PPasswd=", L"AccessToken=", L"UC=", L"SPwd=", L"DBPwd=",
-      L"ModifyPassword=", L"/P="};
+      L"ModifyPassword=", L"/P=", L"/ConfigurationRepositoryP="};
   for (const auto prefix : prefixes) if (StartsWithNoCase(argument, prefix)) return prefix.size();
   return std::nullopt;
 }
@@ -157,7 +157,7 @@ std::wstring MaskSecrets(std::wstring_view arguments) {
   // not support the negative lookahead that would otherwise exclude /Path,
   // /Port and /Profile.  Those switches are filtered while applying matches.
   const std::wregex paired(
-      LR"mask(((?:(?:/(?:Password|P|WSP|ModifyPassword|AccessToken|UC|SPwd|DBPwd|PPasswd))|(?:--|-)(?:password|token|secret|pwd|accesstoken|access_token|modify-password|modify_password|ppwd)|(?:WSP|PPasswd|AccessToken|UC|SPwd|DBPwd|ModifyPassword|password|pwd|token|secret))\s*(?:=\s*)?)("(?:[^"]*)"|[^\s]+))mask",
+      LR"mask(((?:(?:/(?:Password|P|WSP|ModifyPassword|AccessToken|UC|SPwd|DBPwd|PPasswd|ConfigurationRepositoryP))|(?:--|-)(?:password|token|secret|pwd|accesstoken|access_token|modify-password|modify_password|ppwd)|(?:WSP|PPasswd|AccessToken|UC|SPwd|DBPwd|ModifyPassword|password|pwd|token|secret))\s*(?:=\s*)?)("(?:[^"]*)"|[^\s]+))mask",
       std::regex_constants::icase);
   std::wstring masked;
   masked.reserve(result.size());

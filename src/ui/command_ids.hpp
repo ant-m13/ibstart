@@ -46,6 +46,10 @@ enum Id : int {
   kExit,
   kConfigureApplicationSettings,
   kConfigureCredentials,
+  kOpenParameterBuilder,
+  kConfigureConfigurations,
+  kShowConfigurationInList,
+  kOpenAvailableUpdate,
   kFavorite1 = 200,
 };
 

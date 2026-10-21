@@ -3,6 +3,7 @@
 #include "core/domain/identifier.hpp"
 #include "core/domain/model.hpp"
 #include "core/credentials/credentials.hpp"
+#include "core/catalog/configuration_catalog.hpp"
 
 #include <Windows.h>
 
@@ -59,9 +60,11 @@ struct Settings {
   std::wstring selected_entry;
   bool simple_mode{false};
   bool show_tags_in_list{true};
+  bool show_configuration_in_list{true};
   bool show_cache_size_in_list{true};
   bool folders_first_when_sorting{true};
   bool open_last_list_on_startup{true};
+  bool check_updates_on_startup{true};
   bool restore_last_selection{true};
   domain::ClientType default_client_type{domain::ClientType::automatic};
   domain::ClientArchitecture default_architecture{domain::ClientArchitecture::automatic};
@@ -121,6 +124,10 @@ struct CatalogState {
   DatabaseTags tags;
   TagStyles tag_styles;
   DatabaseMetricsById database_metrics;
+  std::vector<configuration::Assignment> database_configurations;
+  // Definitions are loaded from configurations.json; scope is transient UI context.
+  std::vector<configuration::Definition> configurations;
+  std::wstring configuration_scope;
 };
 
 class SettingsRepository {
@@ -151,10 +158,14 @@ class CatalogStateRepository {
   void AppendHistory(domain::HistoryItem item, std::size_t max_history = kMaxHistory);
   void RemoveHistory(std::wstring_view database_id);
   void ClearHistory();
+  void SetConfigurationScope(const std::filesystem::path& path);
+  void UpdateConfigurations(const std::function<void(std::vector<configuration::Definition>&,
+      const std::vector<configuration::Assignment>&)>& mutation);
 
  private:
   StorageLayout layout_;
   std::optional<CatalogState> state_;
+  std::wstring configuration_scope_;
 };
 
 [[nodiscard]] StorageLayout ResolveLayout(const std::filesystem::path& executable_path);

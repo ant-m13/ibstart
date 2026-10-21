@@ -218,10 +218,18 @@ std::wstring FormatRelativeLaunchTime(std::chrono::system_clock::time_point time
   return DeclinedCount(day_count, L"день", L"дня", L"дней");
 }
 
+const configuration::Assignment* ConfigurationFor(const storage::CatalogState* state, const domain::Entry& entry) {
+  return state ? configuration::FindAssignment(state->database_configurations, state->configuration_scope, catalog::StableDatabaseId(entry)) : nullptr;
+}
+
+bool ConfigurationMatches(const storage::CatalogState* state, const domain::Entry& entry, std::wstring_view query) {
+  return state && configuration::Matches(state->configurations, ConfigurationFor(state, entry), query);
+}
+
 std::vector<catalog::TreeItem> FilterTreeItems(const catalog::Catalog& catalog,
     const std::vector<catalog::TreeItem>& items, std::wstring_view search_filter,
     const TreeTagFilter& filter, const storage::DatabaseTags& tags,
-    const std::vector<std::wstring>& favorites) {
+    const std::vector<std::wstring>& favorites, const storage::CatalogState* configurations) {
   std::unordered_map<const catalog::TreeItem*, bool> search_cache;
   std::unordered_map<const catalog::TreeItem*, bool> tag_cache;
   const auto matches_search = [&](const auto& self, const catalog::TreeItem& item) -> bool {
@@ -229,7 +237,7 @@ std::vector<catalog::TreeItem> FilterTreeItems(const catalog::Catalog& catalog,
     bool result = search_filter.empty();
     if (!result) {
       if (const auto* entry = EntryForItem(catalog, item); entry && entry->IsDatabase()) {
-        result = catalog::MatchesSearchText(*entry, search_filter);
+        result = catalog::MatchesSearchText(*entry, search_filter) || ConfigurationMatches(configurations, *entry, search_filter);
         if (!result) {
           const auto& entry_tags = TagsFor(tags, *entry);
           result = std::any_of(entry_tags.begin(), entry_tags.end(), [&](const auto& tag) {
@@ -270,6 +278,7 @@ std::vector<catalog::TreeItem> FilterTreeItems(const catalog::Catalog& catalog,
       if (!matches_search(matches_search, item) || !matches_tag(matches_tag, item)) continue;
       auto copy = item;
       copy.children = self(self, item.children);
+      if (!copy.database && copy.children.empty()) continue;
       result.push_back(std::move(copy));
     }
     return result;
@@ -278,17 +287,17 @@ std::vector<catalog::TreeItem> FilterTreeItems(const catalog::Catalog& catalog,
 }
 
 bool MatchesSearchFilter(const catalog::Catalog& catalog, const catalog::TreeItem& item, std::wstring_view search_filter,
-    const storage::DatabaseTags& tags) {
+    const storage::DatabaseTags& tags, const storage::CatalogState* configurations) {
   if (search_filter.empty()) return true;
   if (const auto* entry = EntryForItem(catalog, item); entry && entry->IsDatabase()) {
-    if (catalog::MatchesSearchText(*entry, search_filter)) return true;
+    if (catalog::MatchesSearchText(*entry, search_filter) || ConfigurationMatches(configurations, *entry, search_filter)) return true;
     const auto& entry_tags = TagsFor(tags, *entry);
     if (std::any_of(entry_tags.begin(), entry_tags.end(), [&](const auto& tag) {
       return utf::FindNoCaseOrdinal(tag, search_filter) != std::wstring_view::npos;
     })) return true;
   }
   return std::any_of(item.children.begin(), item.children.end(), [&](const auto& child) {
-    return MatchesSearchFilter(catalog, child, search_filter, tags);
+    return MatchesSearchFilter(catalog, child, search_filter, tags, configurations);
   });
 }
 
@@ -308,18 +317,19 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
     const storage::Settings& settings, const storage::DatabaseTags& tags_by_database,
     const storage::DatabaseMetricsById& metrics, const storage::TagStyles& styles,
     const std::vector<domain::HistoryItem>& history,
-    LPARAM recent_root_item_data, std::wstring_view search_filter, HFONT controls_font, HFONT controls_bold_font) {
+    LPARAM recent_root_item_data, std::wstring_view search_filter, HFONT controls_font, HFONT controls_bold_font, const storage::CatalogState* configurations) {
   const bool show_recent_launch_times = !settings.simple_mode && !history.empty();
+  const bool show_configurations = !settings.simple_mode && settings.show_configuration_in_list && configurations;
   const bool show_cache_sizes = !settings.simple_mode && settings.show_cache_size_in_list;
   if (draw->nmcd.dwDrawStage == CDDS_PREPAINT) {
-    if ((settings.simple_mode || (!settings.show_tags_in_list && !show_cache_sizes)) &&
+    if ((settings.simple_mode || (!settings.show_tags_in_list && !show_cache_sizes && !show_configurations)) &&
         search_filter.empty() && !show_recent_launch_times) {
       return CDRF_DODEFAULT;
     }
     return CDRF_NOTIFYITEMDRAW;
   }
   if (draw->nmcd.dwDrawStage == CDDS_ITEMPREPAINT) {
-    const bool needs_postpaint = (!settings.simple_mode && (settings.show_tags_in_list || show_cache_sizes)) ||
+    const bool needs_postpaint = (!settings.simple_mode && (settings.show_tags_in_list || show_cache_sizes || show_configurations)) ||
         !search_filter.empty() || show_recent_launch_times;
     if (!needs_postpaint) return CDRF_DODEFAULT;
 
@@ -425,11 +435,15 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
           RestoreDC(draw->nmcd.hdc, saved);
         }
       }
-      const auto& tags = TagsFor(tags_by_database, *entry);
+      auto tags = TagsFor(tags_by_database, *entry);
+      const bool configuration_matches = !search_filter.empty() && ConfigurationMatches(configurations, *entry, search_filter);
+      const auto badge = configurations ? configuration::Badge(configurations->configurations, ConfigurationFor(configurations, *entry)) : std::wstring{};
+      const bool configuration_visible = !settings.simple_mode && !badge.empty() && (show_configurations || configuration_matches);
+      if (configuration_visible) tags.insert(tags.begin(), badge);
       const bool tag_matches_search = !search_filter.empty() && std::any_of(tags.begin(), tags.end(), [&](const auto& tag) {
         return utf::FindNoCaseOrdinal(tag, search_filter) != std::wstring_view::npos;
       });
-      if (!tags.empty() && !settings.simple_mode && (settings.show_tags_in_list || tag_matches_search)) {
+      if (!tags.empty() && !settings.simple_mode && (settings.show_tags_in_list || tag_matches_search || configuration_visible)) {
         RECT client{};
         GetClientRect(tree, &client);
         const int saved = SaveDC(draw->nmcd.hdc);
@@ -456,7 +470,7 @@ LRESULT DrawTreeSearchMatches(HWND tree, NMTVCUSTOMDRAW* draw, const catalog::Ca
           return size.cx;
         };
         const auto tag_is_visible = [&](const std::wstring& tag) {
-          return settings.show_tags_in_list || (!search_filter.empty() && utf::FindNoCaseOrdinal(tag, search_filter) != std::wstring_view::npos);
+          return (configuration_visible && tag == badge) || settings.show_tags_in_list || (!search_filter.empty() && utf::FindNoCaseOrdinal(tag, search_filter) != std::wstring_view::npos);
         };
         const int overflow_width = measure(L"…", font) + 14;
         const auto draw_overflow = [&](int chip_x) {

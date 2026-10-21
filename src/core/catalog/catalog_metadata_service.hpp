@@ -35,6 +35,11 @@ class CatalogMetadataService {
   void RecordLaunch(domain::HistoryItem item, std::size_t max_history = storage::kMaxHistory);
   void RemoveHistory(std::wstring_view database_id);
   void ClearHistory();
+  void SetConfigurationScope(const std::filesystem::path& path);
+  void SaveConfiguration(configuration::Definition definition);
+  void DeleteConfiguration(std::wstring_view id);
+  void SetDatabaseConfiguration(std::wstring database_id, std::wstring configuration_id, std::wstring version);
+  void RemoveDatabaseConfiguration(std::wstring_view database_id);
 
  private:
   mutable storage::CatalogStateRepository repository_;

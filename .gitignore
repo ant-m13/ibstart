@@ -7,6 +7,8 @@
 *.VC.opendb
 *.log
 data/
+__pycache__/
+*.pyc
 
 # Local reference snapshots from 1C:ITS. They are not project content and must
 # not be committed together with extracted HTML or other copied page resources.

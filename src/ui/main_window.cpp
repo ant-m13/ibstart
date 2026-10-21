@@ -6,8 +6,10 @@
 #include "ui/folder_picker.hpp"
 #include "ui/input_box.hpp"
 #include "ui/launch_options_dialog.hpp"
+#include "ui/launch_parameter_dialog.hpp"
 #include "ui/credential_manager_dialog.hpp"
 #include "ui/tree_presentation.hpp"
+#include "ui/configuration_catalog_dialog.hpp"
 
 #include "app/instance_activation.hpp"
 #include "app/resource.h"
@@ -57,6 +59,7 @@ constexpr wchar_t kProjectWebsiteUrl[] = L"https://github.com/ant-m13/ibstart";
 constexpr wchar_t kClassName[] = L"IBStart.MainWindow";
 constexpr UINT kActivateMessage = WM_APP + 23;
 constexpr UINT kUpdateCheckFinishedMessage = WM_APP + 24;
+constexpr UINT kStartupUpdateCheckMessage = WM_APP + 28;
 constexpr UINT kFocusShortcutSelectionMessage = WM_APP + 25;
 constexpr UINT kCacheOperationFinishedMessage = WM_APP + 26;
 constexpr UINT kCacheSizeOperationFinishedMessage = WM_APP + 27;
@@ -226,6 +229,11 @@ void MainWindow::RegisterCommandHandlers() {
   command_dispatcher_.Register(kEnterprise, [this] { LaunchSelected(domain::LaunchMode::enterprise); });
   command_dispatcher_.Register(kDesigner, [this] { LaunchSelected(domain::LaunchMode::designer); });
   command_dispatcher_.Register(kLaunchWithParameters, [this] { LaunchWithParameters(); });
+  command_dispatcher_.Register(kOpenParameterBuilder, [this] {
+    launcher::ParameterEditorContext context;
+    static_cast<void>(dialog::EditLaunchParameters(window_, {}, std::move(context),
+        dialog::ParameterDialogPurpose::standalone, platforms_));
+  });
   command_dispatcher_.Register(kAddDatabase, [this] { AddDatabase(); });
   command_dispatcher_.Register(kAddGroup, [this] { AddGroup(); });
   command_dispatcher_.Register(kOpenList, [this] { OpenList(); });
@@ -245,6 +253,18 @@ void MainWindow::RegisterCommandHandlers() {
   command_dispatcher_.Register(kCopyDetailValue, [this] { CopySelectedDetail(false); });
   command_dispatcher_.Register(kCopyDetailPair, [this] { CopySelectedDetail(true); });
   command_dispatcher_.Register(kEditTags, [this] { EditSelectedTags(); });
+  command_dispatcher_.Register(kConfigureConfigurations, [this] {
+    static_cast<void>(dialog::EditConfigurations(window_, catalog_state_));
+    PopulateTree();
+    DisplaySelected();
+  });
+  command_dispatcher_.Register(kShowConfigurationInList, [this] {
+    auto settings = settings_;
+    settings.show_configuration_in_list = !settings.show_configuration_in_list;
+    PersistSettings(settings);
+    RefreshMainMenuBar();
+    PopulateTree();
+  });
   command_dispatcher_.Register(kConfigureTagColors, [this] { ConfigureTagColors(); });
   command_dispatcher_.Register(kConfigureApplicationSettings, [this] { ConfigureApplicationSettings(); });
   command_dispatcher_.Register(kConfigureCredentials, [this] { ConfigureCredentials(window_); });
@@ -254,6 +274,7 @@ void MainWindow::RegisterCommandHandlers() {
   command_dispatcher_.Register(kFocusSearch, [this] { SetFocus(search_); });
   command_dispatcher_.Register(kClearSearch, [this] { ClearSearch(); });
   command_dispatcher_.Register(kCheckForUpdates, [this] { CheckForUpdates(); });
+  command_dispatcher_.Register(kOpenAvailableUpdate, [this] { OpenAvailableUpdate(); });
   command_dispatcher_.Register(kProjectWebsite, [this] {
     if (!OpenUrl(window_, kProjectWebsiteUrl)) {
       Message(window_, L"Не удалось открыть сайт проекта в браузере.\n\n" +
@@ -358,6 +379,7 @@ int MainWindow::Show(int show_command) {
     return 1;
   }
   ShowWindow(window_, show_command); UpdateWindow(window_);
+  if (settings_.check_updates_on_startup) PostMessageW(window_, kStartupUpdateCheckMessage, 0, 0);
   constexpr BYTE control = FVIRTKEY | FCONTROL;
   constexpr BYTE controlAlt = FVIRTKEY | FCONTROL | FALT;
   constexpr BYTE controlShift = FVIRTKEY | FCONTROL | FSHIFT;
@@ -480,11 +502,16 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
             if (const auto section_index = tree_view_.SectionIndex(hint->hItem)) {
               const auto* entry = catalog_->FindBySectionIndex(*section_index);
               if (entry && entry->IsDatabase()) {
-              const auto& tags = TagsFor(catalog_state_.Read().tags, *entry);
-              if (!tags.empty()) {
-                const std::wstring text = L"Теги: " + TagsText(tags);
-                wcsncpy_s(hint->pszText, static_cast<size_t>(hint->cchTextMax), text.c_str(), _TRUNCATE);
+              const auto& state = catalog_state_.Read();
+              const auto& tags = TagsFor(state.tags, *entry);
+              std::wstring text = tags.empty() ? L"" : L"Теги: " + TagsText(tags);
+              const auto* assignment = configuration::FindAssignment(state.database_configurations, state.configuration_scope, catalog::StableDatabaseId(*entry));
+              if (assignment) {
+                if (!text.empty()) text += L"\n";
+                if (const auto* d = configuration::Find(state.configurations, assignment->configuration_id)) text += configuration::Label(*d);
+                if (!assignment->version.empty()) { if (!text.empty()) text += L"\n"; text += L"Версия: " + assignment->version; }
               }
+              wcsncpy_s(hint->pszText, static_cast<size_t>(hint->cchTextMax), text.c_str(), _TRUNCATE);
             }
             }
           }
@@ -572,6 +599,9 @@ LRESULT MainWindow::Handle(HWND window, UINT message, WPARAM wparam, LPARAM lpar
     }
     case kActivateMessage:
       if (!closing_) Activate();
+      return 0;
+    case kStartupUpdateCheckMessage:
+      if (!closing_ && settings_.check_updates_on_startup) CheckForUpdates(false);
       return 0;
     case kUpdateCheckFinishedMessage: CompleteUpdateCheck(); return 0;
     case kCacheOperationFinishedMessage: CompleteCacheOperation(); return 0;
@@ -877,6 +907,7 @@ void MainWindow::LoadCatalog(bool report_error, bool startup_load) {
     auto next_store = std::move(session.store);
     auto next_catalog = std::move(session.catalog);
     auto next_platforms = std::move(session.platforms);
+    catalog_state_.SetConfigurationScope(active_ibases);
     catalog_state_.Adopt(std::move(next_state));
     store_ = std::move(next_store);
     catalog_ = std::move(next_catalog);
@@ -999,6 +1030,7 @@ bool MainWindow::SaveCatalog(catalog::Catalog candidate) {
     Message(window_, L"Список баз сохранён, но историю открытых списков и настройки приложения записать не удалось.",
         L"ИБ Старт", MB_OK | MB_ICONWARNING);
   }
+  catalog_state_.SetConfigurationScope(target);
   RefreshFileMenu();
   DrawMenuBar(window_);
   SetStatus((settingsSaved ? L"Сохранено: " : L"Список сохранён; настройки приложения не сохранены: ") +
@@ -1169,7 +1201,7 @@ LRESULT MainWindow::DrawTreeSearchMatches(NMTVCUSTOMDRAW* draw) const {
   return presentation::DrawTreeSearchMatches(tree_, draw, catalog_ ? &*catalog_ : nullptr, settings_,
       state.tags, state.database_metrics, state.tag_styles, state.history,
       TreeViewController::kRecentRootItemData,
-      search_filter_, controls_font_, controls_bold_font_);
+      search_filter_, controls_font_, controls_bold_font_, &state);
 }
 bool MainWindow::MeasureContextMenuItem(MEASUREITEMSTRUCT* measure) const {
   return context_menus_.Measure(window_, controls_font_, measure) ||
@@ -1601,13 +1633,17 @@ void MainWindow::LaunchWithParameters() {
       initial.client_type = ClientTypeFromApplication(database.default_app);
     }
     if (initial.client_type == domain::ClientType::automatic) initial.client_type = settings_.default_client_type;
-    const auto validation = launcher::ValidateLaunchParameters(database, initial);
-    if (!validation.empty()) throw std::invalid_argument(utf::ToUtf8(validation.front()));
-    if (const auto fromParameters = launcher::AppArchitectureFromParameters(database.additional_parameters)) {
-      initial.architecture = *fromParameters;
-    } else if (const auto fromDatabase = launcher::ParseAppArchitecture(database.app_arch)) {
+    // Invalid saved parameters must remain editable in the one-off dialog.
+    // Preview and final launch still perform the complete validation.
+    if (const auto fromDatabase = launcher::ParseAppArchitecture(database.app_arch)) {
       initial.architecture = *fromDatabase;
     } else initial.architecture = settings_.default_architecture;
+    try {
+      if (const auto fromParameters = launcher::AppArchitectureFromParameters(database.additional_parameters))
+        initial.architecture = *fromParameters;
+    } catch (const std::invalid_argument&) {
+      // Keep the original string and let the editor display its diagnosis.
+    }
     const auto& selectedVersion = database.version.empty() ? database.default_version : database.version;
     if (selectedVersion != L"" && selectedVersion != L"Авто") initial.version = selectedVersion;
     else if (!settings_.default_platform_version.empty()) initial.version = settings_.default_platform_version;
@@ -1691,7 +1727,7 @@ void MainWindow::AddDatabase(std::wstring parent) {
   dialog::DatabaseEditorData initial;
   initial.name = NextName(L"Файловая база");
   initial.kind = dialog::DatabaseConnectionKind::file;
-  auto entered = dialog::EditDatabase(window_, L"Добавление информационной базы", std::move(initial), platforms_);
+  auto entered = dialog::EditDatabase(window_, L"Добавление информационной базы", std::move(initial), platforms_, &catalog_state_);
   if (!entered) return;
   auto candidate = *catalog_;
   bool added = false;
@@ -1715,6 +1751,13 @@ void MainWindow::AddDatabase(std::wstring parent) {
     dialog::ApplyDatabaseEditorData(*entry, *entered);
   }
   if (!SaveCatalog(std::move(candidate))) return;
+  try {
+    const auto* added_entry = catalog_->Find(entered->name);
+    if (added_entry) catalog_state_.SetDatabaseConfiguration(catalog::StableDatabaseId(*added_entry), entered->configuration_id, entered->configuration_version);
+  } catch (const std::exception& error) {
+    Message(window_, L"База добавлена, но конфигурацию и версию сохранить не удалось.\n\n" + WideErrorText(error.what()),
+        L"Добавление базы", MB_OK | MB_ICONWARNING);
+  }
   PopulateTree();
   static_cast<void>(tree_view_.SelectItem(entered->name));
 }
@@ -1768,9 +1811,23 @@ void MainWindow::EditSelected() {
     return;
   }
   const auto previousTagId = TagId(*entry);
-  const auto edited = dialog::EditDatabase(window_, L"Редактирование информационной базы",
-      dialog::DatabaseEditorDataFromEntry(*entry), platforms_);
-  if (!edited) return;
+  auto initial = dialog::DatabaseEditorDataFromEntry(*entry);
+  if (const auto* assignment = configuration::FindAssignment(catalog_state_.Read().database_configurations,
+      catalog_state_.Read().configuration_scope, previousTagId)) {
+    initial.configuration_id = assignment->configuration_id;
+    initial.configuration_version = assignment->version;
+  }
+  const auto edited = dialog::EditDatabase(window_, L"Редактирование информационной базы", initial, platforms_, &catalog_state_);
+  if (!edited) { PopulateTree(); DisplaySelected(); return; }
+  auto launch_fields = *edited;
+  launch_fields.configuration_id = initial.configuration_id;
+  launch_fields.configuration_version = initial.configuration_version;
+  if (launch_fields == initial) {
+    catalog_state_.SetDatabaseConfiguration(previousTagId, edited->configuration_id, edited->configuration_version);
+    PopulateTree(); DisplaySelected();
+    SetStatus(L"Конфигурация и версия базы сохранены.");
+    return;
+  }
   auto candidate = *catalog_;
   if (!SameCatalogEntry(candidate, *entry)) {
     ResetStaleSelectionIfNeeded();
@@ -1808,6 +1865,12 @@ void MainWindow::EditSelected() {
       logger_.Error(L"Ошибка обновления метаданных после переименования: " + ibstart::utf::FromUtf8(error.what()));
       Message(window_, L"База переименована, но её метаданные не удалось сохранить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
     }
+  }
+  try {
+    catalog_state_.SetDatabaseConfiguration(updatedTagId, edited->configuration_id, edited->configuration_version);
+  } catch (const std::exception& error) {
+    Message(window_, L"Запись базы сохранена, но конфигурацию и версию сохранить не удалось.\n\n" + WideErrorText(error.what()),
+        L"Сохранение базы", MB_OK | MB_ICONWARNING);
   }
   RefreshTagFilter();
   PopulateTree();
@@ -2022,6 +2085,7 @@ void MainWindow::DeleteSelected() {
   if (!tagId.empty()) {
     try {
       static_cast<void>(catalog_state_.RemoveTags(tagId));
+      catalog_state_.RemoveDatabaseConfiguration(tagId);
     } catch (const std::exception& error) {
       logger_.Error(L"Ошибка удаления тегов: " + ibstart::utf::FromUtf8(error.what()));
       Message(window_, L"База удалена из списка, но её теги не удалось удалить.", L"ИБ Старт", MB_OK | MB_ICONWARNING);
@@ -2296,7 +2360,8 @@ void MainWindow::RefreshFileMenu() {
   menus_.RefreshFile(settings_);
 }
 void MainWindow::RefreshMainMenuBar() {
-  menus_.RefreshMain(settings_);
+  menus_.RefreshMain(settings_, available_update_ ? std::wstring_view(available_update_->version) : std::wstring_view{},
+      update_check_.active());
 }
 void MainWindow::RememberRecentList(storage::Settings& settings, const std::filesystem::path& path) {
   if (path.empty()) return;
@@ -2337,6 +2402,7 @@ bool MainWindow::ActivateCatalog(const std::filesystem::path& path) {
   catalog_ = std::move(loadedSession->catalog);
   platforms_ = std::move(loadedSession->platforms);
   settings_ = std::move(loadedSettings);
+  catalog_state_.SetConfigurationScope(path);
   TreeView_SelectItem(tree_, nullptr);
 
   try {
@@ -2532,28 +2598,35 @@ void MainWindow::LaunchFavorite(size_t slot) {
   PopulateTree();
   if (tree_view_.SelectItem(name)) LaunchSelected(domain::LaunchMode::enterprise);
 }
-void MainWindow::CheckForUpdates() {
+void MainWindow::CheckForUpdates(bool interactive) {
+  if (closing_) return;
   if (update_check_.active()) {
-    SetStatus(L"Проверка обновлений уже выполняется…");
+    if (interactive) {
+      interactive_update_check_ = true;
+      SetStatus(L"Проверка обновлений уже выполняется…");
+    }
     return;
   }
-  EnableMenuItem(menus_.help_menu(), kCheckForUpdates, MF_BYCOMMAND | MF_GRAYED);
-  DrawMenuBar(window_);
-  SetStatus(L"Проверяем наличие обновлений…");
+  interactive_update_check_ = interactive;
+  if (interactive) SetStatus(L"Проверяем наличие обновлений…");
   try {
     update_check_.Start(window_, kUpdateCheckFinishedMessage);
+    RefreshMainMenuBar();
     static_cast<void>(RefreshBackgroundPolling());
   } catch (const std::exception& error) {
-    EnableMenuItem(menus_.help_menu(), kCheckForUpdates, MF_BYCOMMAND | MF_ENABLED);
-    DrawMenuBar(window_);
+    RefreshMainMenuBar();
     logger_.Error(L"Не удалось запустить проверку обновлений: " + WideErrorText(error.what()));
-    SetStatus(L"Не удалось запустить проверку обновлений.");
-    Message(window_, L"Не удалось запустить фоновую проверку обновлений.", L"Проверка обновлений", MB_OK | MB_ICONERROR);
+    if (interactive) {
+      SetStatus(L"Не удалось запустить проверку обновлений.");
+      Message(window_, L"Не удалось запустить фоновую проверку обновлений.", L"Проверка обновлений", MB_OK | MB_ICONERROR);
+    }
   } catch (...) {
-    EnableMenuItem(menus_.help_menu(), kCheckForUpdates, MF_BYCOMMAND | MF_ENABLED);
-    DrawMenuBar(window_);
-    SetStatus(L"Не удалось запустить проверку обновлений.");
-    Message(window_, L"Не удалось запустить фоновую проверку обновлений.", L"Проверка обновлений", MB_OK | MB_ICONERROR);
+    RefreshMainMenuBar();
+    logger_.Error(L"Не удалось запустить проверку обновлений: неизвестная ошибка.");
+    if (interactive) {
+      SetStatus(L"Не удалось запустить проверку обновлений.");
+      Message(window_, L"Не удалось запустить фоновую проверку обновлений.", L"Проверка обновлений", MB_OK | MB_ICONERROR);
+    }
   }
 }
 void MainWindow::CompleteUpdateCheck() {
@@ -2562,24 +2635,29 @@ void MainWindow::CompleteUpdateCheck() {
   auto release = std::move(completed->release);
   auto error = std::move(completed->error);
   const bool cancelled = completed->cancelled;
+  const bool interactive = std::exchange(interactive_update_check_, false);
   static_cast<void>(RefreshBackgroundPolling());
   if (closing_) {
     TryFinishClose();
     return;
   }
-  EnableMenuItem(menus_.help_menu(), kCheckForUpdates, MF_BYCOMMAND | MF_ENABLED);
-  DrawMenuBar(window_);
+  RefreshMainMenuBar();
   if (cancelled) {
-    SetStatus(L"Проверка обновлений отменена.");
+    if (interactive) SetStatus(L"Проверка обновлений отменена.");
     return;
   }
   if (!error.empty()) {
     logger_.Error(L"Ошибка проверки обновлений: " + error);
-    SetStatus(L"Не удалось проверить обновления.");
-    ShowUpdateCheckError();
+    if (interactive) {
+      SetStatus(L"Не удалось проверить обновления.");
+      ShowUpdateCheckError();
+    }
     return;
   }
   if (!release) {
+    available_update_.reset();
+    RefreshMainMenuBar();
+    if (!interactive) return;
     SetStatus(L"Опубликованной стабильной версии пока нет.");
     Message(window_, L"Для ИБ Старт пока нет опубликованной стабильной версии. Предварительные версии не устанавливаются автоматически.",
         L"Проверка обновлений", MB_OK | MB_ICONINFORMATION);
@@ -2588,6 +2666,9 @@ void MainWindow::CompleteUpdateCheck() {
 
   const int comparison = update::CompareVersions(version::value, release->version);
   if (comparison >= 0) {
+    available_update_.reset();
+    RefreshMainMenuBar();
+    if (!interactive) return;
     const std::wstring text = comparison == 0
         ? L"У вас установлена актуальная версия " + std::wstring(version::value) + L"."
         : L"У вас установлена версия " + std::wstring(version::value) + L", которая новее последней опубликованной стабильной версии " + release->version + L".";
@@ -2596,14 +2677,21 @@ void MainWindow::CompleteUpdateCheck() {
     return;
   }
 
+  available_update_ = *release;
+  RefreshMainMenuBar();
   SetStatus(L"Доступно обновление: " + release->version);
+  if (!interactive) return;
   const std::wstring text = L"Доступна новая версия ИБ Старт " + release->version + L".\n\nУстановлена версия: " +
       std::wstring(version::value) + L".\n\nОткрыть страницу релиза в браузере?";
   if (MessageBoxW(window_, text.c_str(), L"Доступно обновление", MB_YESNO | MB_ICONINFORMATION) != IDYES) return;
+  OpenAvailableUpdate();
+}
+void MainWindow::OpenAvailableUpdate() {
+  if (closing_ || !available_update_) return;
   const auto open_result = reinterpret_cast<INT_PTR>(
-      ShellExecuteW(window_, L"open", release->page_url.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
+      ShellExecuteW(window_, L"open", available_update_->page_url.c_str(), nullptr, nullptr, SW_SHOWNORMAL));
   if (open_result <= 32) {
-    logger_.Error(L"Не удалось открыть страницу релиза: " + release->page_url);
+    logger_.Error(L"Не удалось открыть страницу релиза: " + available_update_->page_url);
     Message(window_, L"Не удалось открыть страницу релиза в браузере.", L"Проверка обновлений", MB_OK | MB_ICONWARNING);
   }
 }

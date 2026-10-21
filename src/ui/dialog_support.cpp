@@ -137,6 +137,24 @@ void RestoreModalOwner(HWND owner) {
   SetActiveWindow(owner);
 }
 
+bool CopyTextToClipboard(HWND owner, std::wstring_view text) {
+  const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
+  const HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
+  if (!memory) return false;
+  auto* destination = static_cast<wchar_t*>(GlobalLock(memory));
+  if (!destination) { GlobalFree(memory); return false; }
+  std::copy(text.begin(), text.end(), destination);
+  destination[text.size()] = L'\0';
+  GlobalUnlock(memory);
+  if (!OpenClipboard(owner)) { GlobalFree(memory); return false; }
+  struct Closer { ~Closer() { CloseClipboard(); } } closer;
+  if (!EmptyClipboard() || !SetClipboardData(CF_UNICODETEXT, memory)) {
+    GlobalFree(memory);
+    return false;
+  }
+  return true;
+}
+
 std::optional<std::filesystem::path> OpenCatalogFile(HWND owner) {
   return ShowCatalogFileDialog(owner, false);
 }

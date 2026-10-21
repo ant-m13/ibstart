@@ -14,6 +14,8 @@ enum class OwnerDrawMenuIcon {
   move_down,
   compact_mode,
   settings,
+  credentials,
+  configurations,
   tag,
   launch_parameters,
   sort_ascending,

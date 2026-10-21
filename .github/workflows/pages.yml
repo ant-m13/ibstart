@@ -8,6 +8,9 @@ on:
       - "CHANGELOG.md"
       - "mkdocs.yml"
       - "requirements-docs.txt"
+      - "tools/update-1c-reference.py"
+      - "tools/update-launch-parameter-versions.py"
+      - "tools/tests/**"
       - ".github/workflows/pages.yml"
   pull_request:
     branches: [main]
@@ -16,6 +19,9 @@ on:
       - "CHANGELOG.md"
       - "mkdocs.yml"
       - "requirements-docs.txt"
+      - "tools/update-1c-reference.py"
+      - "tools/update-launch-parameter-versions.py"
+      - "tools/tests/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 
@@ -46,6 +52,12 @@ jobs:
       - name: Prepare changelog page
         shell: bash
         run: cp CHANGELOG.md docs/changelog.md
+
+      - name: Check reference documentation
+        run: |
+          python tools/update-1c-reference.py --check
+          python tools/update-launch-parameter-versions.py --check-docs
+          python -m unittest discover -s tools/tests -p "test_*.py"
 
       - name: Build site
         run: mkdocs build --strict

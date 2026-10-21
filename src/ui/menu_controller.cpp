@@ -16,6 +16,9 @@ OwnerDrawMenuIcon MenuIconForCommand(UINT command) {
     case kMoveDown: return OwnerDrawMenuIcon::move_down;
     case kSimpleMode: return OwnerDrawMenuIcon::compact_mode;
     case kConfigureApplicationSettings: return OwnerDrawMenuIcon::settings;
+    case kConfigureCredentials: return OwnerDrawMenuIcon::credentials;
+    case kConfigureConfigurations: return OwnerDrawMenuIcon::configurations;
+    case kOpenParameterBuilder: return OwnerDrawMenuIcon::launch_parameters;
     case kTagsContextMenu:
     case kEditTags:
     case kConfigureTagColors:
@@ -50,6 +53,7 @@ void MenuController::Create(HWND window, HINSTANCE instance) {
   file_menu_ = CreatePopupMenu();
   view_menu_ = CreatePopupMenu();
   settings_menu_ = CreatePopupMenu();
+  tools_menu_ = CreatePopupMenu();
   help_menu_ = CreatePopupMenu();
 }
 
@@ -66,11 +70,13 @@ void MenuController::Clear() noexcept {
   if (file_menu_) DestroyMenu(file_menu_);
   if (view_menu_) DestroyMenu(view_menu_);
   if (settings_menu_) DestroyMenu(settings_menu_);
+  if (tools_menu_) DestroyMenu(tools_menu_);
   if (help_menu_) DestroyMenu(help_menu_);
   menu_ = nullptr;
   file_menu_ = nullptr;
   view_menu_ = nullptr;
   settings_menu_ = nullptr;
+  tools_menu_ = nullptr;
   help_menu_ = nullptr;
   window_ = nullptr;
   instance_ = nullptr;
@@ -123,10 +129,12 @@ void MenuController::RefreshFile(const storage::Settings& settings) {
   append(true, false, kExit, IDI_ACTION_EXIT, L"Выход", L"Alt+F4");
 }
 
-void MenuController::RefreshMain(const storage::Settings& settings) {
-  if (!menu_ || !file_menu_ || !view_menu_ || !settings_menu_ || !help_menu_) return;
+void MenuController::RefreshMain(const storage::Settings& settings, std::wstring_view available_update,
+    bool update_check_active) {
+  if (!menu_ || !file_menu_ || !view_menu_ || !settings_menu_ || !tools_menu_ || !help_menu_) return;
   ClearMenu(view_menu_);
   ClearMenu(settings_menu_);
+  ClearMenu(tools_menu_);
   ClearMenu(help_menu_);
   main_menu_items_.Clear();
   const auto append = [&](HMENU target, UINT command, int icon_resource, std::wstring text,
@@ -139,15 +147,18 @@ void MenuController::RefreshMain(const storage::Settings& settings) {
   if (settings.simple_mode) {
     append(view_menu_, kSimpleMode, 0, L"Выйти из простого режима", L"Ctrl+Alt+M", true);
   } else {
+    append(tools_menu_, kConfigureConfigurations, 0, L"Конфигурации…");
+    append(tools_menu_, kOpenParameterBuilder, 0, L"Конструктор параметров запуска…");
     append(settings_menu_, kConfigureApplicationSettings, 0, L"Параметры приложения…");
     AppendMenuW(settings_menu_, MF_SEPARATOR, 0, nullptr);
-    append(settings_menu_, kConfigureCredentials, IDI_ACTION_EDIT, L"Учётные записи…");
+    append(settings_menu_, kConfigureCredentials, 0, L"Учётные записи…");
     append(view_menu_, kToggleFavorite, IDI_ACTION_FAVORITE,
         L"Добавить/убрать из избранного", L"Ctrl+Alt+I");
     append(view_menu_, kToggleFoldersFirstWhenSorting, IDI_TREE_FOLDER,
         L"Папки всегда сверху при сортировке", {}, settings.folders_first_when_sorting);
     append(view_menu_, kEditTags, 0, L"Управление тегами выбранной базы…");
     append(view_menu_, kConfigureTagColors, 0, L"Настроить теги…");
+    append(view_menu_, kShowConfigurationInList, 0, L"Показывать конфигурацию и версию в списке баз", {}, settings.show_configuration_in_list);
     append(view_menu_, kShowTagsInList, 0, L"Показывать теги в списке баз", {}, settings.show_tags_in_list);
     append(view_menu_, kCacheSizeAll, IDI_ACTION_CACHE_SIZE, L"Пересчитать размеры кэша всех баз");
     append(view_menu_, kShowCacheSizeInList, 0, L"Показывать размеры кэша в списке баз", {},
@@ -158,6 +169,8 @@ void MenuController::RefreshMain(const storage::Settings& settings) {
     append(help_menu_, kProjectWebsite, IDI_ACTION_WEBSITE, L"Сайт проекта");
     AppendMenuW(help_menu_, MF_SEPARATOR, 0, nullptr);
     append(help_menu_, kAbout, IDI_IBSTART, L"О программе…", L"F1");
+    EnableMenuItem(help_menu_, kCheckForUpdates, MF_BYCOMMAND |
+        (update_check_active ? MF_GRAYED : MF_ENABLED));
   }
   ClearMenu(menu_);
   if (!settings.simple_mode) AppendMenuW(menu_, MF_POPUP,
@@ -167,7 +180,13 @@ void MenuController::RefreshMain(const storage::Settings& settings) {
   if (!settings.simple_mode) AppendMenuW(menu_, MF_POPUP,
       reinterpret_cast<UINT_PTR>(settings_menu_), L"Настройки");
   if (!settings.simple_mode) AppendMenuW(menu_, MF_POPUP,
+      reinterpret_cast<UINT_PTR>(tools_menu_), L"Инструменты");
+  if (!settings.simple_mode) AppendMenuW(menu_, MF_POPUP,
       reinterpret_cast<UINT_PTR>(help_menu_), L"Справка");
+  if (!available_update.empty()) {
+    const auto label = L"Доступно обновление " + std::wstring(available_update);
+    AppendMenuW(menu_, MF_STRING, kOpenAvailableUpdate, label.c_str());
+  }
   SetMenu(window_, menu_);
   DrawMenuBar(window_);
 }

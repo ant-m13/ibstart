@@ -6,6 +6,7 @@
 #include "core/launcher/command_builder.hpp"
 #include "core/logging/logging.hpp"
 #include "ui/dialog_support.hpp"
+#include "ui/launch_parameter_dialog.hpp"
 
 #include <CommCtrl.h>
 
@@ -33,6 +34,7 @@ enum LaunchOptionsControl : int {
   kLaunchCredential,
   kLaunchManageCredentials,
   kLaunchParameters,
+  kLaunchParameterBuilder,
   kLaunchPreview,
   kLaunchCopyCommand
 };
@@ -89,32 +91,6 @@ std::wstring ReadControlText(HWND control) {
   const int copied = GetWindowTextW(control, result.data(), length + 1);
   result.resize(static_cast<size_t>(std::max(copied, 0)));
   return result;
-}
-
-bool CopyTextToClipboard(HWND owner, std::wstring_view text) {
-  const SIZE_T bytes = (text.size() + 1) * sizeof(wchar_t);
-  const HGLOBAL memory = GlobalAlloc(GMEM_MOVEABLE, bytes);
-  if (!memory) return false;
-  auto* destination = static_cast<wchar_t*>(GlobalLock(memory));
-  if (!destination) {
-    GlobalFree(memory);
-    return false;
-  }
-  std::copy(text.begin(), text.end(), destination);
-  destination[text.size()] = L'\0';
-  GlobalUnlock(memory);
-  if (!OpenClipboard(owner)) {
-    GlobalFree(memory);
-    return false;
-  }
-  struct ClipboardCloser {
-    ~ClipboardCloser() { CloseClipboard(); }
-  } closer;
-  if (!EmptyClipboard() || !SetClipboardData(CF_UNICODETEXT, memory)) {
-    GlobalFree(memory);
-    return false;
-  }
-  return true;
 }
 
 void SetComboValue(HWND combo, std::wstring_view value) {
@@ -215,6 +191,12 @@ std::optional<domain::LaunchOptions> CollectOptions(LaunchOptionsState& state, s
   result.password = ReadControlText(state.password);
   result.individual_parameters = ReadControlText(state.parameters);
   result.override_individual_parameters = true;
+  try {
+    if (const auto architecture = launcher::AppArchitectureFromParameters(result.individual_parameters))
+      result.architecture = *architecture;
+  } catch (const std::invalid_argument&) {
+    // Preview reports the invalid text; keep the builder accessible for repair.
+  }
 
   const LRESULT platform_index = SendMessageW(state.platform, CB_GETCURSEL, 0, 0);
   if (platform_index == CB_ERR || platform_index == 0) {
@@ -229,6 +211,12 @@ std::optional<domain::LaunchOptions> CollectOptions(LaunchOptionsState& state, s
     result.platform_executable = (*state.platforms)[static_cast<size_t>(candidate_index) - 1].executable;
     result.version = L"Авто";
     result.architecture = domain::ClientArchitecture::automatic;
+    try {
+      if (const auto architecture = launcher::AppArchitectureFromParameters(result.individual_parameters))
+        result.architecture = *architecture;
+    } catch (const std::invalid_argument&) {
+      // Leave diagnosis to preview and final validation.
+    }
   }
 
   if (state.web) {
@@ -415,9 +403,11 @@ void CreateControls(HWND window, LaunchOptionsState& state) {
       WS_TABSTOP | ES_AUTOHSCROLL, 190, 304, 440, 25, kLaunchPassword, text_font);
 
   create(0, L"BUTTON", L"Дополнительные параметры", BS_GROUPBOX, 14, 354, 632, 94, 0, text_font);
+  create(0, L"BUTTON", L"Конструктор…", WS_TABSTOP,
+      494, 372, 138, 28, kLaunchParameterBuilder, button_font);
   state.parameters = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.individual_parameters,
       WS_TABSTOP | ES_MULTILINE | ES_AUTOVSCROLL | WS_VSCROLL,
-      28, 382, 604, 52, kLaunchParameters, text_font);
+      28, 382, 454, 52, kLaunchParameters, text_font);
 
   create(0, L"BUTTON", L"Предварительный просмотр команды", BS_GROUPBOX, 14, 458, 632, 94, 0, text_font);
   state.preview = create(WS_EX_CLIENTEDGE, L"EDIT", L"",
@@ -446,6 +436,30 @@ LRESULT CALLBACK LaunchOptionsProc(HWND window, UINT message, WPARAM wparam, LPA
   }
   if (message == WM_COMMAND && state) {
     const int command = LOWORD(wparam);
+    if (command == kLaunchParameterBuilder) {
+      launcher::ParameterEditorContext context;
+      context.mode = ModeValue(ReadComboText(state->mode));
+      context.client = ClientValue(ReadComboText(state->client));
+      std::wstring error;
+      if (const auto options = CollectOptions(*state, &error)) {
+        try {
+          if (const auto selected = launcher::SelectPlatform(*state->platforms, *options)) {
+            context.version = selected->version;
+            if (context.client == domain::ClientType::automatic)
+              context.client = EqualNoCase(selected->executable.filename().wstring(), L"1cv8c.exe") ?
+                  domain::ClientType::thin : domain::ClientType::thick;
+          }
+        } catch (const std::exception&) {
+          // Invalid saved parameters must not prevent opening the repair UI.
+        }
+      }
+      if (const auto updated = EditLaunchParameters(window, ReadControlText(state->parameters), context,
+          ParameterDialogPurpose::return_to_field, *state->platforms)) {
+        SetWindowTextW(state->parameters, updated->c_str());
+        RefreshPreview(*state);
+      }
+      return 0;
+    }
     if (command == kLaunchMode && HIWORD(wparam) == CBN_SELCHANGE) {
       UpdateModeControls(*state);
       RefreshPreview(*state);

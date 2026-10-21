@@ -127,7 +127,8 @@ class MainWindow {
   void SetSimpleMode(bool enabled);
   void ToggleFavorite();
   void LaunchFavorite(size_t slot);
-  void CheckForUpdates();
+  void CheckForUpdates(bool interactive = true);
+  void OpenAvailableUpdate();
   void CompleteUpdateCheck();
   void CompleteCacheOperation();
   void BeginClose();
@@ -187,6 +188,8 @@ class MainWindow {
   TreeViewController tree_view_;
   DetailsViewController details_view_;
   background::UpdateCheckOperation update_check_;
+  std::optional<update::Release> available_update_;
+  bool interactive_update_check_{false};
   background::CacheClearOperation cache_operation_;
   background::CacheSizeOperation cache_size_operation_;
   std::size_t cache_size_failure_count_{};

@@ -257,72 +257,99 @@ void MoveProfileFile(const std::filesystem::path& source, const std::filesystem:
   throw std::runtime_error(utf::ToUtf8(std::wstring(action) + L": " + target.wstring() + L": " + utf::LastErrorMessage(error)));
 }
 
-void ReplaceProfileFiles(const StorageLayout& layout, std::string_view settings_contents,
-    std::string_view state_contents) {
-  EnsureProfileDirectory(layout.root);
-  const auto settings_path = layout.root / L"settings.json";
-  const auto state_path = layout.root / L"catalog-state.json";
-  const auto settings_temp = layout.root / (L"settings.json.profile-txn." + std::to_wstring(GetCurrentProcessId()));
-  const auto state_temp = layout.root / (L"catalog-state.json.profile-txn." + std::to_wstring(GetCurrentProcessId()));
-  const auto settings_backup = layout.root / (L"settings.json.profile-backup." + std::to_wstring(GetCurrentProcessId()));
-  const auto state_backup = layout.root / (L"catalog-state.json.profile-backup." + std::to_wstring(GetCurrentProcessId()));
+std::vector<configuration::Definition> ParseConfigurations(std::string_view contents) {
+  const auto root = json::RootObject(contents);
+  if (!root || json::ObjectInt(*root, "schema_version") != 1) {
+    throw std::runtime_error("Unsupported or damaged configurations.json. Restore the profile before saving.");
+  }
+  const auto records = json::ObjectArray(json::ObjectValue(*root, "configurations"));
+  if (!records) throw std::runtime_error("Invalid configurations array.");
+  std::vector<configuration::Definition> result;
+  for (const auto& record : *records) {
+    const auto id = json::ObjectString(record, "id");
+    const auto name = json::ObjectString(record, "name");
+    const auto title = json::ObjectString(record, "title");
+    const auto short_name = json::ObjectString(record, "short_name");
+    if (!id || id->empty() || !name || configuration::Trim(*name).empty() || !title ||
+        configuration::Trim(*title).empty() || !short_name || !configuration::ValidText(*id) ||
+        !configuration::ValidText(*name) || !configuration::ValidText(*title) ||
+        !configuration::ValidText(*short_name, 80) || configuration::Find(result, *id)) {
+      throw std::runtime_error("Invalid or duplicate configuration record.");
+    }
+    result.push_back({*id, *name, *title, *short_name});
+  }
+  return result;
+}
 
+std::string SerializeConfigurations(const std::vector<configuration::Definition>& definitions) {
+  std::string text = "{\n  \"schema_version\": 1,\n  \"configurations\": [";
+  size_t count = 0;
+  for (const auto& d : definitions) {
+    if (count++) text += ",";
+    text += "\n    {\"id\": \"" + json::Escape(d.id) + "\", \"name\": \"" + json::Escape(d.name) +
+        "\", \"title\": \"" + json::Escape(d.title) + "\", \"short_name\": \"" + json::Escape(d.short_name) + "\"}";
+  }
+  text += "\n  ]\n}\n";
+  static_cast<void>(ParseConfigurations(text));
+  return text;
+}
+
+std::vector<configuration::Definition> ReadConfigurations(const StorageLayout& layout) {
+  const auto path = PathFor(layout, L"configurations.json");
+  const auto snapshot = ReadFileSnapshot(path);
+  if (snapshot.fingerprint) return ParseConfigurations(snapshot.contents);
+  auto definitions = configuration::BuiltInDefinitions();
+  WriteAtomically(path, SerializeConfigurations(definitions), std::nullopt);
+  return definitions;
+}
+
+void ReplaceProfileFiles(const StorageLayout& layout, std::string_view settings_contents,
+    std::string_view state_contents, std::string_view configurations_contents) {
+  EnsureProfileDirectory(layout.root);
+  StorageMutex mutex(layout);
+  struct File {
+    std::filesystem::path path, temporary, backup;
+    std::string_view contents;
+    std::optional<StorageFingerprint> expected;
+    bool backed_up{false}, replaced{false};
+  };
+  std::vector<File> files;
+  for (const auto& [name, contents] : std::vector<std::pair<std::wstring, std::string_view>>{
+      {L"settings.json", settings_contents}, {L"catalog-state.json", state_contents},
+      {L"configurations.json", configurations_contents}}) {
+    const auto suffix = std::to_wstring(GetCurrentProcessId());
+    files.push_back({PathFor(layout, name), PathFor(layout, name + L".profile-txn." + suffix),
+        PathFor(layout, name + L".profile-backup." + suffix), contents, FingerprintOf(PathFor(layout, name))});
+  }
   std::error_code error;
-  std::filesystem::remove(settings_temp, error);
-  std::filesystem::remove(state_temp, error);
-  std::filesystem::remove(settings_backup, error);
-  std::filesystem::remove(state_backup, error);
-  WriteProfileTemporary(settings_temp, settings_contents);
+  // Do not remove evidence/backups left by an interrupted transaction.
+  for (const auto& file : files) {
+    if (std::filesystem::exists(file.temporary) || std::filesystem::exists(file.backup)) {
+      throw std::runtime_error("An unfinished profile transaction requires recovery before import.");
+    }
+  }
   try {
-    WriteProfileTemporary(state_temp, state_contents);
-    StorageMutex mutex(layout);
-    const auto expected_settings = FingerprintOf(settings_path);
-    const auto expected_state = FingerprintOf(state_path);
-    const bool had_settings = expected_settings.has_value();
-    const bool had_state = expected_state.has_value();
-    bool settings_backed_up = false;
-    bool state_backed_up = false;
-    bool settings_replaced = false;
-    bool state_replaced = false;
-    try {
-      VerifyFingerprint(settings_path, expected_settings);
-      VerifyFingerprint(state_path, expected_state);
-      if (had_settings) {
-        MoveProfileFile(settings_path, settings_backup, 0, L"Cannot stage settings.json");
-        settings_backed_up = true;
+    for (const auto& file : files) WriteProfileTemporary(file.temporary, file.contents);
+    for (const auto& file : files) VerifyFingerprint(file.path, file.expected);
+    for (auto& file : files) {
+      if (file.expected) {
+        MoveProfileFile(file.path, file.backup, 0, L"Cannot stage profile file");
+        file.backed_up = true;
       }
-      if (had_state) {
-        MoveProfileFile(state_path, state_backup, 0, L"Cannot stage catalog-state.json");
-        state_backed_up = true;
-      }
-      MoveProfileFile(settings_temp, settings_path, MOVEFILE_REPLACE_EXISTING, L"Cannot commit settings.json");
-      settings_replaced = true;
-      MoveProfileFile(state_temp, state_path, MOVEFILE_REPLACE_EXISTING, L"Cannot commit catalog-state.json");
-      state_replaced = true;
-      if (settings_backed_up) std::filesystem::remove(settings_backup, error);
-      if (state_backed_up) std::filesystem::remove(state_backup, error);
-    } catch (...) {
-      if (settings_replaced || settings_backed_up) std::filesystem::remove(settings_path, error);
-      if (state_replaced || state_backed_up) std::filesystem::remove(state_path, error);
-      if (settings_backed_up) {
-        static_cast<void>(MoveFileExW(settings_backup.c_str(), settings_path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH));
-      } else if (!had_settings && settings_replaced) {
-        std::filesystem::remove(settings_path, error);
-      }
-      if (state_backed_up) {
-        static_cast<void>(MoveFileExW(state_backup.c_str(), state_path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH));
-      } else if (!had_state && state_replaced) {
-        std::filesystem::remove(state_path, error);
-      }
-      throw;
+      MoveProfileFile(file.temporary, file.path, MOVEFILE_REPLACE_EXISTING, L"Cannot commit profile file");
+      file.replaced = true;
     }
   } catch (...) {
-    std::filesystem::remove(settings_temp, error);
-    std::filesystem::remove(state_temp, error);
-    std::filesystem::remove(settings_backup, error);
-    std::filesystem::remove(state_backup, error);
+    for (auto it = files.rbegin(); it != files.rend(); ++it) {
+      if (it->replaced) std::filesystem::remove(it->path, error);
+      if (it->backed_up) {
+        static_cast<void>(MoveFileExW(it->backup.c_str(), it->path.c_str(), MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH));
+      }
+      std::filesystem::remove(it->temporary, error);
+    }
     throw;
   }
+  for (const auto& file : files) if (file.backed_up) std::filesystem::remove(file.backup, error);
 }
 
 bool IsValidHistoryItem(const domain::HistoryItem& item) noexcept {
@@ -499,10 +526,12 @@ Settings ParseSettings(std::string_view contents) {
     if (const auto active = json::ObjectString(*root, "active_ibases")) result.active_ibases = *active;
     if (const auto selected = json::ObjectString(*root, "selected_entry")) result.selected_entry = *selected;
     if (const auto simple = json::ObjectInt(*root, "simple_mode")) result.simple_mode = *simple != 0;
+    if (const auto show_configuration = json::ObjectInt(*root, "show_configuration_in_list")) result.show_configuration_in_list = *show_configuration != 0;
     if (const auto show_tags = json::ObjectInt(*root, "show_tags_in_list")) result.show_tags_in_list = *show_tags != 0;
     if (const auto show_cache = json::ObjectInt(*root, "show_cache_size_in_list")) result.show_cache_size_in_list = *show_cache != 0;
     if (const auto folders_first = json::ObjectInt(*root, "folders_first_when_sorting")) result.folders_first_when_sorting = *folders_first != 0;
     if (const auto open_last = json::ObjectInt(*root, "open_last_list_on_startup")) result.open_last_list_on_startup = *open_last != 0;
+    if (const auto check_updates = json::ObjectInt(*root, "check_updates_on_startup")) result.check_updates_on_startup = *check_updates != 0;
     if (const auto restore_selection = json::ObjectInt(*root, "restore_last_selection")) result.restore_last_selection = *restore_selection != 0;
     if (const auto client = json::ObjectInt(*root, "default_client_type")) {
       if (const auto parsed = ParseClientTypeSetting(*client)) result.default_client_type = *parsed;
@@ -713,10 +742,12 @@ std::string SerializeSettings(const Settings& settings) {
       ::ibstart::storage::json::Escape(settings.active_ibases.wstring()) + "\",\n";
   json += "  \"selected_entry\": \"" + ::ibstart::storage::json::Escape(settings.selected_entry) + "\",\n";
   json += "  \"simple_mode\": " + std::string(settings.simple_mode ? "1" : "0") + ",\n";
+  json += "  \"show_configuration_in_list\": " + std::string(settings.show_configuration_in_list ? "1" : "0") + ",\n";
   json += "  \"show_tags_in_list\": " + std::string(settings.show_tags_in_list ? "1" : "0") + ",\n";
   json += "  \"show_cache_size_in_list\": " + std::string(settings.show_cache_size_in_list ? "1" : "0") + ",\n";
   json += "  \"folders_first_when_sorting\": " + std::string(settings.folders_first_when_sorting ? "1" : "0") + ",\n";
   json += "  \"open_last_list_on_startup\": " + std::string(settings.open_last_list_on_startup ? "1" : "0") + ",\n";
+  json += "  \"check_updates_on_startup\": " + std::string(settings.check_updates_on_startup ? "1" : "0") + ",\n";
   json += "  \"restore_last_selection\": " + std::string(settings.restore_last_selection ? "1" : "0") + ",\n";
   json += "  \"default_client_type\": " + std::to_string(ClientTypeSettingValue(settings.default_client_type)) + ",\n";
   json += "  \"default_architecture\": " + std::to_string(ClientArchitectureSettingValue(settings.default_architecture)) + ",\n";
@@ -797,6 +828,23 @@ CatalogState ParseCatalogState(std::string_view contents) {
         result.tag_styles[*style_name] = {static_cast<COLORREF>(*background), static_cast<COLORREF>(*text)};
       }
     });
+    if (const auto* value = json::ObjectValue(*root, "database_configurations")) {
+      const auto assignments = json::ObjectArray(value);
+      if (!assignments) throw std::runtime_error("Invalid database_configurations array.");
+      for (const auto& object : *assignments) {
+        const auto path = json::ObjectString(object, "catalog_path");
+        const auto id = json::ObjectString(object, "database_id");
+        const auto config = json::ObjectString(object, "configuration_id");
+        const auto version = json::ObjectString(object, "version");
+        if (!path || path->empty() || !id || id->empty() || !config || !version ||
+            !configuration::ValidText(*version, 128)) throw std::runtime_error("Invalid database configuration assignment.");
+        const auto normalized_path = configuration::NormalizeCatalogPath(*path);
+        if (configuration::FindAssignment(result.database_configurations, normalized_path, *id)) {
+          throw std::runtime_error("Duplicate database configuration assignment.");
+        }
+        result.database_configurations.push_back({normalized_path, *id, *config, *version});
+      }
+    }
     json::ForEachArrayObject(*root, "database_metrics", [&](const json::Object& object) {
       const auto database_id = json::ObjectString(object, "database_id");
       const auto* cache_value = json::ObjectValue(object, "cache");
@@ -876,6 +924,15 @@ std::string SerializeCatalogState(const CatalogState& state) {
         ", \"measured_at\": " + std::to_string(std::chrono::system_clock::to_time_t(cache.measured_at)) +
         ", \"complete\": " + std::string(cache.complete ? "1" : "0") + "}}";
   }
+  json += "],\n  \"database_configurations\": [";
+  written = 0;
+  for (const auto& a : state.database_configurations) {
+    if (written++) json += ", ";
+    json += "{\"catalog_path\": \"" + ::ibstart::storage::json::Escape(a.catalog_path) +
+        "\", \"database_id\": \"" + ::ibstart::storage::json::Escape(a.database_id) +
+        "\", \"configuration_id\": \"" + ::ibstart::storage::json::Escape(a.configuration_id) +
+        "\", \"version\": \"" + ::ibstart::storage::json::Escape(a.version) + "\"}";
+  }
   json += "]\n}\n";
   return json;
 }
@@ -898,12 +955,14 @@ void MergeChangedSettings(Settings& target, const Settings& baseline, const Sett
   if (requested.active_ibases != baseline.active_ibases) target.active_ibases = requested.active_ibases;
   if (requested.selected_entry != baseline.selected_entry) target.selected_entry = requested.selected_entry;
   if (requested.simple_mode != baseline.simple_mode) target.simple_mode = requested.simple_mode;
+  if (requested.show_configuration_in_list != baseline.show_configuration_in_list) target.show_configuration_in_list = requested.show_configuration_in_list;
   if (requested.show_tags_in_list != baseline.show_tags_in_list) target.show_tags_in_list = requested.show_tags_in_list;
   if (requested.show_cache_size_in_list != baseline.show_cache_size_in_list) target.show_cache_size_in_list = requested.show_cache_size_in_list;
   if (requested.folders_first_when_sorting != baseline.folders_first_when_sorting) {
     target.folders_first_when_sorting = requested.folders_first_when_sorting;
   }
   if (requested.open_last_list_on_startup != baseline.open_last_list_on_startup) target.open_last_list_on_startup = requested.open_last_list_on_startup;
+  if (requested.check_updates_on_startup != baseline.check_updates_on_startup) target.check_updates_on_startup = requested.check_updates_on_startup;
   if (requested.restore_last_selection != baseline.restore_last_selection) target.restore_last_selection = requested.restore_last_selection;
   if (requested.default_client_type != baseline.default_client_type) target.default_client_type = requested.default_client_type;
   if (requested.default_architecture != baseline.default_architecture) target.default_architecture = requested.default_architecture;
@@ -1003,12 +1062,12 @@ void ExportProfile(const StorageLayout& source, const std::filesystem::path& tar
     throw std::runtime_error("Export destination must differ from the active profile.");
   }
   EnsureProfileDirectory(target);
-  const auto settings = [&] {
-    auto value = LoadSettings(source);
-    if (!include_credentials) value.credentials.clear();
-    return value;
+  auto [settings, state] = [&] {
+    StorageMutex mutex(source);
+    return std::pair{LoadSettings(source), LoadCatalogState(source)};
   }();
-  ReplaceProfileFiles({target, false}, SerializeSettings(settings), SerializeCatalogState(LoadCatalogState(source)));
+  if (!include_credentials) settings.credentials.clear();
+  ReplaceProfileFiles({target, false}, SerializeSettings(settings), SerializeCatalogState(state), SerializeConfigurations(state.configurations));
 }
 
 void ImportProfile(const std::filesystem::path& source, const StorageLayout& target, bool include_credentials) {
@@ -1016,19 +1075,34 @@ void ImportProfile(const std::filesystem::path& source, const StorageLayout& tar
     throw std::runtime_error("Selected directory does not contain a complete IBStart profile.");
   }
   EnsureProfileDirectory(target.root);
-  const auto source_settings = ReadFileSnapshot(source / L"settings.json");
-  const auto source_state = ReadFileSnapshot(source / L"catalog-state.json");
+  const auto snapshots = [&] {
+    StorageMutex mutex({source, false});
+    return std::vector<FileSnapshot>{ReadFileSnapshot(source / L"settings.json"),
+        ReadFileSnapshot(source / L"catalog-state.json"), ReadFileSnapshot(source / L"configurations.json")};
+  }();
+  const auto& source_settings = snapshots[0];
+  const auto& source_state = snapshots[1];
   ValidateSettingsProfile(source_settings.contents);
   ValidateCatalogStateProfile(source_state.contents);
   auto imported = ParseSettings(source_settings.contents);
   if (!include_credentials) imported.credentials = LoadSettings(target).credentials;
-  ReplaceProfileFiles(target, SerializeSettings(imported), SerializeCatalogState(ParseCatalogState(source_state.contents)));
+  const auto& source_definitions = snapshots[2];
+  const auto definitions = source_definitions.fingerprint ? ParseConfigurations(source_definitions.contents) : configuration::BuiltInDefinitions();
+  const auto state = ParseCatalogState(source_state.contents);
+  for (const auto& assignment : state.database_configurations) {
+    if (!assignment.configuration_id.empty() && !configuration::Find(definitions, assignment.configuration_id)) {
+      throw std::runtime_error("Imported database refers to a missing configuration.");
+    }
+  }
+  ReplaceProfileFiles(target, SerializeSettings(imported), SerializeCatalogState(state), SerializeConfigurations(definitions));
 }
 
 CatalogState LoadCatalogState(const StorageLayout& layout) {
   StorageMutex mutex(layout);
   const auto snapshot = ReadFileSnapshot(PathFor(layout, L"catalog-state.json"));
-  return ParseCatalogState(snapshot.contents);
+  auto state = ParseCatalogState(snapshot.contents);
+  state.configurations = ReadConfigurations(layout);
+  return state;
 }
 
 void SaveCatalogState(const StorageLayout& layout, const CatalogState& state) {
@@ -1087,6 +1161,8 @@ const CatalogState& CatalogStateRepository::Read() {
     StorageMutex mutex(layout_);
     const auto snapshot = ReadFileSnapshot(PathFor(layout_, L"catalog-state.json"));
     state_ = ParseCatalogState(snapshot.contents);
+    state_->configurations = ReadConfigurations(layout_);
+    state_->configuration_scope = configuration_scope_;
   }
   return *state_;
 }
@@ -1095,11 +1171,14 @@ const CatalogState& CatalogStateRepository::Reload() {
   StorageMutex mutex(layout_);
   const auto snapshot = ReadFileSnapshot(PathFor(layout_, L"catalog-state.json"));
   state_ = ParseCatalogState(snapshot.contents);
+  state_->configurations = ReadConfigurations(layout_);
+  state_->configuration_scope = configuration_scope_;
   return *state_;
 }
 
 void CatalogStateRepository::Adopt(CatalogState state) {
   NormalizeCatalogState(state);
+  state.configuration_scope = configuration_scope_;
   state_ = std::move(state);
 }
 
@@ -1110,6 +1189,8 @@ void CatalogStateRepository::Update(const std::function<void(CatalogState&)>& mu
   // state_ is a UI cache and may predate a transaction committed by another
   // process. Always mutate the snapshot read while holding the mutex.
   CatalogState updated = ParseCatalogState(snapshot.contents);
+  updated.configurations = ReadConfigurations(layout_);
+  updated.configuration_scope = configuration_scope_;
   mutation(updated);
   NormalizeCatalogState(updated);
   WriteAtomically(path, SerializeCatalogState(updated), snapshot.fingerprint);
@@ -1130,6 +1211,28 @@ void CatalogStateRepository::RemoveHistory(std::wstring_view database_id) {
 
 void CatalogStateRepository::ClearHistory() {
   Update([](CatalogState& state) { state.history.clear(); });
+}
+
+void CatalogStateRepository::SetConfigurationScope(const std::filesystem::path& path) {
+  configuration_scope_ = configuration::NormalizeCatalogPath(path);
+  if (state_) state_->configuration_scope = configuration_scope_;
+}
+
+void CatalogStateRepository::UpdateConfigurations(const std::function<void(std::vector<configuration::Definition>&,
+    const std::vector<configuration::Assignment>&)>& mutation) {
+  StorageMutex mutex(layout_);
+  const auto path = PathFor(layout_, L"configurations.json");
+  static_cast<void>(ReadConfigurations(layout_));
+  const auto snapshot = ReadFileSnapshot(path);
+  auto definitions = ParseConfigurations(snapshot.contents);
+  const auto state_snapshot = ReadFileSnapshot(PathFor(layout_, L"catalog-state.json"));
+  if (state_snapshot.fingerprint && !json::RootObject(state_snapshot.contents)) {
+    throw std::runtime_error("Cannot inspect configuration references in damaged catalog-state.json.");
+  }
+  const auto assignments = ParseCatalogState(state_snapshot.contents).database_configurations;
+  mutation(definitions, assignments);
+  WriteAtomically(path, SerializeConfigurations(definitions), snapshot.fingerprint);
+  if (state_) state_->configurations = std::move(definitions);
 }
 
 }  // namespace ibstart::storage

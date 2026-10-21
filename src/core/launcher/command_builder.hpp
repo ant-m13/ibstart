@@ -18,7 +18,14 @@ struct ConnectionSpec {
   std::wstring reference;
 };
 
-[[nodiscard]] std::wstring QuoteWindowsArgument(std::wstring_view argument);
+struct CommandArgument {
+  size_t begin{};
+  size_t end{};
+  std::wstring value;
+  bool quoted{false};
+};
+[[nodiscard]] std::wstring QuoteWindowsArgument(std::wstring_view argument, bool force = false);
+[[nodiscard]] std::vector<CommandArgument> TokenizeCommandArguments(std::wstring_view text);
 [[nodiscard]] std::vector<std::wstring> SplitCommandArguments(std::wstring_view text);
 [[nodiscard]] std::optional<domain::ClientArchitecture> ParseAppArchitecture(std::wstring_view value);
 [[nodiscard]] std::optional<domain::ClientArchitecture> AppArchitectureFromParameters(std::wstring_view text);

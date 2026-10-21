@@ -191,7 +191,7 @@ void TreeViewController::Populate(const catalog::Catalog& database_catalog,
 
   try {
     const auto catalog_items = presentation::FilterTreeItems(database_catalog, database_catalog.Tree(),
-        search_filter, tag_filter, catalog_state.tags, filter_favorites);
+        search_filter, tag_filter, catalog_state.tags, filter_favorites, &catalog_state);
     HTREEITEM catalog_root = FindTopLevelItem(kCatalogRootItemData);
     if (!catalog_root) {
       catalog_root = InsertCatalogRoot();
@@ -615,7 +615,7 @@ void TreeViewController::ReconcileSpecialRoot(const catalog::Catalog& database_c
     raw_items.push_back({entry->name, true, {}, {}, *section_index});
   }
   const auto items = presentation::FilterTreeItems(database_catalog, raw_items, search_filter, tag_filter,
-      catalog_state.tags, filter_favorites);
+      catalog_state.tags, filter_favorites, &catalog_state);
 
   HTREEITEM root_handle = FindTopLevelItem(item_data);
   if (items.empty()) {

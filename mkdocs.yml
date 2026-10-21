@@ -6,6 +6,8 @@ repo_url: https://github.com/ant-m13/ibstart
 edit_uri: edit/main/docs/
 exclude_docs: |
   /hooks.py
+  /scripts/
+  /_*/
 hooks:
   - docs/hooks.py
 
@@ -50,6 +52,10 @@ nav:
   - Разработчикам:
       - Архитектура: architecture.md
       - Формат ibases.v8i: ibases-format.md
+      - Версии полей ibases.v8i: ibases-format-versions.md
+      - Версии параметров запуска: launch-parameter-versions.md
+      - Сверка версий документации 1С: 1c-reference-versions.md
+      - Обновление справочников 1С: maintaining-1c-reference.md
       - Спецификация запуска: ibases-launch-spec.md
       - Процесс выпуска: release-process.md
       - Лицензирование материалов 1С: 1c-license-compliance.md
@@ -62,6 +68,7 @@ markdown_extensions:
   - tables
   - toc:
       permalink: true
+      slugify: !!python/name:markdown.extensions.toc.slugify_unicode
   - pymdownx.details
   - pymdownx.superfences
 
