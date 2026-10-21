@@ -17,6 +17,14 @@ jobs:
       - uses: actions/checkout@v7
         with:
           fetch-depth: 2
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.x"
+      - name: Check versioned reference data
+        run: |
+          python tools/update-1c-reference.py --check
+          python tools/update-launch-parameter-versions.py --check-docs
+          python -m unittest discover -s tools/tests -p "test_*.py"
       - name: Validate SemVer rules
         shell: pwsh
         run: |

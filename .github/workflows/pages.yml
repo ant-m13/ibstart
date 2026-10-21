@@ -8,9 +8,8 @@ on:
       - "CHANGELOG.md"
       - "mkdocs.yml"
       - "requirements-docs.txt"
-      - "tools/update-1c-reference.py"
-      - "tools/update-launch-parameter-versions.py"
-      - "tools/tests/**"
+      - "tools/**"
+      - "src/core/launcher/**"
       - ".github/workflows/pages.yml"
   pull_request:
     branches: [main]
@@ -19,9 +18,8 @@ on:
       - "CHANGELOG.md"
       - "mkdocs.yml"
       - "requirements-docs.txt"
-      - "tools/update-1c-reference.py"
-      - "tools/update-launch-parameter-versions.py"
-      - "tools/tests/**"
+      - "tools/**"
+      - "src/core/launcher/**"
       - ".github/workflows/pages.yml"
   workflow_dispatch:
 

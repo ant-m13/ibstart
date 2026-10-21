@@ -19,6 +19,20 @@ cmake --build --preset msvc-x64-release
 ctest --preset msvc-x64-release
 ```
 
+Для справочных данных и генераторов требуется Python 3.10 или новее.
+Проверки используют стандартную библиотеку и не требуют исходных страниц 1С:
+
+```powershell
+python tools/update-1c-reference.py --check
+python tools/update-launch-parameter-versions.py --check-docs
+python -m unittest discover -s tools/tests -p "test_*.py"
+```
+
+Эти проверки обязательны в `build.yml` и перед автоматическим выпуском в
+`release.yml`. Изменения инструментов и ядра конструктора также запускают
+проверку сайта. Для сборки документации установите `requirements-docs.txt`
+и следуйте [процессу выпуска](docs/release-process.md).
+
 Ссылки из документации на исходный код оформляйте через имя устойчивого символа,
 например [`launcher::BuildCommand`](src/core/launcher/command_builder.cpp);
 ссылки на номера строк не используйте. Проверка таких ссылок входит в
