@@ -23,13 +23,17 @@ jobs:
       - name: Check versioned reference data
         run: |
           python tools/update-1c-reference.py --check
+          if ($LASTEXITCODE -ne 0) { throw 'Versioned reference verification failed.' }
           python tools/update-launch-parameter-versions.py --check-docs
+          if ($LASTEXITCODE -ne 0) { throw 'Launch parameter documentation verification failed.' }
           python -m unittest discover -s tools/tests -p "test_*.py"
+          if ($LASTEXITCODE -ne 0) { throw 'Python regression tests failed.' }
       - name: Validate SemVer rules
         shell: pwsh
         run: |
           ./.github/scripts/test-version-validation.ps1
           cmake -P cmake/test-version-validation.cmake
+          if ($LASTEXITCODE -ne 0) { throw 'CMake SemVer validation failed.' }
       - name: Validate product version
         id: version
         shell: pwsh

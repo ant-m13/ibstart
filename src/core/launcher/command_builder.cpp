@@ -143,17 +143,22 @@ void ValidateParameterText(std::wstring_view text, std::map<std::wstring, size_t
 
     if (!requires_value(name)) continue;
     std::wstring value;
+    bool has_value = false;
     const auto equals = argument.find(L'=');
     if (equals != std::wstring::npos) {
       value = argument.substr(equals + 1);
+      has_value = true;
     } else if (index + 1 < arguments.size() && !arguments[index + 1].quoted && !SwitchName(arguments[index + 1].value).empty()) {
       AddParameterConflict(errors, L"У параметра /" + name + L" отсутствует значение.");
     } else if (index + 1 < arguments.size()) {
       value = arguments[++index].value;
+      has_value = true;
     } else {
       AddParameterConflict(errors, L"У параметра /" + name + L" отсутствует значение.");
     }
-    if (value.empty()) {
+    // An explicit empty password differs from a missing password operand.
+    // The builder supports /P ""; keep final launch validation consistent.
+    if (value.empty() && !(has_value && EqualNoCase(name, L"P"))) {
       AddParameterConflict(errors, L"У параметра /" + name + L" отсутствует значение.");
     } else if (EqualNoCase(name, L"AppArch") && !ParseAppArchitecture(value)) {
       AddParameterConflict(errors, L"Недопустимое значение /AppArch: " + value + L".");
