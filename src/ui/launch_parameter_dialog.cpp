@@ -478,14 +478,15 @@ void Layout(HWND window, State& state) {
   const int right_x = left + 30;
   const int right_width = width - right_x - 16;
   const int raw_y = height - 198;
-  const int middle_height = std::max(110, raw_y - 100);
+  // Command and parameter actions share one row above the resulting text.
+  const int action_y = raw_y - 37;
   move(state.search_label, 16, 12, 300, 20);
   move(state.search, 16, 34, left, 25);
   move(state.category_label, right_x, 12, 180, 20);
   move(state.category, right_x, 34, right_width, 250);
   move(state.command_label, 16, 72, left, 20);
-  move(state.reference, 16, 96, left, middle_height - 36);
-  move(state.add_command, 16, 96 + middle_height - 28, left, 28);
+  move(state.reference, 16, 96, left, std::max(74, action_y - 96 - 8));
+  move(state.add_command, 16, action_y, left, 28);
   ListView_SetColumnWidth(state.reference, 0, px(165));
   ListView_SetColumnWidth(state.reference, 1, std::max(px(150), px(left - 170)));
   move(state.version_label, right_x, 72, 150, 20);
@@ -503,8 +504,8 @@ void Layout(HWND window, State& state) {
        launcher::LaunchParameterCatalog()[state.selected].kind == launcher::ParameterValueKind::signed_switch) ? 220 : 25);
   move(state.browse, width - 54, edit_y, 38, 25);
   move(state.option, right_x, edit_y + 30, right_width, 22);
-  move(state.insert, right_x, edit_y + 58, 180, 28);
-  move(state.remove, right_x + 188, edit_y + 58, right_width - 188, 28);
+  move(state.insert, right_x, action_y, 180, 28);
+  move(state.remove, right_x + 188, action_y, right_width - 188, 28);
   move(state.text_label, 16, raw_y, width - 32, 20);
   move(state.text, 16, raw_y + 24, width - 32, 84);
   move(state.status, 16, height - 84, width - 32, 35);

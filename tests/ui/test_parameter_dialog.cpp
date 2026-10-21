@@ -94,6 +94,21 @@ void Capture(HWND window, const wchar_t* name) {
   DeleteDC(context);
   ReleaseDC(window, screen);
 }
+void CheckActionRow(HWND builder) {
+  RECT command{}, parameter{}, remove{}, reference{}, draft{};
+  GetWindowRect(GetDlgItem(builder, 1815), &command);
+  GetWindowRect(GetDlgItem(builder, 1808), &parameter);
+  GetWindowRect(GetDlgItem(builder, 1814), &remove);
+  GetWindowRect(GetDlgItem(builder, 1803), &reference);
+  GetWindowRect(GetDlgItem(builder, 1809), &draft);
+  Check(command.top == parameter.top && command.bottom == parameter.bottom,
+      "Command and parameter action buttons share top and bottom edges");
+  if (IsWindowVisible(GetDlgItem(builder, 1814)))
+    Check(command.top == remove.top && command.bottom == remove.bottom,
+        "Remove action shares the same button row");
+  Check(reference.bottom < command.top, "Reference list does not overlap the action row");
+  Check(command.bottom < draft.top, "Action row stays above the result field");
+}
 void CheckDirectActions(HWND builder, HWND list) {
   const HWND draft = GetDlgItem(builder, 1809), action = GetDlgItem(builder, 1808), remove = GetDlgItem(builder, 1814);
   const auto original = Text(draft);
@@ -137,6 +152,14 @@ void CheckDirectActions(HWND builder, HWND list) {
       "Value command offers modification and separate deletion");
   SendMessageW(remove, BM_CLICK, 0, 0);
   Check(Text(draft) == L" \t/C \"synthetic value\"  ", "Deleting value command preserves its neighbor");
+  set_draft(L"");
+  choose(L"/ModifyPassword");
+  CheckActionRow(builder);
+  Capture(builder, L"action-row-simple.bmp");
+  choose(L"/ConvertFiles");
+  CheckActionRow(builder);
+  Capture(builder, L"action-row-nested.bmp");
+  choose(L"/L");
   set_draft(original.c_str());
 }
 HWND ThreadWindow(std::wstring_view name) {
@@ -788,6 +811,7 @@ void CALLBACK Drive(HWND, UINT, UINT_PTR, DWORD) {
           MulDiv(610, static_cast<int>(dpi), 96), SWP_NOMOVE | SWP_NOZORDER);
       RECT client{};
       GetClientRect(builder, &client);
+      CheckActionRow(builder);
       for (HWND child = GetWindow(builder, GW_CHILD); child; child = GetWindow(child, GW_HWNDNEXT)) {
         if (!IsWindowVisible(child)) continue;
         RECT bounds{};
