@@ -3517,6 +3517,12 @@ void TestParameterBuilderPreservesText() {
   CHECK(ValidateParameterDraft(L"/C \"/Proxy\" /NoProxy").empty());
   CHECK(SetLaunchParameter(L"", Parameter(L"/C"), L"/AppArch") == L"/C \"/AppArch\"");
   CHECK(!AppArchitectureFromParameters(L"/C \"/AppArch\""));
+  for (const auto text : {L"/N \"/AppArch\"", L"/P \"/AppArch=x86\"",
+      L"/Out \"/AppArch\"", L"/ConfigurationRepositoryP \"/AppArch=x86\""}) {
+    CHECK(!AppArchitectureFromParameters(text));
+    CHECK(AppArchitectureFromParameters(std::wstring(text) + L" /AppArch x86_64") ==
+        ibstart::domain::ClientArchitecture::x64);
+  }
   const auto positioned = TokenizeCommandArguments(L"  /C \"a b\"\t/F x");
   CHECK(positioned.size() == 4);
   CHECK(positioned[1].begin == 5 && positioned[1].end == 10 && positioned[1].quoted);

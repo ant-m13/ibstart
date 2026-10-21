@@ -241,6 +241,8 @@ std::optional<domain::ClientArchitecture> AppArchitectureFromParameters(std::wst
   const auto arguments = TokenizeCommandArguments(text);
   std::optional<domain::ClientArchitecture> result;
   for (size_t index = 0; index < arguments.size(); ++index) {
+    // Quoted values belong to their parameter, even when they spell /AppArch.
+    if (arguments[index].quoted) continue;
     const auto& argument = arguments[index].value;
     if (EqualNoCase(argument, L"/C") && index + 1 < arguments.size()) { ++index; continue; }
     if (EqualNoCase(argument, L"/AppArch")) {
