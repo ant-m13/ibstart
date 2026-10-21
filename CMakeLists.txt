@@ -50,12 +50,16 @@ message(STATUS "IBStart product version: ${IBSTART_VERSION} (file version ${IBST
 add_library(ibstart_core STATIC
   src/core/credentials/credentials.cpp
   src/core/connection/connection_string.cpp
+  src/core/catalog/configuration_catalog.cpp
   src/core/catalog/catalog.cpp
   src/core/catalog/catalog_metadata_service.cpp
   src/core/catalog/catalog_session.cpp
   src/core/v8i/v8i_document.cpp
   src/core/v8i/v8i_file_store.cpp
   src/core/launcher/command_builder.cpp
+  src/core/launcher/parameter_catalog.cpp
+  src/core/launcher/parameter_help.cpp
+  src/core/launcher/parameter_options.cpp
   src/core/launcher/process_launcher.cpp
   src/core/platform/platform_discovery.cpp
   src/core/cache/cache_service.cpp
@@ -82,12 +86,14 @@ add_executable(IBStart WIN32
   src/ui/cache_size_operation.cpp
   src/ui/command_dispatcher.cpp
   src/ui/context_menu_controller.cpp
+  src/ui/configuration_catalog_dialog.cpp
   src/ui/database_editor_dialog.cpp
   src/ui/details_view_controller.cpp
   src/ui/dialog_support.cpp
   src/ui/folder_picker.cpp
   src/ui/input_box.cpp
   src/ui/launch_options_dialog.cpp
+  src/ui/launch_parameter_dialog.cpp
   src/ui/main_window.cpp
   src/ui/menu_controller.cpp
   src/ui/owner_draw_menu.cpp
@@ -149,5 +155,32 @@ if(BUILD_TESTING)
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/test-version-validation.cmake")
   add_test(NAME ibstart.documentation_links COMMAND "${CMAKE_COMMAND}" -P
       "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-documentation-links.cmake")
+  add_test(NAME ibstart.launch_parameter_documentation COMMAND "${CMAKE_COMMAND}" -P
+      "${CMAKE_CURRENT_SOURCE_DIR}/cmake/check-launch-parameter-docs.cmake")
+  add_executable(ibstart_parameter_dialog_tests tests/ui/test_parameter_dialog.cpp
+    src/ui/launch_parameter_dialog.cpp src/ui/launch_options_dialog.cpp
+    src/ui/advanced_database_options_dialog.cpp src/ui/database_editor_dialog.cpp src/ui/configuration_catalog_dialog.cpp src/ui/dialog_support.cpp)
+  target_link_libraries(ibstart_parameter_dialog_tests PRIVATE ibstart_core Comctl32)
+  target_compile_definitions(ibstart_parameter_dialog_tests PRIVATE
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+  target_compile_options(ibstart_parameter_dialog_tests PRIVATE /W4 /WX /permissive- /EHsc /Zc:__cplusplus /utf-8)
+  add_test(NAME ibstart.parameter_dialog_contracts COMMAND ibstart_parameter_dialog_tests)
+  set_tests_properties(ibstart.parameter_dialog_contracts PROPERTIES TIMEOUT 60)
+  get_target_property(IBSTART_CONFIGURATION_UI_SOURCES IBStart SOURCES)
+  list(FILTER IBSTART_CONFIGURATION_UI_SOURCES EXCLUDE REGEX "src/app/main[.]cpp$")
+  add_executable(ibstart_configuration_ui_tests tests/ui/test_configuration_catalog.cpp ${IBSTART_CONFIGURATION_UI_SOURCES})
+  target_link_libraries(ibstart_configuration_ui_tests PRIVATE ibstart_core Comctl32 Comdlg32)
+  target_compile_definitions(ibstart_configuration_ui_tests PRIVATE
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+  target_compile_options(ibstart_configuration_ui_tests PRIVATE /W4 /WX /permissive- /EHsc /Zc:__cplusplus /utf-8)
+  add_test(NAME ibstart.configuration_application_contracts COMMAND ibstart_configuration_ui_tests)
+  set_tests_properties(ibstart.configuration_application_contracts PROPERTIES TIMEOUT 60)
+  add_executable(ibstart_update_ui_tests tests/ui/test_startup_updates.cpp ${IBSTART_CONFIGURATION_UI_SOURCES})
+  target_link_libraries(ibstart_update_ui_tests PRIVATE ibstart_core Comctl32 Comdlg32)
+  target_compile_definitions(ibstart_update_ui_tests PRIVATE
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+  target_compile_options(ibstart_update_ui_tests PRIVATE /W4 /WX /permissive- /EHsc /Zc:__cplusplus /utf-8)
+  add_test(NAME ibstart.startup_update_contracts COMMAND ibstart_update_ui_tests)
+  set_tests_properties(ibstart.startup_update_contracts PROPERTIES TIMEOUT 60)
   set_tests_properties(ibstart.unit PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()

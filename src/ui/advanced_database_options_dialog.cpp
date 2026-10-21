@@ -1,6 +1,7 @@
 #include "ui/advanced_database_options_dialog.hpp"
 
 #include "ui/dialog_support.hpp"
+#include "ui/launch_parameter_dialog.hpp"
 
 #include <CommCtrl.h>
 
@@ -96,7 +97,8 @@ enum AdvancedDatabaseOptionsControl : int {
   kAdvancedHelpOrderInTree,
   kAdvancedHelpExternal,
   kAdvancedHelpLocale,
-  kAdvancedHelpParameters
+  kAdvancedHelpParameters,
+  kAdvancedParameterBuilder
 };
 
 struct AdvancedDatabaseOptionsState {
@@ -110,6 +112,7 @@ struct AdvancedDatabaseOptionsState {
   HFONT font{};
   HFONT button_font{};
   DatabaseEditorData initial;
+  std::span<const domain::PlatformInstallation> installations;
   std::optional<DatabaseEditorData> result;
   bool done{false};
 };
@@ -231,7 +234,9 @@ void CreateAdvancedDatabaseOptionsControls(HWND window, AdvancedDatabaseOptionsS
   help(366, kAdvancedHelpLocale);
   create(0, L"STATIC", L"Параметры командной строки:", 0, 28, 404, 184, 20, 0, text_font);
   state.parameters = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.additional_parameters,
-      WS_TABSTOP | ES_AUTOHSCROLL, 220, 400, 352, 25, kAdvancedParameters, text_font);
+      WS_TABSTOP | ES_AUTOHSCROLL, 220, 400, 212, 25, kAdvancedParameters, text_font);
+  create(0, L"BUTTON", L"Конструктор…", WS_TABSTOP,
+      440, 400, 132, 25, kAdvancedParameterBuilder, button_font);
   help(400, kAdvancedHelpParameters);
   create(0, L"BUTTON", L"Сохранить", WS_TABSTOP | BS_DEFPUSHBUTTON,
       430, 462, 110, 28, IDOK, button_font);
@@ -266,6 +271,17 @@ LRESULT CALLBACK AdvancedDatabaseOptionsProc(HWND window, UINT message, WPARAM w
   }
   if (message == WM_COMMAND && state) {
     const int command = LOWORD(wparam);
+    if (command == kAdvancedParameterBuilder) {
+      launcher::ParameterEditorContext context;
+      context.version = state->initial.version;
+      if (context.version.empty() || context.version == L"Авто") context.version = ReadControlText(state->default_version);
+      if (EqualNoCase(state->initial.app, L"ThinClient")) context.client = domain::ClientType::thin;
+      else if (EqualNoCase(state->initial.app, L"ThickClient")) context.client = domain::ClientType::thick;
+      if (const auto updated = EditLaunchParameters(window, ReadControlText(state->parameters), context,
+          ParameterDialogPurpose::return_to_field, state->installations))
+        SetWindowTextW(state->parameters, updated->c_str());
+      return 0;
+    }
     if (command >= kAdvancedHelpDefaultApp && command <= kAdvancedHelpParameters) {
       ShowAdvancedParameterHelp(window, command);
       return 0;
@@ -292,9 +308,11 @@ LRESULT CALLBACK AdvancedDatabaseOptionsProc(HWND window, UINT message, WPARAM w
 
 }  // namespace
 
-std::optional<DatabaseEditorData> EditAdvancedDatabaseOptions(HWND owner, DatabaseEditorData initial) {
+std::optional<DatabaseEditorData> EditAdvancedDatabaseOptions(HWND owner, DatabaseEditorData initial,
+    std::span<const domain::PlatformInstallation> installations) {
   AdvancedDatabaseOptionsState state;
   state.initial = std::move(initial);
+  state.installations = installations;
   static ATOM atom = [] {
     WNDCLASSW klass{};
     klass.hInstance = GetModuleHandleW(nullptr);

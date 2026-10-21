@@ -9,6 +9,9 @@
 #include "core/domain/version.hpp"
 #include "core/domain/utf.hpp"
 #include "core/launcher/command_builder.hpp"
+#include "core/launcher/parameter_catalog.hpp"
+#include "core/launcher/parameter_help.hpp"
+#include "core/launcher/parameter_options.hpp"
 #include "core/logging/logging.hpp"
 #include "core/platform/platform_discovery.hpp"
 #include "core/platform/platform_version.hpp"
@@ -175,6 +178,20 @@ class LoopbackHttpServer {
     }
 
     if (!response_.empty()) {
+      // Behave like an HTTP server: read complete request headers before
+      // sending the response. Sending immediately after accept can make
+      // WinHTTP report ERROR_WINHTTP_INVALID_SERVER_RESPONSE on fast runs.
+      const DWORD receive_timeout = 2000;
+      if (setsockopt(client, SOL_SOCKET, SO_RCVTIMEO,
+          reinterpret_cast<const char*>(&receive_timeout), sizeof(receive_timeout)) == SOCKET_ERROR) return;
+      std::string headers;
+      char buffer[2048]{};
+      while (headers.find("\r\n\r\n") == std::string::npos && headers.size() < 8192) {
+        const int received = recv(client, buffer, static_cast<int>(sizeof(buffer)), 0);
+        if (received <= 0) return;
+        headers.append(buffer, static_cast<size_t>(received));
+      }
+      if (headers.find("\r\n\r\n") == std::string::npos) return;
       size_t offset = 0;
       while (offset < response_.size()) {
         const int sent = send(client, response_.data() + offset,
@@ -1212,6 +1229,10 @@ void TestUpdateTransportReadsAsyncResponse() {
   CHECK(server.WaitForClient(std::chrono::seconds(2)));
   client.join();
 
+  if (client_exception) {
+    try { std::rethrow_exception(client_exception); }
+    catch (const std::exception& error) { std::cerr << "Loopback response error: " << error.what() << "\n"; }
+  }
   CHECK(!client_exception);
   CHECK(response == std::optional<std::string>("v0.7.4"));
 }
@@ -2275,6 +2296,35 @@ void TestWindowsPathLimit() {
   CHECK(portablePathRejected);
 }
 
+void TestStartupUpdateSettings() {
+  const auto directory = Temp(L"startup-update-settings");
+  const ibstart::storage::StorageLayout layout{directory, true};
+  ibstart::storage::EnsureWritable(layout);
+  CHECK(ibstart::storage::Settings{}.check_updates_on_startup);
+  CHECK(ibstart::storage::LoadSettings(layout).check_updates_on_startup);
+  // Older profiles and properties of an unsupported type use the enabled default.
+  WriteBytes(directory / L"settings.json", "{}");
+  CHECK(ibstart::storage::LoadSettings(layout).check_updates_on_startup);
+  WriteBytes(directory / L"settings.json", "{\"check_updates_on_startup\":\"0\"}");
+  CHECK(ibstart::storage::LoadSettings(layout).check_updates_on_startup);
+  auto settings = ibstart::storage::LoadSettings(layout);
+  settings.check_updates_on_startup = false;
+  ibstart::storage::SaveSettings(layout, settings);
+  CHECK(!ibstart::storage::LoadSettings(layout).check_updates_on_startup);
+
+  ibstart::storage::SettingsRepository first(layout), stale(layout);
+  auto changed = first.Read();
+  auto unrelated = stale.Read();
+  changed.check_updates_on_startup = true;
+  first.Save(changed);
+  unrelated.simple_mode = true;
+  stale.Save(unrelated);
+  CHECK(ibstart::storage::LoadSettings(layout).check_updates_on_startup);
+  CHECK(ibstart::storage::LoadSettings(layout).simple_mode);
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
 void TestProfileTransfer() {
   const auto directory = Temp(L"profile-transfer");
   const ibstart::storage::StorageLayout source{directory / L"source", false};
@@ -2282,6 +2332,7 @@ void TestProfileTransfer() {
   ibstart::storage::EnsureWritable(source);
   ibstart::storage::Settings source_settings;
   source_settings.active_ibases = L"C:\\catalog.v8i";
+  source_settings.check_updates_on_startup = false;
   source_settings.credentials = {{L"source-id", L"Source", L"user", L"secret", ibstart::credentials::ScopeMode::all, {}}};
   ibstart::storage::SaveSettings(source, source_settings);
   ibstart::storage::CatalogState source_state;
@@ -2308,6 +2359,7 @@ void TestProfileTransfer() {
   ibstart::storage::ExportProfile(source, target.root, false);
   CHECK(ibstart::storage::HasCompleteProfileFiles(target.root));
   CHECK(ibstart::storage::LoadSettings(target).credentials.empty());
+  CHECK(!ibstart::storage::LoadSettings(target).check_updates_on_startup);
   CHECK(ibstart::storage::LoadCatalogState(target).favorites == source_state.favorites);
 
   const ibstart::storage::StorageLayout transaction_target{directory / L"transaction-target", false};
@@ -2335,6 +2387,7 @@ void TestProfileTransfer() {
   ibstart::storage::SaveSettings(target, target_settings);
   ibstart::storage::ImportProfile(source.root, target, false);
   CHECK(ibstart::storage::LoadSettings(target).credentials == target_settings.credentials);
+  CHECK(!ibstart::storage::LoadSettings(target).check_updates_on_startup);
   ibstart::storage::ImportProfile(source.root, target, true);
   CHECK(ibstart::storage::LoadSettings(target).credentials == source_settings.credentials);
 
@@ -2375,6 +2428,114 @@ void TestProfileTransfer() {
 
   std::error_code error;
   std::filesystem::remove_all(directory, error);
+}
+
+void TestConfigurationCatalog() {
+  using namespace ibstart;
+  const auto directory = Temp(L"configuration-catalog");
+  const storage::StorageLayout layout{directory / L"source", true};
+  storage::EnsureWritable(layout);
+  const auto list_a = directory / L"a.v8i", list_b = directory / L"b.v8i";
+  WriteBytes(list_a, "[Shared]\nConnect=Srvr=server;Ref=base;\n");
+  const auto original_list = ReadBytes(list_a);
+  catalog::CatalogMetadataService service(layout);
+  service.SetConfigurationScope(list_a);
+  const auto predefined = service.Read().configurations;
+  CHECK(predefined.size() >= 6);
+  CHECK(std::filesystem::exists(layout.root / L"configurations.json"));
+  const auto id = predefined.front().id;
+  service.SetDatabaseConfiguration(L"Shared", id, L" 3.0.142.32 ");
+  service.SetConfigurationScope(list_b);
+  CHECK(!configuration::FindAssignment(service.Read().database_configurations, service.Read().configuration_scope, L"Shared"));
+  service.SetDatabaseConfiguration(L"Shared", id, L"3.0.150.1");
+  service.SetConfigurationScope(list_a);
+  CHECK(configuration::FindAssignment(service.Read().database_configurations, service.Read().configuration_scope, L"shared")->version == L"3.0.142.32");
+  auto edited = predefined.front();
+  edited.title = L"Переименованная конфигурация";
+  edited.short_name = L"БП тест";
+  service.SaveConfiguration(edited);
+  CHECK(configuration::Badge(service.Read().configurations,
+      configuration::FindAssignment(service.Read().database_configurations, service.Read().configuration_scope, L"Shared")) == L"БП тест · 3.0.142.32");
+  bool rejected = false;
+  try { service.DeleteConfiguration(id); } catch (const std::runtime_error&) { rejected = true; }
+  CHECK(rejected);
+  service.RemoveDatabaseConfiguration(L"Shared");
+  rejected = false;
+  try { service.DeleteConfiguration(id); } catch (const std::runtime_error&) { rejected = true; }
+  CHECK(rejected);  // References in another catalog still block deletion.
+  service.SetConfigurationScope(list_b);
+  service.RenameDatabaseMetadata(L"Shared", L"Renamed", L"Shared", L"Renamed");
+  CHECK(!configuration::FindAssignment(service.Read().database_configurations, service.Read().configuration_scope, L"Shared"));
+  CHECK(configuration::FindAssignment(service.Read().database_configurations, service.Read().configuration_scope, L"Renamed"));
+  rejected = false;
+  try { service.SetDatabaseConfiguration(L"Renamed", id, L"bad\nversion"); } catch (const std::runtime_error&) { rejected = true; }
+  CHECK(rejected);
+  service.SetDatabaseConfiguration(L"VersionOnly", {}, L"custom-beta");
+  CHECK(ReadBytes(list_a) == original_list); // Local metadata never writes ibases.v8i.
+  storage::SaveSettings(layout, {});
+  const auto exported = directory / L"export";
+  storage::ExportProfile(layout, exported, false);
+  CHECK(std::filesystem::exists(exported / L"configurations.json"));
+  const storage::StorageLayout target{directory / L"target", true};
+  storage::ImportProfile(exported, target, false);
+  const auto transferred = storage::LoadCatalogState(target);
+  CHECK(transferred.configurations == service.Read().configurations);
+  CHECK(transferred.database_configurations == service.Read().database_configurations);
+  const auto before_settings = ReadBytes(target.root / L"settings.json");
+  const auto before_state = ReadBytes(target.root / L"catalog-state.json");
+  const auto before_definitions = ReadBytes(target.root / L"configurations.json");
+  WriteBytes(exported / L"configurations.json", "{\"schema_version\": 99, \"configurations\": []}");
+  rejected = false;
+  try { storage::ImportProfile(exported, target, false); } catch (const std::runtime_error&) { rejected = true; }
+  CHECK(rejected);
+  CHECK(ReadBytes(target.root / L"settings.json") == before_settings);
+  CHECK(ReadBytes(target.root / L"catalog-state.json") == before_state);
+  CHECK(ReadBytes(target.root / L"configurations.json") == before_definitions);
+  // Importing a legacy two-file profile initializes the dictionary and clears old bindings.
+  storage::CatalogState legacy;
+  storage::SaveCatalogState({exported, false}, legacy);
+  std::filesystem::remove(exported / L"configurations.json");
+  storage::ImportProfile(exported, target, false);
+  CHECK(storage::LoadCatalogState(target).database_configurations.empty());
+  CHECK(storage::LoadCatalogState(target).configurations == configuration::BuiltInDefinitions());
+  service.RemoveDatabaseConfiguration(L"Renamed");
+  service.DeleteConfiguration(id);
+  CHECK(!configuration::Find(service.Read().configurations, id));
+  CHECK(!configuration::Find(service.Reload().configurations, id)); // Deleted seeds do not reappear.
+  auto custom = configuration::Definition{configuration::NewId(), L"SameName", L"Редакция один", L"Один"};
+  service.SaveConfiguration(custom);
+  auto another = custom; another.id = configuration::NewId(); another.title = L"Редакция два";
+  service.SaveConfiguration(another); // Metadata names are not unique between editions.
+  another.title = custom.title;
+  rejected = false;
+  try { service.SaveConfiguration(another); } catch (const std::runtime_error&) { rejected = true; }
+  CHECK(rejected);
+  std::error_code error; std::filesystem::remove_all(directory, error);
+}
+
+void TestConfigurationSearchAndIsolation() {
+  using namespace ibstart;
+  const auto directory = Temp(L"configuration-search");
+  const auto scope = directory / L"ibases.v8i";
+  catalog::Catalog bases(v8i::V8iDocument::ParseUtf8("[Group]\n[One]\nConnect=Srvr=s;Ref=one;\nFolder=Group\n[Two]\nConnect=Srvr=s;Ref=two;\nFolder=Group\n"));
+  storage::CatalogState state;
+  state.configuration_scope = configuration::NormalizeCatalogPath(scope);
+  state.configurations = {{L"config-id", L"УправлениеТорговлей", L"Управление торговлей, редакция 11", L"УТ11"}};
+  state.database_configurations = {{state.configuration_scope, L"One", L"config-id", L"11.5.22.123"}};
+  ui::presentation::TreeTagFilter filter;
+  for (const auto* query : {L"УТ11", L"управлениеторговлей", L"редакция 11", L"11.5.22"}) {
+    const auto items = ui::presentation::FilterTreeItems(bases, bases.Tree(), query, filter, state.tags, {}, &state);
+    CHECK(items.size() == 1 && items.front().children.size() == 1 && items.front().children.front().name == L"One");
+  }
+  // A matching tag on another child cannot retain an empty parent group.
+  state.tags[L"Two"] = {L"Продуктив"};
+  filter = {ui::presentation::TreeTagFilterKind::tag, L"Продуктив"};
+  CHECK(ui::presentation::FilterTreeItems(bases, bases.Tree(), L"УТ11", filter, state.tags, {}, &state).empty());
+  state.tags[L"One"] = {L"Продуктив"};
+  CHECK(!ui::presentation::FilterTreeItems(bases, bases.Tree(), L"УТ11", filter, state.tags, {}, &state).empty());
+  state.configuration_scope = configuration::NormalizeCatalogPath(directory / L"other.v8i");
+  CHECK(ui::presentation::FilterTreeItems(bases, bases.Tree(), L"УТ11", filter, state.tags, {}, &state).empty());
+  std::error_code error; std::filesystem::remove_all(directory, error);
 }
 
 void TestCatalogStateRepository() {
@@ -3327,6 +3488,855 @@ void TestCredentialGroupIncludesNewNestedDatabase() {
 }
 }
 
+namespace {
+const ibstart::launcher::ParameterDefinition& Parameter(std::wstring_view key) {
+  const auto catalog = ibstart::launcher::LaunchParameterCatalog();
+  const auto found = std::find_if(catalog.begin(), catalog.end(), [&](const auto& def) { return def.key == key; });
+  if (found == catalog.end()) throw std::runtime_error("Missing test parameter");
+  return *found;
+}
+
+void TestParameterBuilderPreservesText() {
+  using namespace ibstart::launcher;
+  const std::wstring original = L"  /Future=alpha\t /C\"старое значение\"  /Out \"C:\\Logs\\a b.txt\" -NoTruncate \r\n";
+  const auto updated = SetLaunchParameter(original, Parameter(L"/C"), L"новое \"значение\" \\");
+  const auto fragments = FindParameterFragments(updated, Parameter(L"/C"));
+  CHECK(fragments.size() == 1);
+  CHECK(fragments.front().value == L"новое \"значение\" \\");
+  CHECK(updated.starts_with(L"  /Future=alpha\t "));
+  CHECK(updated.ends_with(L"  /Out \"C:\\Logs\\a b.txt\" -NoTruncate \r\n"));
+  CHECK(SplitCommandArguments(updated)[2] == L"новое \"значение\" \\");
+  const auto out = FindParameterFragments(original, Parameter(L"/Out"));
+  CHECK(out.size() == 1 && out.front().structured && out.front().option);
+  CHECK(out.front().value == L"C:\\Logs\\a b.txt");
+  CHECK(SetLaunchParameter(L"/Future x  ", Parameter(L"/L"), L"ru") == L"/Future x  /L ru");
+  CHECK(SetLaunchParameter(L" /WA- ", Parameter(L"/WA"), L"+") == L" /WA+ ");
+  CHECK(SetLaunchParameter(L"/C old", Parameter(L"/C"), L"") == L"/C \"\"");
+  CHECK(ValidateParameterDraft(L"/C \"\"").empty());
+  CHECK(!ValidateParameterDraft(L"/C").empty());
+  CHECK(ValidateParameterDraft(L"/C \"/Proxy\" /NoProxy").empty());
+  CHECK(SetLaunchParameter(L"", Parameter(L"/C"), L"/AppArch") == L"/C \"/AppArch\"");
+  CHECK(!AppArchitectureFromParameters(L"/C \"/AppArch\""));
+  const auto positioned = TokenizeCommandArguments(L"  /C \"a b\"\t/F x");
+  CHECK(positioned.size() == 4);
+  CHECK(positioned[1].begin == 5 && positioned[1].end == 10 && positioned[1].quoted);
+  CHECK(positioned[1].value == L"a b");
+  CHECK(FindParameterFragments(L"/C \"/L\"", Parameter(L"/L")).empty());
+  CHECK(ValidateParameterDraft(L"/Future -Nested \"unknown\\value\"").empty());
+  for (const auto text : {L"/L ru /l en", L"/L ru -FutureOption", L"/L \"broken"}) {
+    bool rejected = false;
+    try { static_cast<void>(SetLaunchParameter(text, Parameter(L"/L"), L"de")); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    CHECK(rejected);
+  }
+  CHECK(!ValidateParameterDraft(L"/L ru /l en").empty());
+  CHECK(!ValidateParameterDraft(L"/Theme -Blue").empty());
+  CHECK(!ValidateParameterDraft(L"/Proxy -PSrv proxy -PPort 3128 /NoProxy").empty());
+  CHECK(!ValidateParameterDraft(L"/HttpsForceTLS1_1 /HttpsForceTLS1_2").empty());
+  const auto secret_errors = ValidateParameterDraft(L"/P \"synthetic-private-value");
+  CHECK(!secret_errors.empty());
+  CHECK(secret_errors.front().find(L"synthetic-private-value") == std::wstring::npos);
+}
+
+void TestParameterVersionProfiles() {
+  using namespace ibstart::launcher;
+  const auto versions = LaunchParameterVersions();
+  CHECK(versions.size() == 24);
+  CHECK(versions.front() == L"8.3.6" && versions.back() == L"8.5.4");
+  CHECK(std::find(versions.begin(), versions.end(), L"8.5.2") == versions.end());
+  CHECK(std::find(versions.begin(), versions.end(), L"8.5.3") == versions.end());
+  CHECK(ParameterVersionFamily(L"8.3.26.1540") == L"8.3.26");
+  CHECK(ParameterVersionFamily(L"8.3").empty());
+  CHECK(ParameterVersionFamily(L"8.3.26unknown").empty());
+  CHECK(ParameterDocumentationUrl(L"8.5.4") == L"https://its.1c.ru/db/v854doc/bookmark/adm/TI000000493");
+  CHECK(ParameterVersionAvailability(L"/Theme", L"8.3.27") == ParameterAvailability::unavailable);
+  CHECK(ParameterVersionAvailability(L"/theme", L"8.5.1.100") == ParameterAvailability::available);
+  CHECK(ParameterVersionAvailability(L"/Theme", L"8.5.4") == ParameterAvailability::available);
+  CHECK(ParameterVersionAvailability(L"/Theme", L"8.5.3") == ParameterAvailability::unverified);
+  CHECK(ParameterVersionAvailability(L"/ResetSavedAuth", L"8.3.25") == ParameterAvailability::unavailable);
+  CHECK(ParameterVersionAvailability(L"/ResetSavedAuth", L"8.3.26") == ParameterAvailability::available);
+  CHECK(ParameterVersionAvailability(L"/MainWindowMode", L"8.3.15") == ParameterAvailability::unavailable);
+  CHECK(ParameterVersionAvailability(L"/MainWindowMode", L"8.3.16") == ParameterAvailability::available);
+  CHECK(ParameterVersionAvailability(L"/DisableLocalSpeechToText", L"8.3.26") == ParameterAvailability::available);
+  CHECK(ParameterVersionAvailability(L"/DisableLocalSpeechToText", L"8.3.27") == ParameterAvailability::unavailable);
+  CHECK(ParameterChoicesForVersion(Parameter(L"/Theme"), L"8.5.1") == L"-Dark|-Light");
+  CHECK(ParameterChoicesForVersion(Parameter(L"/TComp"), L"8.3.12") == L"-None|-Deflate|-SDC");
+  CHECK(ParameterChoicesForVersion(Parameter(L"/TComp"), L"8.3.26").find(L"-lz4") != std::wstring::npos);
+  const ParameterEditorContext old_context{ibstart::domain::LaunchMode::enterprise,
+      ibstart::domain::ClientType::thick, L"8.3.26"};
+  CHECK(!ValidateParameterDraft(L"/Theme -Dark", old_context).empty());
+  CHECK(ValidateParameterDraft(L"/L ru /C \"a b\"", old_context).empty());
+  for (const auto& version : versions) {
+    CHECK(ParameterVersionAvailability(L"/C", version) == ParameterAvailability::available);
+    CHECK(ParameterVersionAvailability(L"/Out", version) == ParameterAvailability::available);
+  }
+  const auto catalog = LaunchParameterCatalog();
+  for (size_t i = 0; i < catalog.size(); ++i) {
+    CHECK(!catalog[i].key.empty() && !catalog[i].description.empty() && !catalog[i].syntax.empty());
+    CHECK(std::none_of(catalog.begin() + static_cast<ptrdiff_t>(i + 1), catalog.end(),
+        [&](const auto& def) { return def.key == catalog[i].key; }));
+    if (catalog[i].kind != ParameterValueKind::reference)
+      for (const auto& version : versions)
+        CHECK(ParameterVersionAvailability(catalog[i].key, version) != ParameterAvailability::unverified);
+  }
+}
+
+void TestParameterEditingActions() {
+  using namespace ibstart::launcher;
+  const ParameterEditorContext additional{{}, ibstart::domain::ClientType::automatic, L"8.5.1"};
+  auto standalone = additional;
+  standalone.allow_connection_parameters = true;
+  const std::pair<std::wstring_view, std::wstring_view> connections[] = {
+      {L"/F", L"C:\\Synthetic base"}, {L"/S", L"synthetic-server\\Synthetic base"},
+      {L"/WS", L"https://example.com/synthetic"}, {L"/IBName", L"Synthetic base"},
+      {L"/IBConnectionString", L"File=\"C:\\Synthetic base\";Usr=\"synthetic user\";"}};
+  const std::wstring prefix = L" /Future one\t";
+  for (const auto& [key, value] : connections) {
+    const auto& definition = Parameter(key);
+    CHECK(definition.kind == ParameterValueKind::text);
+    CHECK(ParameterContextNotice(definition, standalone).empty());
+    CHECK(!ParameterContextNotice(definition, additional).empty());
+    const auto draft = SetLaunchParameter(prefix, definition, value);
+    const auto fragments = FindParameterFragments(draft, definition);
+    CHECK(fragments.size() == 1 && fragments.front().structured && fragments.front().value == value);
+    CHECK(ValidateParameterDraft(draft, standalone).empty());
+    CHECK(!ValidateParameterDraft(draft, additional).empty());
+    CHECK(RemoveLaunchParameter(draft, definition) == prefix);
+    CHECK(!ValidateParameterDraft(std::wstring(key), standalone).empty());
+  }
+  const auto& flag = Parameter(L"/DisableStartupMessages");
+  const std::wstring flagged = L" \t/C \"/DisableStartupMessages\"  /DisableStartupMessages\t/Future value  ";
+  CHECK(RemoveLaunchParameter(flagged, flag) == L" \t/C \"/DisableStartupMessages\"  \t/Future value  ");
+  CHECK(RemoveLaunchParameter(L"/DisableStartupMessages", flag).empty());
+  CHECK(RemoveLaunchParameter(L" /DisableStartupMessages \t", flag) == L"  \t");
+  CHECK(RemoveLaunchParameter(L"/C \"/DisableStartupMessages\"", flag) == L"/C \"/DisableStartupMessages\"");
+  CHECK(RemoveLaunchParameter(L" /L ru\t/C \"synthetic value\"  ", Parameter(L"/L")) == L" \t/C \"synthetic value\"  ");
+  CHECK(RemoveLaunchParameter(L" /Out \"C:\\Synthetic log.txt\" -NoTruncate\t/C synthetic", Parameter(L"/Out")) == L" \t/C synthetic");
+  CHECK(RemoveLaunchParameter(L"/F", Parameter(L"/F")).empty());
+  for (const auto draft : {L"/DisableStartupMessages /disablestartupmessages", L"/DisableStartupMessages -FutureOption one",
+      L"/DisableStartupMessages /C \"unclosed"}) {
+    bool rejected = false;
+    try { static_cast<void>(RemoveLaunchParameter(draft, flag)); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    CHECK(rejected);
+  }
+}
+
+void TestParameterHelpAndDefaults() {
+  using namespace ibstart::launcher;
+  const ParameterEditorContext context{{}, ibstart::domain::ClientType::automatic, L"8.5.1"};
+  const auto detail = ParameterHelpText(Parameter(L"/TComp"), context);
+  CHECK(detail.find(L"Zstandard") != std::wstring::npos);
+  CHECK(detail.find(L"По умолчанию: -zstd") != std::wstring::npos);
+  const auto old_detail = BuiltinParameterHelp(Parameter(L"/TComp"), L"8.3.21.100");
+  CHECK(old_detail.find(L"-lz4") == std::wstring::npos);
+  CHECK(old_detail.find(L"-zstd") == std::wstring::npos);
+  CHECK(old_detail.find(L"По умолчанию: -SDC") != std::wstring::npos);
+  CHECK(BuiltinParameterHelp(Parameter(L"/TComp"), L"8.3.22").find(L"По умолчанию: -zstd") != std::wstring::npos);
+  CHECK(BuiltinParameterHelp(Parameter(L"/TComp"), L"8.5.3").find(L"По умолчанию") == std::wstring::npos);
+  CHECK(detail.find(L"Это не проверка") == std::wstring::npos);
+  CHECK(detail.find(L"Актуальная стабильная") == std::wstring::npos);
+  CHECK(ParameterHelpText(Parameter(L"/Out"), context).find(L"-NoTruncate") != std::wstring::npos);
+  CHECK(ParameterHelpText(Parameter(L"/LoadCfg"), context).find(L"-Extension") != std::wstring::npos);
+  for (const auto& definition : LaunchParameterCatalog()) {
+    CHECK(!ParameterExplanation(definition.key).empty());
+    CHECK(ParameterExplanation(definition.key) != definition.description);
+    for (const auto& version : LaunchParameterVersions()) {
+      const auto text = BuiltinParameterHelp(definition, version);
+      const auto options = ParameterNestedOptions(definition.key, version);
+      if (definition.key == L"/AppAutoCheckVersion" && (version == L"8.3.6" || version == L"8.3.7"))
+        CHECK(text.find(L"описана без знака режима") != std::wstring::npos);
+      else CHECK(text.find(ParameterExplanation(definition.key)) != std::wstring::npos);
+      if (!options.empty() && definition.choices.empty()) for (const auto& option : options) {
+        CHECK(!NestedParameterExplanation(definition.key, option.key, version).empty());
+        CHECK(text.find(L"• " + std::wstring(option.syntax) + L"\r\n") != std::wstring::npos);
+        for (const auto value : NestedParameterValues(definition.key, option.key, version))
+          CHECK(!NestedValueExplanation(value).empty());
+      }
+    }
+  }
+  CHECK(ParameterFirstDocumentedVersion(L"/theme") == L"8.5.1");
+  CHECK(ParameterFirstDocumentedVersion(L"/MainWindowMode") == L"8.3.16");
+  CHECK(ParameterFirstDocumentedVersion(L"/Future").empty());
+  CHECK(ParameterDocumentedVersions(L"/Theme") == L"8.5.1, 8.5.4");
+  CHECK(ParameterHelpText(Parameter(L"/Theme"), {{}, ibstart::domain::ClientType::automatic, L"8.3.26"})
+      .find(L"Впервые описана в доступных справочниках: 8.5.1") != std::wstring::npos);
+  const std::vector<ibstart::domain::PlatformInstallation> installed{
+      {L"C:\\synthetic-old.exe", L"8.3.9.100"},
+      {L"C:\\synthetic-new.exe", L"8.3.27.200"},
+      {L"C:\\synthetic-stable.exe", L"8.5.1.100"}};
+  CHECK(DefaultParameterReferenceVersion(L"", installed) == L"8.5.1.100");
+  CHECK(DefaultParameterReferenceVersion(L"Авто", installed) == L"8.5.1.100");
+  CHECK(DefaultParameterReferenceVersion(L"8.3", installed) == L"8.3.27.200");
+  CHECK(DefaultParameterReferenceVersion(L"8.3.9", installed) == L"8.3.9");
+  CHECK(DefaultParameterReferenceVersion(L"8.5.3", installed) == L"8.5.3");
+  CHECK(DefaultParameterReferenceVersion(L"", {}) == L"8.5.1");
+  CHECK(DefaultParameterReferenceVersion(L"8.3", {}) == L"8.3");
+}
+
+void TestDocumentedParameterSemantics() {
+  using namespace ibstart::launcher;
+  CHECK(LaunchParameterCatalog().size() == 166);
+  const auto help = [](std::wstring_view command, std::wstring_view version = L"8.5.1") {
+    return BuiltinParameterHelp(Parameter(command), version);
+  };
+  const auto delay = help(L"/EmulateServerCallDelay");
+  CHECK(delay.find(L"в секундах") != std::wstring::npos);
+  CHECK(delay.find(L"1 Кбайт") != std::wstring::npos);
+  CHECK(delay.find(L"1.45") != std::wstring::npos);
+  CHECK(delay.find(L"0.45") != std::wstring::npos);
+  CHECK(delay.find(L"0.15") != std::wstring::npos);
+  CHECK(delay.find(L"9.99") != std::wstring::npos);
+  CHECK(NestedParameterExplanation(L"/HttpsCert", L"-auto", L"8.5.1").find(L"-choose") != std::wstring::npos);
+  CHECK(NestedParameterExplanation(L"/UILogRecorder", L"-TPort", L"8.5.1").find(L"1538") != std::wstring::npos);
+  CHECK(NestedParameterExplanation(L"/UILogRecorder", L"-TPort", L"8.3.6").find(L"мобильном клиенте") == std::wstring::npos);
+  CHECK(NestedParameterExplanation(L"/ConfigurationRepositoryUnLock", L"-force", L"8.5.1") !=
+      NestedParameterExplanation(L"/ConfigurationRepositoryCommit", L"-force", L"8.5.1"));
+  CHECK(help(L"/MobileAppWriteFile", L"8.3.12").find(L"XML-файл") != std::wstring::npos);
+  CHECK(help(L"/MobileAppWriteFile", L"8.3.14").find(L"сопутствующими материалами") != std::wstring::npos);
+  CHECK(help(L"/MobileAppWriteFile").find(L"создании базы на мобильном устройстве") != std::wstring::npos);
+  CHECK(help(L"/MobileClientWriteFile", L"8.3.14").find(L"внешних компонент") != std::wstring::npos);
+  CHECK(help(L"/MobileClientWriteFile").find(L"внешних компонент") == std::wstring::npos);
+  CHECK(ContextParameterExplanation(L"/MobileAppWriteFile", L"", L"8.5.3").empty());
+  CHECK(help(L"Web: query").find(L"MainWindowMode=Kiosk") != std::wstring::npos);
+  CHECK(help(L"Web: query").find(L"OidcSelectedProvider") != std::wstring::npos);
+  CHECK(help(L"Web: query", L"8.3.6").find(L"OidcSelectedProvider") == std::wstring::npos);
+  CHECK(help(L"Mobile: launch", L"8.3.6").find(L"нет отдельного перечня") != std::wstring::npos);
+  CHECK(help(L"Mobile: launch").find(L"нет отдельного перечня") == std::wstring::npos);
+  CHECK(ParameterFirstDocumentedVersion(L"/DisableUnrecoverableErrorMessage") == L"8.3.17");
+  CHECK(ParameterFirstDocumentedVersion(L"/DisableHomePageForms") == L"8.3.20");
+  CHECK(ParameterFirstDocumentedVersion(L"/AddToList") == L"8.3.11");
+  CHECK(ParameterVersionAvailability(L"/AddInList", L"8.3.10") == ParameterAvailability::available);
+  CHECK(ParameterVersionAvailability(L"/AddInList", L"8.3.11") == ParameterAvailability::unavailable);
+  CHECK(DocumentedParameterSyntax(L"/UseTemplate", L"8.5.1").find(L"[<имя файла шаблона>]") != std::wstring::npos);
+  const ParameterEditorContext designer{ibstart::domain::LaunchMode::designer, ibstart::domain::ClientType::automatic, L"8.5.1"};
+  CHECK(!NestedParameterRequired(L"/CreateTemplateListFile", L"", designer.version, L"/CreateTemplateListFile"));
+  CHECK(ValidateParameterDraft(L"/CreateTemplateListFile", designer).empty());
+  CHECK(ValidateParameterDraft(L"/CreateDistributivePackage dir -File description.xml -MakeSetup", designer).empty());
+  CHECK(help(L"/CreateDistributivePackage").find(L"updsetup.zip") != std::wstring::npos);
+  const auto& speech = Parameter(L"/DisableLocalSpeechToText");
+  CHECK(ParameterChoicesForVersion(speech, L"8.3.23").empty());
+  CHECK(ParameterChoicesForVersion(speech, L"8.3.24") == L"+|-");
+  CHECK(SetLaunchParameter(L"", speech, L"") == L"/DisableLocalSpeechToText");
+  CHECK(SetLaunchParameter(L"", speech, L"-") == L"/DisableLocalSpeechToText-");
+  CHECK(ValidateParameterDraft(L"/DisableLocalSpeechToText", {{}, ibstart::domain::ClientType::automatic, L"8.3.23"}).empty());
+  CHECK(!ValidateParameterDraft(L"/DisableLocalSpeechToText-", {{}, ibstart::domain::ClientType::automatic, L"8.3.23"}).empty());
+  CHECK(ValidateParameterDraft(L"/DisableLocalSpeechToText-", {{}, ibstart::domain::ClientType::automatic, L"8.3.24"}).empty());
+}
+
+void TestRepositoryConnectionParameters() {
+  using namespace ibstart::launcher;
+  const ParameterEditorContext designer{ibstart::domain::LaunchMode::designer,
+      ibstart::domain::ClientType::thick, L"8.5.1"};
+  const ParameterEditorContext enterprise{ibstart::domain::LaunchMode::enterprise,
+      ibstart::domain::ClientType::thick, L"8.5.1"};
+  std::wstring draft = L"/L ru";
+  const std::wstring address = L"C:\\synthetic repositories\\Main";
+  for (const auto key : {L"/ConfigurationRepositoryF", L"/ConfigurationRepositoryN", L"/ConfigurationRepositoryP"}) {
+    CHECK(Parameter(key).kind == ParameterValueKind::text);
+    CHECK(ParameterContextNotice(Parameter(key), designer).empty());
+    CHECK(!ParameterContextNotice(Parameter(key), enterprise).empty());
+  }
+  draft = SetLaunchParameter(draft, Parameter(L"/ConfigurationRepositoryF"), address);
+  draft = SetLaunchParameter(draft, Parameter(L"/ConfigurationRepositoryN"), L"synthetic user");
+  draft = SetLaunchParameter(draft, Parameter(L"/ConfigurationRepositoryP"), L"synthetic repo password");
+  CHECK(ValidateParameterDraft(draft, designer).empty());
+  CHECK(!ValidateParameterDraft(draft, enterprise).empty());
+  CHECK(!ValidateParameterDraft(L"/ConfigurationRepositoryF", designer).empty());
+  CHECK(!ValidateParameterDraft(L"/ConfigurationRepositoryF one /configurationrepositoryf two", designer).empty());
+  CHECK(FindParameterFragments(draft, Parameter(L"/ConfigurationRepositoryF")).front().value == address);
+  CHECK(ParameterHelpText(Parameter(L"/ConfigurationRepositoryF"), designer).find(L"нет отдельных полей") == std::wstring::npos);
+  const auto empty_password = SetLaunchParameter(draft, Parameter(L"/ConfigurationRepositoryP"), L"");
+  CHECK(ValidateParameterDraft(empty_password, designer).empty());
+  CHECK(!ValidateParameterDraft(L"/ConfigurationRepositoryP", designer).empty());
+  ibstart::domain::Database database;
+  database.connect = L"File=\"C:\\synthetic-base\"";
+  database.additional_parameters = draft;
+  ibstart::domain::LaunchOptions options;
+  options.mode = ibstart::domain::LaunchMode::designer;
+  const ibstart::domain::PlatformInstallation platform{L"C:\\synthetic-platform\\1cv8.exe", L"8.5.1.100"};
+  const auto command = BuildCommand(database, platform, options);
+  CHECK(command.arguments.front() == L"DESIGNER");
+  const auto position = std::find(command.arguments.begin(), command.arguments.end(), L"/ConfigurationRepositoryF");
+  CHECK(position != command.arguments.end());
+  CHECK(position != command.arguments.end() && position + 1 != command.arguments.end() && *(position + 1) == address);
+  CHECK(ibstart::logging::ContainsSecretArguments(command));
+  CHECK(ibstart::logging::RedactedCommandLine(command).find(L"synthetic repo password") == std::wstring::npos);
+  for (const auto text : {L"/ConfigurationRepositoryP \"synthetic repo password\"", L"/configurationrepositoryp=synthetic-secret"}) {
+    const auto masked = ibstart::logging::MaskSecrets(text);
+    CHECK(masked.find(L"synthetic") == std::wstring::npos);
+    CHECK(masked.find(L"***") != std::wstring::npos);
+  }
+}
+
+void TestNestedOptionOrderAndRequirements() {
+  using namespace ibstart::launcher;
+  const ParameterEditorContext context{{}, ibstart::domain::ClientType::automatic, L"8.5.1"};
+  const auto& proxy = Parameter(L"/Proxy");
+  const auto options = ParameterNestedOptions(proxy.key, context.version);
+  CHECK(ValidateParameterDraft(L"/Proxy", context).front().find(L"-PSrv") != std::wstring::npos);
+  CHECK(options.size() == 4);
+  CHECK(options[0].key == L"-PSrv" && options[1].key == L"-PPort" &&
+      options[2].key == L"-PUser" && options[3].key == L"-PPwd");
+  std::wstring text;
+  text = SetNestedParameter(text, proxy, options[3], L"synthetic-password");
+  CHECK(!ValidateParameterDraft(text, context).empty());
+  CHECK(NestedParameterRequired(proxy.key, L"-PUser", context.version, text));
+  text = SetNestedParameter(text, proxy, options[1], L"30");
+  text = SetNestedParameter(text, proxy, options[2], L"synthetic-user");
+  text = SetNestedParameter(text, proxy, options[0], L"http://proxy");
+  CHECK(text == L"/Proxy -PSrv http://proxy -PPort 30 -PUser synthetic-user -PPwd synthetic-password");
+  CHECK(ValidateParameterDraft(text, context).empty());
+  CHECK(!NestedParameterRequired(proxy.key, L"-PUser", context.version, L""));
+  CHECK(NestedParameterRequired(proxy.key, L"-PSrv", context.version, L""));
+  const auto repaired = SetNestedParameter(
+      L" /Proxy -PPort 30 -PSrv http://proxy -PPwd \"synthetic pass\" -PUser user  /L ru ",
+      proxy, options[1], L"31");
+  CHECK(repaired == L" /Proxy -PSrv http://proxy -PPort 31 -PUser user -PPwd \"synthetic pass\"  /L ru ");
+  const auto unknown = SetNestedParameter(L"/Proxy -PPwd \"synthetic pass\" -Future \"keep this\" -PUser user -PPort 30 -PSrv http://proxy",
+      proxy, options[1], L"31");
+  CHECK(unknown.find(L"-Future \"keep this\"") != std::wstring::npos);
+  CHECK(ReadNestedParameter(unknown, proxy, options[3]) == std::optional<std::wstring>(L"synthetic pass"));
+  const auto help = ParameterHelpText(proxy, context);
+  CHECK(help.find(L"Обязательный параметр.") != std::wstring::npos);
+  CHECK(help.find(L"Параметр требуется при использовании группы: -PPwd или -PUser.") != std::wstring::npos);
+  for (const auto& version : LaunchParameterVersions()) {
+    const ParameterEditorContext profile{{}, ibstart::domain::ClientType::automatic, version};
+    CHECK(!ValidateParameterDraft(L"/Proxy", profile).empty());
+    CHECK(!ValidateParameterDraft(L"/Proxy -PSrv http://proxy", profile).empty());
+    CHECK(!ValidateParameterDraft(L"/Proxy -PPort 30", profile).empty());
+    CHECK(ValidateParameterDraft(L"/Proxy -PSrv http://proxy -PPort 30", profile).empty());
+    CHECK(!ValidateParameterDraft(L"/Proxy -PSrv http://proxy -PPort 30 -PPwd synthetic", profile).empty());
+    CHECK(ValidateParameterDraft(L"/Proxy -PSrv http://proxy -PPort 30 -PUser user -PPwd \"\"", profile).empty());
+    for (const auto& def : LaunchParameterCatalog()) {
+      if (def.kind != ParameterValueKind::reference) continue;
+      auto nested = ParameterNestedOptions(def.key, version);
+      if (nested.empty()) continue;
+      // These two selectors have documented first-wins semantics and require
+      // manual editing if used together. Test a non-ambiguous draft instead.
+      if (def.key == L"/LoadConfigFromFiles")
+        std::erase_if(nested, [](const auto& option) { return option.key == L"-files"; });
+      if (def.key == L"/CreateDistributionFiles")
+        std::erase_if(nested, [](const auto& option) { return option.key == L"-v"; });
+      std::vector<std::wstring> spellings;
+      for (const auto& option : nested) {
+        std::wstring spelling(option.key);
+        if (option.style != OptionStyle::flag) {
+          const auto choices = NestedParameterChoices(def.key, option.key, version);
+          const auto value = choices.empty() ? L"synthetic value" : choices.substr(0, choices.find(L'|'));
+          spelling += option.style == OptionStyle::space ? L" " : option.style == OptionStyle::equals ? L"=" : option.style == OptionStyle::colon ? L":" : L"";
+          spelling += QuoteWindowsArgument(value);
+        }
+        spellings.push_back(std::move(spelling));
+      }
+      std::wstring reversed(def.key);
+      for (auto it = spellings.rbegin(); it != spellings.rend(); ++it) reversed += L" " + *it;
+      const auto& first = nested.front();
+      const auto choices = NestedParameterChoices(def.key, first.key, version);
+      const auto value = first.style == OptionStyle::flag ? L"" : choices.empty() ? L"synthetic value" : choices.substr(0, choices.find(L'|'));
+      std::wstring ordered;
+      try { ordered = SetNestedParameter(reversed, def, first, value); }
+      catch (const std::invalid_argument&) {
+        std::wcerr << L"Option ordering fixture: " << def.key << L" " << version << L"\n";
+        throw;
+      }
+      size_t previous = 0;
+      for (const auto& spelling : spellings) {
+        const auto current = ordered.find(L" " + spelling, previous);
+        CHECK(current != std::wstring::npos);
+        if (current != std::wstring::npos) previous = current + spelling.size() + 1;
+      }
+      CHECK(SetNestedParameter(ordered, def, first, value) == ordered);
+    }
+  }
+  for (const auto& invalid : {
+      L"/MergeCfg cfg.cf", L"/UpdateCfg cfg.cfu", L"/CompareCfg -ReportFile report.txt",
+      L"/SignCfg -SignedFile signed.cfe", L"/ConfigurationRepositoryAddUser -User user -Pwd synthetic",
+      L"/ConfigurationRepositoryCopyUsers -User user -Pwd synthetic",
+      L"/DumpConfigToFiles dir -JobsCount 4", L"/UpdateDBCfg -Visible", L"/ManageCfgSupport -force",
+      L"/MergeCfg cfg.cf -Settings settings.xml -EnableSupport -DisableSupport",
+      L"/IBCheckAndRepair -TestOnly -BadRefClear"})
+    CHECK(!ValidateParameterDraft(invalid, context).empty());
+  CHECK(ValidateParameterDraft(L"/MergeCfg cfg.cf -Settings settings.xml", context).empty());
+  CHECK(ValidateParameterDraft(L"/ConfigurationRepositoryAddUser -User user -Pwd \"\" -Rights ReadOnly", context).empty());
+  CHECK(ValidateParameterDraft(L"/DumpConfigToFiles dir -Server -JobsCount 4", context).empty());
+  CHECK(ValidateParameterDraft(L"/LoadConfigFromFiles dir", context).empty());
+  CHECK(!ValidateParameterDraft(L"/LoadConfigFromFiles dir -files one.xml", context).empty());
+  CHECK(ValidateParameterDraft(L"/LoadConfigFromFiles dir -files one.xml -Format Hierarchical", context).empty());
+  CHECK(!ValidateParameterDraft(L"/LoadConfigFromFiles dir -listFile list.txt", context).empty());
+  CHECK(ValidateParameterDraft(L"/LoadConfigFromFiles dir -listFile list.txt -Format Plain", context).empty());
+  CHECK(NestedParameterRequired(L"/LoadConfigFromFiles", L"-Format", context.version, L"/LoadConfigFromFiles dir -files one.xml"));
+  CHECK(!NestedParameterRequired(L"/LoadConfigFromFiles", L"-Format", context.version, L"/LoadConfigFromFiles dir"));
+  for (const auto& version : LaunchParameterVersions()) {
+    CHECK(ParameterPrimaryOperandLabel(L"/LoadConfigFromFiles", version) == L"каталог загрузки");
+    const auto version_help = BuiltinParameterHelp(Parameter(L"/LoadConfigFromFiles"), version);
+    CHECK(version_help.find(L"расширение нельзя загрузить вместо основной конфигурации и наоборот") != std::wstring::npos);
+    if (version != L"8.3.6" && version != L"8.5.4") {
+      CHECK(version_help.find(L"Полная загрузка: платформа сама распознаёт") != std::wstring::npos);
+      CHECK(version_help.find(L"Частичная загрузка: автоматического распознавания нет") != std::wstring::npos);
+    } else CHECK(version_help.find(L"формат необходимо задать явно") == std::wstring::npos);
+  }
+  CHECK(BuiltinParameterHelp(Parameter(L"/LoadConfigFromFiles"), L"8.5.4").find(L"В справочнике 8.5.4 есть расхождение") != std::wstring::npos);
+  CHECK(ParameterPrimaryOperandLabel(L"/debug", L"8.5.1") == L"режим");
+  CHECK(ParameterPrimaryOperandLabel(L"/DumpExternalDataProcessorOrReportToFiles", L"8.5.1") == L"корневой файл выгрузки; внешняя обработка (отчет)");
+  CHECK(ParameterPrimaryOperandLabel(L"/Proxy", L"8.5.1").empty());
+  CHECK(ParameterPrimaryOperandLabel(L"/LoadConfigFromFiles", L"8.5.3").empty());
+  CHECK(!ValidateParameterDraft(L"/DumpIB", context).empty());
+  CHECK(ValidateParameterDraft(L"/DumpIB backup.dt", context).empty());
+  CHECK(!ValidateParameterDraft(L"/ConfigurationRepositorySetLabel -v 2 -comment text", context).empty());
+  CHECK(ValidateParameterDraft(L"/ConfigurationRepositorySetLabel -v 2 label -comment text", context).empty());
+  CHECK(ValidateParameterDraft(L"/ConfigurationRepositorySetLabel -v 2 -name label -comment text", context).empty());
+  CHECK(ValidateParameterDraft(L"/LoadConfigFromFiles -Archive archive.zip", context).empty());
+  CHECK(!ValidateParameterDraft(L"/LoadConfigFromFiles dir -Archive archive.zip", context).empty());
+  CHECK(ValidateParameterDraft(L"/CreateDistributionFiles -cfufile update.cfu -f base.cf -v 1.0", context).empty());
+  CHECK(!ValidateParameterDraft(L"/CreateDistributionFiles -cfufile update.cfu", context).empty());
+  CHECK(!NestedParameterRequired(proxy.key, L"-PSrv", L"8.5.3", L"/Proxy"));
+  const auto updated = ParameterNestedOptions(L"/UpdateDBCfg", L"8.5.4");
+  const auto dynamic = std::find_if(updated.begin(), updated.end(), [](const auto& item) { return item.key == L"-Dynamic"; });
+  const auto& update = Parameter(L"/UpdateDBCfg");
+  CHECK(!ReadNestedParameter(L"/UpdateDBCfg -DynamicRestruct+", update, *dynamic));
+  CHECK(SetNestedParameter(L"/UpdateDBCfg -DynamicRestruct+ -Dynamic-", update, *dynamic, L"+") ==
+      L"/UpdateDBCfg -Dynamic+ -DynamicRestruct+");
+  const auto& load = Parameter(L"/LoadConfigFromFiles");
+  const auto load_options = ParameterNestedOptions(load.key, context.version);
+  const auto no_check = std::find_if(load_options.begin(), load_options.end(), [](const auto& option) { return option.key == L"-NoCheck"; });
+  bool precedence_rejected = false;
+  try { static_cast<void>(SetNestedParameter(L"/LoadConfigFromFiles dir -listFile a.txt -files b.xml", load, *no_check, L"")); }
+  catch (const std::invalid_argument&) { precedence_rejected = true; }
+  CHECK(precedence_rejected);
+  const auto& distribution = Parameter(L"/CreateDistributionFiles");
+  const auto distribution_options = ParameterNestedOptions(distribution.key, context.version);
+  const auto output = std::find_if(distribution_options.begin(), distribution_options.end(), [](const auto& option) { return option.key == L"-cffile"; });
+  bool repeated_sources_rejected = false;
+  try { static_cast<void>(SetNestedParameter(L"/CreateDistributionFiles -cfufile update.cfu -v 1.0 -f base.cf", distribution, *output, L"output.cf")); }
+  catch (const std::invalid_argument&) { repeated_sources_rejected = true; }
+  CHECK(repeated_sources_rejected);
+}
+
+void TestOperandDomains() {
+  using namespace ibstart::launcher;
+  const auto& debug = Parameter(L"/debug");
+  for (const auto& version : LaunchParameterVersions()) {
+    const ParameterEditorContext context{{}, ibstart::domain::ClientType::automatic, version};
+    const auto options = ParameterNestedOptions(debug.key, version);
+    if (version == L"8.3.6") {
+      CHECK(options.empty());
+      CHECK(NestedParameterChoices(debug.key, L"", version).empty());
+      continue;
+    }
+    CHECK(options.size() == 1 && options.front().key == L"-attach");
+    CHECK(NestedParameterChoices(debug.key, L"", version) == L"-tcp|-http");
+    const NestedParameterDefinition mode{L"", L"режим", OptionStyle::space, true, 0, options.front().profile};
+    CHECK(!NestedParameterRequired(debug.key, L"", version, L"/debug"));
+    CHECK(!ReadNestedParameter(L"/debug", debug, mode));
+    CHECK(ValidateParameterDraft(L"/debug", context).empty());
+    CHECK(ValidateParameterDraft(L"/debug -tcp", context).empty());
+    CHECK(ValidateParameterDraft(L"/debug -http -attach", context).empty());
+    CHECK(!ValidateParameterDraft(L"/debug -tcp -attach", context).empty());
+    CHECK(ValidateParameterDraft(L"/debug -attach", context).empty());
+    CHECK(!ValidateParameterDraft(L"/debug -tcp -http", context).empty());
+    CHECK(!ValidateParameterDraft(L"/debug smtp", context).empty());
+    auto text = SetNestedParameter(L" /L ru  /Future keep ", debug, mode, L"-tcp");
+    CHECK(text == L" /L ru  /Future keep /debug -tcp");
+    text = SetNestedParameter(text, debug, mode, L"-http");
+    text = SetNestedParameter(text, debug, options.front(), L"");
+    CHECK(text.ends_with(L"/debug -http -attach"));
+    CHECK(ReadNestedParameter(text, debug, mode) == std::optional<std::wstring>(L"-http"));
+    CHECK(ReadNestedParameter(L"/debug -attach -http", debug, mode) == std::optional<std::wstring>(L"-http"));
+    CHECK(SetNestedParameter(L"/debug -http -attach -Future value /L ru", debug, mode, L"-tcp") ==
+        L"/debug -tcp -attach -Future value /L ru");
+    CHECK(SetNestedParameter(L"/debug -http -attach", debug, mode, L"", false) == L"/debug  -attach");
+    for (const auto value : {L"tcp", L"smtp", L"-tcp -http"}) {
+      bool rejected = false;
+      try { static_cast<void>(SetNestedParameter(L"/debug", debug, mode, value)); }
+      catch (const std::invalid_argument&) { rejected = true; }
+      CHECK(rejected);
+    }
+    bool ambiguous = false;
+    try { static_cast<void>(SetNestedParameter(L"/debug -tcp -http", debug, mode, L"-http")); }
+    catch (const std::invalid_argument&) { ambiguous = true; }
+    CHECK(ambiguous);
+    for (const auto ambiguous_text : {L"/debug -Future \"-http\"", L"/debug -Future -tcp"}) {
+      bool preserved = false;
+      try { static_cast<void>(SetNestedParameter(ambiguous_text, debug, mode, L"-tcp")); }
+      catch (const std::invalid_argument&) { preserved = true; }
+      CHECK(preserved);
+      preserved = false;
+      try { static_cast<void>(ReadNestedParameter(ambiguous_text, debug, mode)); }
+      catch (const std::invalid_argument&) { preserved = true; }
+      CHECK(preserved);
+    }
+    CHECK(NestedParameterChoices(L"/CompareCfg", L"-FirstName", version).empty());
+    CHECK(NestedParameterChoices(L"/CompareCfg", L"-SecondName", version).empty());
+    CHECK(NestedParameterChoices(L"/IBCheckAndRepair", L"-LogIntegrity", version).empty());
+    CHECK(NestedParameterChoices(L"/ModuleGetSourceCodeAccess", L"", version).empty());
+    for (const auto& command : LaunchParameterCatalog()) {
+      if (command.kind != ParameterValueKind::reference) continue;
+      for (const auto& option : ParameterNestedOptions(command.key, version)) {
+        const auto choices = NestedParameterChoices(command.key, option.key, version);
+        if (choices.empty()) continue;
+        const auto value = choices.substr(0, choices.find(L'|'));
+        const auto draft = SetNestedParameter(L"", command, option, value);
+        CHECK(ReadNestedParameter(draft, command, option) == std::optional<std::wstring>(value));
+        bool invalid = false;
+        try { static_cast<void>(SetNestedParameter(draft, command, option, L"synthetic-invalid-choice")); }
+        catch (const std::invalid_argument&) { invalid = true; }
+        CHECK(invalid);
+      }
+    }
+  }
+  CHECK(NestedParameterChoices(L"/CompareCfg", L"-SecondConfigurationType", L"8.3.8") ==
+      NestedParameterChoices(L"/CompareCfg", L"-FirstConfigurationType", L"8.3.8"));
+  CHECK(NestedParameterChoices(L"/CompareCfg", L"-FirstConfigurationType", L"8.3.8").find(L"ExtensionConfigurationRepository") == std::wstring::npos);
+  CHECK(NestedParameterChoices(L"/CompareCfg", L"-FirstConfigurationType", L"8.5.1").find(L"ExtensionConfigurationRepository") != std::wstring::npos);
+  CHECK(NestedParameterChoices(L"/ConfigurationRepositoryReport", L"-ReportFormat", L"8.5.1") == L"txt|mxl");
+  CHECK(NestedParameterChoices(L"/DumpConfigToFiles", L"-Format", L"8.5.4").empty());
+  CHECK(NestedParameterChoices(L"/SignCfg", L"-SignType", L"8.3.26").empty());
+  CHECK(NestedParameterChoices(L"/SignCfg", L"-SignType", L"8.3.27").empty());
+  CHECK(NestedParameterChoices(L"/SignCfg", L"-SignType", L"8.5.1") == L"ConfigurationPatch|Copyright");
+  CHECK(NestedParameterChoices(L"/debug", L"", L"8.5.3").empty());
+  CHECK(ParameterChoicesForVersion(Parameter(L"/AppAutoCheckVersion"), L"8.3.6").empty());
+  CHECK(ParameterChoicesForVersion(Parameter(L"/AppAutoCheckVersion"), L"8.3.8") == L"+|-");
+  const ParameterEditorContext old{{}, ibstart::domain::ClientType::automatic, L"8.3.6"};
+  CHECK(ValidateParameterDraft(L"/AppAutoCheckVersion", old).empty());
+  CHECK(!ValidateParameterDraft(L"/AppAutoCheckVersion-", old).empty());
+  const ParameterEditorContext stable{{}, ibstart::domain::ClientType::automatic, L"8.5.1"};
+  CHECK(ValidateParameterDraft(L"/UpdateDBCfg -Dynamic", stable).empty());
+  CHECK(!ValidateParameterDraft(L"/UpdateDBCfg -Dynamicinvalid", stable).empty());
+  CHECK(ValidateParameterDraft(L"/AppAutoCheckVersion", stable).empty());
+  CHECK(ValidateParameterDraft(L"/AppAutoInstallLastVersion+", stable).empty());
+  CHECK(!ValidateParameterDraft(L"/AppAutoInstallLastVersion", stable).empty());
+  CHECK(SetLaunchParameter(L"", Parameter(L"/AppAutoCheckVersion"), L"-") == L"/AppAutoCheckVersion-");
+  CHECK(SetLaunchParameter(L"", Parameter(L"/AppAutoInstallLastVersion"), L"+") == L"/AppAutoInstallLastVersion+");
+}
+
+void TestReviewedLaunchSemantics() {
+  using namespace ibstart::launcher;
+  const auto option = [](std::wstring_view command, std::wstring_view key, std::wstring_view version) {
+    const auto options = ParameterNestedOptions(command, version);
+    const auto found = std::find_if(options.begin(), options.end(), [&](const auto& item) { return item.key == key; });
+    if (found == options.end()) throw std::runtime_error("Missing reviewed option");
+    return *found;
+  };
+  for (const auto& version : LaunchParameterVersions()) {
+    const ParameterEditorContext context{{}, ibstart::domain::ClientType::automatic, version};
+    CHECK(!ValidateParameterDraft(L"/DeleteCfg", context).empty());
+    CHECK(ValidateParameterDraft(L"/DeleteCfg -AllExtensions", context).empty());
+    CHECK(ValidateParameterDraft(L"/DeleteCfg -Extension Synthetic", context).empty());
+    if (ParameterVersionAvailability(L"/ManageCfgSupport", version) == ParameterAvailability::available) {
+      CHECK(!ValidateParameterDraft(L"/ManageCfgSupport", context).empty());
+      CHECK(NestedParameterRequired(L"/ManageCfgSupport", L"-disableSupport", version, L"/ManageCfgSupport"));
+      CHECK(ValidateParameterDraft(L"/ManageCfgSupport -disableSupport", context).empty());
+    }
+    CHECK(!ValidateParameterDraft(L"/CreateDistributive dir -File setup.xml -MakeSetup -MakeFiles", context).empty());
+    CHECK(ValidateParameterDraft(L"/CreateDistributive dir -File setup.xml -MakeSetup", context).empty());
+    if (ParameterVersionAvailability(L"/CreateDistributivePackage", version) == ParameterAvailability::available)
+      CHECK(!ValidateParameterDraft(L"/CreateDistributivePackage dir -File setup.xml -MakeSetup -MakeFiles", context).empty());
+    if (ParameterVersionAvailability(L"/CheckCanApplyConfigurationExtensions", version) == ParameterAvailability::available) {
+      CHECK(!ValidateParameterDraft(L"/CheckCanApplyConfigurationExtensions -AllZones -Extension Synthetic", context).empty());
+      CHECK(!ValidateParameterDraft(L"/CheckCanApplyConfigurationExtensions -AllZones -Z 1", context).empty());
+      CHECK(ValidateParameterDraft(L"/CheckCanApplyConfigurationExtensions -Extension Synthetic", context).empty());
+    }
+    if (version != L"8.3.6")
+      CHECK(!ValidateParameterDraft(L"/LoadConfigFromFiles dir -AllExtensions -files one.xml -Format Plain", context).empty());
+    const auto rights = NestedParameterChoices(L"/ConfigurationRepositoryAddUser", L"-Rights", version);
+    CHECK(rights == L"ReadOnly|LockObjects|ManageConfigurationVersions|Administration");
+    const auto selected = SetNestedParameter(L"", Parameter(L"/ConfigurationRepositoryAddUser"),
+        option(L"/ConfigurationRepositoryAddUser", L"-Rights", version), L"ManageConfigurationVersions");
+    CHECK(selected.ends_with(L"-Rights ManageConfigurationVersions"));
+    const auto certificate = NestedParameterExplanation(L"/HttpsCert", L"-auto", version);
+    CHECK(certificate.find(L"Windows") != std::wstring_view::npos);
+    CHECK(certificate.find(L"Linux") == std::wstring_view::npos);
+    CHECK((certificate.find(L"macOS") != std::wstring_view::npos) == (version != L"8.3.6" && version != L"8.3.7" &&
+        version != L"8.3.8" && version != L"8.3.9" && version != L"8.3.10" && version != L"8.3.11" && version != L"8.3.12"));
+    const auto mobile = BuiltinParameterHelp(Parameter(L"Mobile: launch"), version);
+    if (version != L"8.3.6" && version != L"8.3.7" && version != L"8.3.8" && version != L"8.3.9" && version != L"8.3.10" && version != L"8.3.11")
+      for (const auto marker : {L"• /O —", L"• /VL —", L"• /URL —", L"• /HttpsForceTLS1_0 —", L"• /DisableStartupMessages —"})
+        CHECK(mobile.find(marker) != std::wstring::npos);
+  }
+  const ParameterEditorContext stable{{}, ibstart::domain::ClientType::automatic, L"8.5.1"};
+  CHECK(!ValidateParameterDraft(L"/MergeCfg cfg.cf -Settings setup.xml -Extension Synthetic -EnableSupport", stable).empty());
+  CHECK(!ValidateParameterDraft(L"/IBCheckAndRepair -LogIntegrity /Z 1", stable).empty());
+  CHECK(ValidateParameterDraft(L"/IBCheckAndRepair -LogIntegrity -Z:1", stable).empty());
+  CHECK(SetNestedParameter(L"/LoadConfigFromFiles dir", Parameter(L"/LoadConfigFromFiles"),
+      option(L"/LoadConfigFromFiles", L"-files", stable.version), L"one.xml,two.xml") == L"/LoadConfigFromFiles dir -files \"one.xml,two.xml\"");
+  CHECK(SetNestedParameter(L"", Parameter(L"/ConfigurationRepositoryCommit"),
+      option(L"/ConfigurationRepositoryCommit", L"-comment", stable.version), L"synthetic") == L"/ConfigurationRepositoryCommit -comment \"synthetic\"");
+  CHECK(SetNestedParameter(L"", Parameter(L"/ConfigurationRepositorySetLabel"),
+      option(L"/ConfigurationRepositorySetLabel", L"-name", stable.version), L"synthetic") == L"/ConfigurationRepositorySetLabel -name \"synthetic\"");
+  CHECK(ReadNestedParameter(L"/ConfigurationRepositorySetLabel -name \"synthetic\"", Parameter(L"/ConfigurationRepositorySetLabel"),
+      option(L"/ConfigurationRepositorySetLabel", L"-name", stable.version)) == std::optional<std::wstring>(L"synthetic"));
+  CHECK(FindParameterFragments(L"/SLev0", Parameter(L"/SLev")).size() == 1);
+  CHECK(FindParameterFragments(L"/ONormal", Parameter(L"/O")).size() == 1);
+  CHECK(FindParameterFragments(L"/OIDA+ /OtherFuture", Parameter(L"/O")).empty());
+  const auto password_old = NestedParameterExplanation(L"/ConfigurationRepositoryAddUser", L"-Pwd", L"8.3.6");
+  CHECK(password_old.find(L"политик") == std::wstring_view::npos);
+  CHECK(NestedParameterExplanation(L"/ConfigurationRepositoryAddUser", L"-Pwd", stable.version).find(L"политик") != std::wstring_view::npos);
+  CHECK(NestedParameterExplanation(L"/CompareCfg", L"-FirstName", stable.version).find(L"-FirstConfigurationType") != std::wstring_view::npos);
+  CHECK(ParameterPrimaryOperandLabel(L"/DisableExtensions", L"8.5.4") == L"имена расширений через запятую");
+  CHECK(ParameterPrimaryOperandLabel(L"/DisableExtensions", L"8.5.1").empty());
+  CHECK(ParameterPrimaryOperandLabel(L"/LoadConfigFiles", L"8.3.6") == L"каталог загрузки");
+  const auto all = option(L"/DisableExtensions", L"-AllExtensions", L"8.5.4");
+  const NestedParameterDefinition names{L"", L"имена расширений через запятую", OptionStyle::space, true, 0, all.profile};
+  CHECK(SetNestedParameter(L"", Parameter(L"/DisableExtensions"), names, L"SyntheticOne,SyntheticTwo") ==
+      L"/DisableExtensions SyntheticOne,SyntheticTwo");
+}
+
+void TestZeroArgumentCommandEditors() {
+  using namespace ibstart::launcher;
+  size_t checked{};
+  for (const auto& version : LaunchParameterVersions()) {
+    const ParameterEditorContext context{{}, ibstart::domain::ClientType::automatic, version};
+    for (const auto& definition : LaunchParameterCatalog()) {
+      const auto syntax = DocumentedParameterSyntax(definition.key, version);
+      if (syntax.empty() || syntax.size() != definition.key.size()) continue;
+      if (definition.kind != ParameterValueKind::reference && definition.kind != ParameterValueKind::flag &&
+          definition.kind != ParameterValueKind::signed_switch) continue;
+      const auto editor = ParameterEditorDefinition(definition, version);
+      CHECK(editor.kind == ParameterValueKind::flag);
+      CHECK(editor.choices.empty());
+      const std::wstring before = L" /L ru ";
+      const auto added = SetLaunchParameter(before, editor, L"");
+      CHECK(added == before + std::wstring(editor.key));
+      CHECK(ValidateParameterDraft(added, context).empty());
+      const auto with_tail = added + L" /Future keep";
+      CHECK(SetLaunchParameter(with_tail, editor, L"") == with_tail);
+      CHECK(RemoveLaunchParameter(with_tail, editor) == before + L" /Future keep");
+      CHECK(!ValidateParameterDraft(std::wstring(editor.key) + L" " + std::wstring(editor.key), context).empty());
+      CHECK(ParameterHelpText(definition, context).find(L"нет отдельных полей") == std::wstring::npos);
+      ++checked;
+    }
+  }
+  CHECK(checked > 0);
+  for (const auto key : {L"ENTERPRISE", L"DESIGNER", L"CREATEINFOBASE", L"CREATEINFOBASE: connection", L"Web: query", L"Mobile: launch"})
+    CHECK(ParameterEditorDefinition(Parameter(key), L"8.5.1").kind == ParameterValueKind::reference);
+  CHECK(ParameterEditorDefinition(Parameter(L"/ClearCache"), L"8.5.3").kind == ParameterValueKind::reference);
+  CHECK(ParameterEditorDefinition(Parameter(L"/RegServer"), L"8.3.6").kind == ParameterValueKind::flag);
+  CHECK(ParameterEditorDefinition(Parameter(L"/RegServer"), L"8.5.1").kind == ParameterValueKind::reference);
+  CHECK(ParameterEditorDefinition(Parameter(L"/UnregServer"), L"8.5.1").kind == ParameterValueKind::flag);
+  CHECK(ParameterVersionAvailability(L"/DisplayAllFunctions", L"8.3.12") == ParameterAvailability::available);
+  CHECK(ParameterVersionAvailability(L"/DisplayAllFunctions", L"8.3.16") == ParameterAvailability::available);
+  CHECK(ParameterVersionAvailability(L"/DisplayAllFunctions", L"8.3.17") == ParameterAvailability::unavailable);
+  CHECK(ParameterVersionAvailability(L"/TechnicalSpecialistMode", L"8.3.17") == ParameterAvailability::available);
+  const auto performance = ParameterEditorDefinition(Parameter(L"DisplayPerformance"), L"8.5.1");
+  const auto privileged = ParameterEditorDefinition(Parameter(L"UsePrivilegedMode"), L"8.5.1");
+  CHECK(FindParameterFragments(L"/C DisplayPerformance", performance).empty());
+  CHECK(RemoveLaunchParameter(L"/C DisplayPerformance", performance) == L"/C DisplayPerformance");
+  CHECK(SetLaunchParameter(L"", Parameter(L"/C"), L"DisplayPerformance") == L"/C \"DisplayPerformance\"");
+  auto pair = SetLaunchParameter(L"/L ru", performance, L"");
+  pair = SetLaunchParameter(pair, privileged, L"");
+  CHECK(pair == L"/L ru DisplayPerformance UsePrivilegedMode");
+  CHECK(RemoveLaunchParameter(pair, performance) == L"/L ru  UsePrivilegedMode");
+  CHECK(FindParameterFragments(L"/LoadCfg DisplayPerformance", performance).empty());
+  bool rejected = false;
+  try { static_cast<void>(SetLaunchParameter(L"/LoadCfg synthetic.cf -Future keep", performance, L"")); }
+  catch (const std::invalid_argument&) { rejected = true; }
+  CHECK(rejected);
+  rejected = false;
+  try { static_cast<void>(RemoveLaunchParameter(L"/ClearCache -Future keep",
+      ParameterEditorDefinition(Parameter(L"/ClearCache"), L"8.5.1"))); }
+  catch (const std::invalid_argument&) { rejected = true; }
+  CHECK(rejected);
+}
+
+void TestAddCommandWithoutArguments() {
+  using namespace ibstart::launcher;
+  size_t checked{};
+  for (const auto& version : LaunchParameterVersions()) {
+    const ParameterEditorContext context{{}, ibstart::domain::ClientType::automatic, version, true};
+    for (const auto& definition : LaunchParameterCatalog()) {
+      if (DocumentedParameterSyntax(definition.key, version).empty() ||
+          ParameterVersionAvailability(definition.key, version) != ParameterAvailability::available) continue;
+      const std::wstring before = definition.key == L"/L" ? L" /C \"synthetic\" " : L" /L ru ";
+      const auto draft = AddLaunchParameterCommand(before, definition, context);
+      CHECK(draft == before + std::wstring(definition.key));
+      CHECK(AddLaunchParameterCommand(draft, definition, context) == draft);
+      const auto with_unknown = draft + L" -Future keep";
+      CHECK(AddLaunchParameterCommand(with_unknown, definition, context) == with_unknown);
+      ++checked;
+    }
+  }
+  CHECK(checked > 0);
+  const ParameterEditorContext stable{{}, ibstart::domain::ClientType::automatic, L"8.5.1"};
+  CHECK(ValidateParameterDraft(AddLaunchParameterCommand(L"", Parameter(L"/RegServer"), stable), stable).empty());
+  CHECK(!ValidateParameterDraft(AddLaunchParameterCommand(L"", Parameter(L"/EmailAuth"), stable), stable).empty());
+  for (const auto key : {L"/DisplayAllFunctions", L"/F", L"ENTERPRISE", L"DESIGNER", L"CREATEINFOBASE", L"Web: query", L"Mobile: launch"}) {
+    bool rejected = false;
+    try { static_cast<void>(AddLaunchParameterCommand(L"", Parameter(key), stable)); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    CHECK(rejected);
+  }
+  bool rejected = false;
+  try { static_cast<void>(AddLaunchParameterCommand(L"", Parameter(L"/DumpIB"),
+      {ibstart::domain::LaunchMode::enterprise, ibstart::domain::ClientType::thick, L"8.5.1"})); }
+  catch (const std::invalid_argument&) { rejected = true; }
+  CHECK(rejected);
+}
+
+void TestPrimaryOnlyCommandEditors() {
+  using namespace ibstart::launcher;
+  size_t checked{};
+  for (const auto& version : LaunchParameterVersions()) {
+    const ParameterEditorContext context{{}, ibstart::domain::ClientType::automatic, version};
+    const auto profile = ParameterVersionProfile(version);
+    CHECK(profile != 0);
+    for (const auto& command : LaunchParameterCatalog()) {
+      if (command.kind != ParameterValueKind::reference || !ParameterNestedOptions(command.key, version).empty()) continue;
+      const auto label = ParameterPrimaryOperandLabel(command.key, version);
+      if (NestedParameterRequired(command.key, L"", version, command.key)) CHECK(!label.empty());
+      if (label.empty()) continue;
+      ++checked;
+      const NestedParameterDefinition operand{L"", label, OptionStyle::space, true, 0, profile};
+      CHECK(ParameterHelpText(command, context).find(L"нет отдельных полей") == std::wstring::npos);
+      const auto value = label.find(L';') == std::wstring::npos ? L"\"synthetic value\"" : L"\"first value\" \"second value\"";
+      const auto draft = SetNestedParameter(L"/L ru", command, operand, value);
+      CHECK(ReadNestedParameter(draft, command, operand) == std::optional<std::wstring>(value));
+      const auto changed = SetNestedParameter(draft + L" /Future untouched", command, operand, L"replacement");
+      CHECK(changed == L"/L ru " + std::wstring(command.key) + L" replacement /Future untouched");
+      if (NestedParameterRequired(command.key, L"", version, command.key))
+        CHECK(!ValidateParameterDraft(command.key, context).empty());
+    }
+  }
+  CHECK(checked > 0);
+  CHECK(ParameterVersionProfile(L"8.5.1.1150") == ParameterVersionProfile(L"8.5.1"));
+  CHECK(ParameterVersionProfile(L"8.5.3") == 0);
+  CHECK(ParameterVersionProfile(L"8.3") == 0);
+  CHECK(ParameterPrimaryOperandLabel(L"/EmailAuth", L"8.5.1") == L"email");
+  CHECK(ParameterPrimaryOperandLabel(L"/EmailAuth", L"8.3.26").empty());
+  const ParameterEditorContext stable{{}, ibstart::domain::ClientType::automatic, L"8.5.1"};
+  CHECK(!ValidateParameterDraft(L"/EmailAuth", stable).empty());
+  CHECK(ValidateParameterDraft(L"/EmailAuth user@example.com", stable).empty());
+}
+
+void TestNestedCommandOptions() {
+  using namespace ibstart::launcher;
+  const auto& create = Parameter(L"/ConfigurationRepositoryCreate");
+  const auto options = ParameterNestedOptions(create.key, L"8.5.1");
+  CHECK(options.size() == 7);
+  const auto option = [&](std::wstring_view key) {
+    const auto found = std::find_if(options.begin(), options.end(), [&](const auto& entry) { return entry.key == key; });
+    if (found == options.end()) throw std::runtime_error("Missing nested option fixture");
+    return *found;
+  };
+  const ParameterEditorContext context{ibstart::domain::LaunchMode::designer, ibstart::domain::ClientType::thick, L"8.5.1"};
+  const ParameterEditorContext enterprise{ibstart::domain::LaunchMode::enterprise, ibstart::domain::ClientType::thick, L"8.5.1"};
+  const ParameterEditorContext standalone{{}, ibstart::domain::ClientType::automatic, L"8.5.1"};
+  for (const auto key : {L"/ConfigurationRepositoryCreate", L"/DumpCfg", L"/CheckConfig"}) {
+    const auto& command = Parameter(key);
+    CHECK(ParameterContextNotice(command, context).empty());
+    CHECK(!ParameterContextNotice(command, enterprise).empty());
+    CHECK(ParameterContextNotice(command, standalone).empty());
+  }
+  CHECK(!ValidateParameterDraft(L"/ConfigurationRepositoryCreate -NoBind", enterprise).empty());
+  CHECK(ValidateParameterDraft(L"/ConfigurationRepositoryCreate -NoBind", standalone).empty());
+  CHECK(!ValidateParameterDraft(L"/DumpCfg cfg.cf -Extension X", enterprise).empty());
+  CHECK(ValidateParameterDraft(L"/DumpCfg cfg.cf -Extension X", context).empty());
+  CHECK(ParameterContextNotice(Parameter(L"/DumpIB"), context).empty());
+  CHECK(ValidateParameterDraft(L"/DumpIB backup.dt", context).empty());
+  CHECK(ParameterHelpText(Parameter(L"/DumpIB"), context).find(L"нет отдельных полей") == std::wstring::npos);
+  const auto help = ParameterHelpText(create, context);
+  CHECK(help.find(L"<опции>") == std::wstring::npos);
+  CHECK(help.find(L"\r\n\r\n• -ChangesAllowedRule <значение>\r\n") != std::wstring::npos);
+  CHECK(help.find(L"\r\n    ObjectIsEditableSupportEnabled —") != std::wstring::npos);
+  CHECK(help.find(L"нет отдельных полей") == std::wstring::npos);
+  std::wstring draft = L" /ConfigurationRepositoryCreate -Future \"keep this\"  /L ru ";
+  draft = SetNestedParameter(draft, create, option(L"-NoBind"), L"");
+  draft = SetNestedParameter(draft, create, option(L"-MinPasswordLenght"), L"12");
+  draft = SetNestedParameter(draft, create, option(L"-CheckPasswordComplexity"), L"");
+  draft = SetNestedParameter(draft, create, option(L"-Extension"), L"Synthetic extension");
+  CHECK(draft.find(L"-Future \"keep this\"") != std::wstring::npos);
+  CHECK(draft.ends_with(L"  /L ru "));
+  CHECK(ReadNestedParameter(draft, create, option(L"-NoBind")).has_value());
+  CHECK(ReadNestedParameter(draft, create, option(L"-MinPasswordLenght")) == std::optional<std::wstring>(L"12"));
+  CHECK(ReadNestedParameter(draft, create, option(L"-Extension")) == std::optional<std::wstring>(L"Synthetic extension"));
+  CHECK(ValidateParameterDraft(draft, context).empty());
+  draft = SetNestedParameter(draft, create, option(L"-AllowConfigurationChanges"), L"");
+  CHECK(!ValidateParameterDraft(draft, context).empty());
+  draft = SetNestedParameter(draft, create, option(L"-ChangesAllowedRule"), L"ObjectNotEditable");
+  draft = SetNestedParameter(draft, create, option(L"-ChangesNotRecommendedRule"), L"ObjectNotSupported");
+  CHECK(ValidateParameterDraft(draft, context).empty());
+  const auto removed = SetNestedParameter(draft, create, option(L"-NoBind"), L"", false);
+  CHECK(!ReadNestedParameter(removed, create, option(L"-NoBind")));
+  CHECK(ReadNestedParameter(removed, create, option(L"-Extension")) == std::optional<std::wstring>(L"Synthetic extension"));
+  ibstart::domain::Database database;
+  database.connect = L"File=\"C:\\synthetic-base\"";
+  database.additional_parameters = draft;
+  ibstart::domain::LaunchOptions launch_options;
+  launch_options.mode = ibstart::domain::LaunchMode::designer;
+  const auto launch = BuildCommand(database,
+      {L"C:\\synthetic-platform\\1cv8.exe", L"8.5.1.100"}, launch_options);
+  CHECK(std::count(launch.arguments.begin(), launch.arguments.end(), L"/ConfigurationRepositoryCreate") == 1);
+  CHECK(std::find(launch.arguments.begin(), launch.arguments.end(), L"Synthetic extension") != launch.arguments.end());
+  CHECK(std::find(launch.arguments.begin(), launch.arguments.end(), L"-CheckPasswordComplexity") != launch.arguments.end());
+  for (const auto& bad : {draft + L" /ConfigurationRepositoryCreate", std::wstring(L"/ConfigurationRepositoryCreate -NoBind -NoBind")}) {
+    bool rejected = false;
+    try { static_cast<void>(SetNestedParameter(bad, create, option(L"-NoBind"), L"")); }
+    catch (const std::invalid_argument&) { rejected = true; }
+    CHECK(rejected);
+  }
+  CHECK(!ValidateParameterDraft(L"/ConfigurationRepositoryCreate -MinPasswordLenght nope", context).empty());
+  bool combined_rule_rejected = false;
+  try { static_cast<void>(SetNestedParameter(L"", create, option(L"-ChangesAllowedRule"), L"ObjectNotEditable|ObjectIsEditableSupportEnabled")); }
+  catch (const std::invalid_argument&) { combined_rule_rejected = true; }
+  CHECK(combined_rule_rejected);
+  CHECK(!ValidateParameterDraft(L"/ConfigurationRepositoryCreate -Extension", context).empty());
+  const auto& predefined = Parameter(L"/SetPredefinedDataUpdate");
+  CHECK(ValidateParameterDraft(L"/SetPredefinedDataUpdate", context).empty());
+  CHECK(!ValidateParameterDraft(L"/SetPredefinedDataUpdate -Auto -UpdateAutomatically", context).empty());
+  CHECK(SetLaunchParameter(L"", predefined, L"") == L"/SetPredefinedDataUpdate");
+  const auto predefined_help = ParameterHelpText(predefined, context);
+  CHECK(predefined_help.find(L"\r\n\r\n• -Auto\r\n") != std::wstring::npos);
+  CHECK(predefined_help.find(L"главного узла") != std::wstring::npos);
+  CHECK(predefined_help.find(L"периферийного") != std::wstring::npos);
+  CHECK(predefined_help.find(L"не создаются") != std::wstring::npos);
+  const NestedParameterDefinition primary{L"", L"", OptionStyle::space, true};
+  const auto& dump = Parameter(L"/DumpCfg");
+  const auto changed = SetNestedParameter(L"/DumpCfg \"C:\\old cfg.cf\" -Extension X -Future keep", dump, primary, L"\"C:\\new cfg.cf\"");
+  CHECK(changed == L"/DumpCfg \"C:\\new cfg.cf\" -Extension X -Future keep");
+  bool attached_parent_rejected = false;
+  try { static_cast<void>(SetNestedParameter(L"/DumpCfg\"C:\\old cfg.cf\" -Extension X", dump, primary, L"new.cf")); }
+  catch (const std::invalid_argument&) { attached_parent_rejected = true; }
+  CHECK(attached_parent_rejected);
+  CHECK(ValidateParameterDraft(L"/DumpCfg\"C:\\old cfg.cf\" -Extension X", context).empty());
+  const auto emulate = ParameterNestedOptions(L"/EmulateServerCallDelay", L"8.5.1");
+  const auto call = std::find_if(emulate.begin(), emulate.end(), [](const auto& entry) { return entry.key == L"-Call"; });
+  CHECK(call != emulate.end());
+  if (call != emulate.end()) {
+    const auto attached = SetNestedParameter(L"", Parameter(L"/EmulateServerCallDelay"), *call, L"123");
+    CHECK(attached == L"/EmulateServerCallDelay -Call123");
+    CHECK(ReadNestedParameter(attached, Parameter(L"/EmulateServerCallDelay"), *call) == std::optional<std::wstring>(L"123"));
+  }
+  CHECK(ParameterNestedOptions(create.key, L"8.5.3").empty());
+  CHECK(DocumentedParameterSyntax(create.key, L"8.5.3").empty());
+  CHECK(!ValidateParameterDraft(L"/RestoreIB synthetic.dt -UseBinaryDataStorage+", context).empty());
+  CHECK(ValidateParameterDraft(L"/RestoreIB synthetic.dt -UseBinaryDataStorage+",
+      {ibstart::domain::LaunchMode::designer, ibstart::domain::ClientType::thick, L"8.5.4"}).empty());
+  CHECK(ValidateParameterDraft(L"/RestoreIB synthetic.dt -FutureStorage keep", context).empty());
+}
+
+void TestLaunchChecksActualParameterVersion() {
+  ibstart::domain::Database database;
+  database.connect = L"File=\"C:\\synthetic-base\"";
+  database.additional_parameters = L"/Theme -Dark";
+  ibstart::domain::PlatformInstallation platform;
+  platform.version = L"8.3.26.1540";
+  platform.executable = L"C:\\synthetic-platform\\1cv8.exe";
+  ibstart::domain::LaunchOptions options;
+  bool rejected = false;
+  try { static_cast<void>(ibstart::launcher::BuildCommand(database, platform, options)); }
+  catch (const std::invalid_argument&) { rejected = true; }
+  CHECK(rejected);
+  platform.version = L"8.5.1.100";
+  CHECK(!ibstart::launcher::BuildCommand(database, platform, options).arguments.empty());
+  for (const auto value : {L"DESIGNER", L"/AppArch", L"/Proxy"}) {
+    database.additional_parameters = ibstart::launcher::SetLaunchParameter(L"", Parameter(L"/C"), value);
+    CHECK(ibstart::launcher::ValidateLaunchParameters(database, options).empty());
+    const auto command = ibstart::launcher::BuildCommand(database, platform, options);
+    CHECK(command.arguments.back() == value);
+  }
+}
+}  // namespace
+
 int wmain(int argc, wchar_t* argv[]) {
   if (argc == 2 && std::wstring_view(argv[1]) == L"--cache-process-helper") {
     Sleep(30000);
@@ -3372,6 +4382,20 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"CommandBuilderAndSelection", TestCommandBuilderAndSelection);
   run(L"OneOffLaunchOptions", TestOneOffLaunchOptions);
   run(L"LaunchParameterConflicts", TestLaunchParameterConflicts);
+  run(L"ParameterBuilderPreservesText", TestParameterBuilderPreservesText);
+  run(L"ParameterEditingActions", TestParameterEditingActions);
+  run(L"ParameterVersionProfiles", TestParameterVersionProfiles);
+  run(L"ParameterHelpAndDefaults", TestParameterHelpAndDefaults);
+  run(L"DocumentedParameterSemantics", TestDocumentedParameterSemantics);
+  run(L"RepositoryConnectionParameters", TestRepositoryConnectionParameters);
+  run(L"NestedCommandOptions", TestNestedCommandOptions);
+  run(L"NestedOptionOrderAndRequirements", TestNestedOptionOrderAndRequirements);
+  run(L"OperandDomains", TestOperandDomains);
+  run(L"ReviewedLaunchSemantics", TestReviewedLaunchSemantics);
+  run(L"PrimaryOnlyCommandEditors", TestPrimaryOnlyCommandEditors);
+  run(L"ZeroArgumentCommandEditors", TestZeroArgumentCommandEditors);
+  run(L"AddCommandWithoutArguments", TestAddCommandWithoutArguments);
+  run(L"LaunchChecksActualParameterVersion", TestLaunchChecksActualParameterVersion);
   run(L"PlatformDiscoveryLargeVersions", TestPlatformDiscoveryLargeVersions);
   run(L"StandaloneThinClientDiscovery", TestStandaloneThinClientDiscovery);
   run(L"ThinClientValidation", TestThinClientValidation);
@@ -3401,8 +4425,11 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"CacheIdentifiersDoNotCollide", TestCacheIdentifiersDoNotCollide);
   run(L"PortableMode", TestPortableMode);
   run(L"ProfileTransfer", TestProfileTransfer);
+  run(L"StartupUpdateSettings", TestStartupUpdateSettings);
   run(L"WindowsPathLimit", TestWindowsPathLimit);
   run(L"StorageFileSizeLimit", TestStorageFileSizeLimit);
+  run(L"ConfigurationCatalog", TestConfigurationCatalog);
+  run(L"ConfigurationSearchAndIsolation", TestConfigurationSearchAndIsolation);
   run(L"CatalogStateRepository", TestCatalogStateRepository);
   run(L"StorageRepositoryMergesStaleSnapshots", TestStorageRepositoryMergesStaleSnapshots);
   run(L"CatalogMetadataService", TestCatalogMetadataService);

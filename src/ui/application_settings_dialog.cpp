@@ -48,6 +48,8 @@ constexpr int kExportProfile = 1828;
 constexpr int kImportProfile = 1829;
 constexpr int kSettingsTabs = 1830;
 constexpr int kShowCacheSize = 1831;
+constexpr int kShowConfiguration = 1832;
+constexpr int kCheckUpdatesOnStartup = 1833;
 
 enum class SettingsPage : int {
   interface_page,
@@ -61,12 +63,14 @@ struct State {
   std::array<std::vector<HWND>, 4> page_controls{};
   HWND simple_mode{};
   HWND show_tags{};
+  HWND show_configuration{};
   HWND show_cache_size{};
   HWND folders_first{};
   HWND platform_paths{};
   HWND recent_lists{};
   HWND recent_limit{};
   HWND open_last_list{};
+  HWND check_updates_on_startup{};
   HWND restore_selection{};
   HWND confirm_destructive{};
   HWND default_client{};
@@ -254,10 +258,12 @@ void RemoveSelectedRecent(State& state) {
 
 void Collect(State& state) {
   state.settings.simple_mode = SendMessageW(state.simple_mode, BM_GETCHECK, 0, 0) == BST_CHECKED;
+  state.settings.show_configuration_in_list = SendMessageW(state.show_configuration, BM_GETCHECK, 0, 0) == BST_CHECKED;
   state.settings.show_tags_in_list = SendMessageW(state.show_tags, BM_GETCHECK, 0, 0) == BST_CHECKED;
   state.settings.show_cache_size_in_list = SendMessageW(state.show_cache_size, BM_GETCHECK, 0, 0) == BST_CHECKED;
   state.settings.folders_first_when_sorting = SendMessageW(state.folders_first, BM_GETCHECK, 0, 0) == BST_CHECKED;
   state.settings.open_last_list_on_startup = SendMessageW(state.open_last_list, BM_GETCHECK, 0, 0) == BST_CHECKED;
+  state.settings.check_updates_on_startup = SendMessageW(state.check_updates_on_startup, BM_GETCHECK, 0, 0) == BST_CHECKED;
   state.settings.restore_last_selection = SendMessageW(state.restore_selection, BM_GETCHECK, 0, 0) == BST_CHECKED;
   state.settings.confirm_destructive_actions = SendMessageW(state.confirm_destructive, BM_GETCHECK, 0, 0) == BST_CHECKED;
   state.settings.show_details_panel = SendMessageW(state.show_details, BM_GETCHECK, 0, 0) == BST_CHECKED;
@@ -290,7 +296,7 @@ LRESULT CALLBACK WindowProc(HWND window, UINT message, WPARAM wparam, LPARAM lpa
   if (message == WM_NCCREATE) {
     SetWindowLongPtrW(window, GWLP_USERDATA,
         reinterpret_cast<LONG_PTR>(reinterpret_cast<CREATESTRUCTW*>(lparam)->lpCreateParams));
-    return TRUE;
+    return DefWindowProcW(window, message, wparam, lparam);
   }
   if (message == WM_CTLCOLORSTATIC || message == WM_CTLCOLORBTN) {
     return DialogControlColor(message, wparam, lparam);
@@ -440,7 +446,7 @@ void CreateControls(HWND window, State& state) {
         text_font);
   };
 
-  group(SettingsPage::interface_page, L"Основные", 12, 12, 670, 130);
+  group(SettingsPage::interface_page, L"Основные", 12, 12, 670, 156);
   state.simple_mode = checkbox(SettingsPage::interface_page, L"Использовать простой режим", 24, 36, 620,
       kSimpleMode, state.settings.simple_mode);
   state.show_tags = checkbox(SettingsPage::interface_page, L"Показывать теги в списке баз", 24, 62, 620,
@@ -451,53 +457,57 @@ void CreateControls(HWND window, State& state) {
       kFoldersFirst,
       state.settings.folders_first_when_sorting);
 
-  group(SettingsPage::interface_page, L"Отображение", 12, 152, 670, 170);
-  state.show_details = checkbox(SettingsPage::interface_page, L"Показывать карточку выбранной базы", 24, 176, 620,
+  state.show_configuration = checkbox(SettingsPage::interface_page, L"Показывать конфигурацию и версию в списке баз", 24, 140, 620,
+      kShowConfiguration, state.settings.show_configuration_in_list);
+  group(SettingsPage::interface_page, L"Отображение", 12, 178, 670, 170);
+  state.show_details = checkbox(SettingsPage::interface_page, L"Показывать карточку выбранной базы", 24, 202, 620,
       kShowDetails, state.settings.show_details_panel);
-  state.show_status = checkbox(SettingsPage::interface_page, L"Показывать строку состояния", 24, 202, 620,
+  state.show_status = checkbox(SettingsPage::interface_page, L"Показывать строку состояния", 24, 228, 620,
       kShowStatus, state.settings.show_status_bar);
   create_page_control(SettingsPage::interface_page, L"STATIC", L"Плотность дерева:", 0,
-      24, 240, 220, 20, 0, text_font);
+      24, 266, 220, 20, 0, text_font);
   state.tree_density = create_page_control(SettingsPage::interface_page, WC_COMBOBOXW, L"",
-      WS_TABSTOP | CBS_DROPDOWNLIST, 260, 236, 250, 140, kTreeDensity, text_font);
+      WS_TABSTOP | CBS_DROPDOWNLIST, 260, 262, 250, 140, kTreeDensity, text_font);
   for (const auto label : {L"Компактная", L"Обычная", L"Увеличенная"})
     SendMessageW(state.tree_density, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label));
   SendMessageW(state.tree_density, CB_SETCURSEL, std::clamp(state.settings.tree_density, 0, 2), 0);
 
-  group(SettingsPage::launch, L"Запуск при старте", 12, 12, 670, 96);
+  group(SettingsPage::launch, L"Запуск при старте", 12, 12, 670, 122);
   state.open_last_list = checkbox(SettingsPage::launch, L"Открывать последний список баз при запуске", 24, 36, 620,
       kOpenLastList, state.settings.open_last_list_on_startup);
   state.restore_selection = checkbox(SettingsPage::launch, L"Восстанавливать последнюю выбранную базу", 24, 62, 620,
       kRestoreSelection, state.settings.restore_last_selection);
+  state.check_updates_on_startup = checkbox(SettingsPage::launch, L"Проверять обновления при запуске программы", 24, 88, 620,
+      kCheckUpdatesOnStartup, state.settings.check_updates_on_startup);
 
-  group(SettingsPage::launch, L"Параметры по умолчанию", 12, 120, 670, 164);
+  group(SettingsPage::launch, L"Параметры по умолчанию", 12, 146, 670, 164);
   create_page_control(SettingsPage::launch, L"STATIC", L"Клиент по умолчанию:", 0,
-      24, 146, 220, 20, 0, text_font);
+      24, 172, 220, 20, 0, text_font);
   state.default_client = create_page_control(SettingsPage::launch, WC_COMBOBOXW, L"",
-      WS_TABSTOP | CBS_DROPDOWNLIST, 260, 140, 380, 140, kDefaultClient, text_font);
+      WS_TABSTOP | CBS_DROPDOWNLIST, 260, 166, 380, 140, kDefaultClient, text_font);
   for (const auto label : {L"Авто", L"Тонкий клиент", L"Толстый клиент", L"Веб-клиент"})
     SendMessageW(state.default_client, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label));
   SendMessageW(state.default_client, CB_SETCURSEL, ClientTypeIndex(state.settings.default_client_type), 0);
   create_page_control(SettingsPage::launch, L"STATIC", L"Разрядность по умолчанию:", 0,
-      24, 178, 220, 20, 0, text_font);
+      24, 204, 220, 20, 0, text_font);
   state.default_architecture = create_page_control(SettingsPage::launch, WC_COMBOBOXW, L"",
-      WS_TABSTOP | CBS_DROPDOWNLIST, 260, 172, 380, 140, kDefaultArchitecture, text_font);
+      WS_TABSTOP | CBS_DROPDOWNLIST, 260, 198, 380, 140, kDefaultArchitecture, text_font);
   for (const auto label : {L"Авто", L"Только x86", L"Только x64", L"Приоритет x86", L"Приоритет x64"})
     SendMessageW(state.default_architecture, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label));
   SendMessageW(state.default_architecture, CB_SETCURSEL, static_cast<int>(state.settings.default_architecture), 0);
   create_page_control(SettingsPage::launch, L"STATIC", L"Версия платформы:", 0,
-      24, 210, 220, 20, 0, text_font);
+      24, 236, 220, 20, 0, text_font);
   state.default_version = create_page_control(SettingsPage::launch, L"EDIT",
       state.settings.default_platform_version, WS_TABSTOP | WS_BORDER | ES_AUTOHSCROLL,
-      260, 204, 380, 22, kDefaultVersion, text_font, WS_EX_CLIENTEDGE);
+      260, 230, 380, 22, kDefaultVersion, text_font, WS_EX_CLIENTEDGE);
   create_page_control(SettingsPage::launch, L"STATIC",
       L"Пустое значение — настройки базы или автоопределение.", 0,
-      260, 232, 380, 20, 0, text_font);
+      260, 258, 380, 20, 0, text_font);
 
-  group(SettingsPage::launch, L"Подтверждения и история", 12, 300, 670, 184);
-  state.confirm_destructive = checkbox(SettingsPage::launch, L"Подтверждать удаление и очистку данных", 24, 324, 620,
+  group(SettingsPage::launch, L"Подтверждения и история", 12, 326, 670, 158);
+  state.confirm_destructive = checkbox(SettingsPage::launch, L"Подтверждать удаление и очистку данных", 24, 350, 620,
       kConfirmDestructive, state.settings.confirm_destructive_actions);
-  state.remember_history = checkbox(SettingsPage::launch, L"Сохранять историю запусков", 24, 350, 620,
+  state.remember_history = checkbox(SettingsPage::launch, L"Сохранять историю запусков", 24, 376, 620,
       kRememberHistory, state.settings.remember_launch_history);
   create_page_control(SettingsPage::launch, L"STATIC", L"Показывать списков в меню:", 0,
       24, 416, 220, 20, 0, text_font);
@@ -553,9 +563,9 @@ void CreateControls(HWND window, State& state) {
       (state.portable ? L" (portable)" : L" (обычный режим)");
   create_page_control(SettingsPage::profile, L"STATIC", profile, 0,
       24, 38, 620, 20, 0, text_font);
-  const std::wstring files = L"Файлы: settings.json и catalog-state.json";
+  const std::wstring files = L"Файлы: settings.json, catalog-state.json, configurations.json";
   create_page_control(SettingsPage::profile, L"STATIC", files, 0,
-      24, 66, 430, 20, 0, text_font);
+      24, 66, 640, 20, 0, text_font);
   button(SettingsPage::profile, L"Открыть папку профиля", 24, 96, 195, kOpenProfileFolder);
   button(SettingsPage::profile, L"Экспортировать…", 230, 96, 160, kExportProfile);
   button(SettingsPage::profile, L"Импортировать…", 397, 96, 160, kImportProfile);

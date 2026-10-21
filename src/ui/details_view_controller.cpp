@@ -185,6 +185,13 @@ void DetailsViewController::Display(const catalog::Catalog* database_catalog,
   };
 
   add_row(L"Тип", type);
+  if (entry->IsDatabase() && catalog_metadata) {
+    const auto& state = catalog_metadata->Read();
+    const auto* assignment = configuration::FindAssignment(state.database_configurations, state.configuration_scope, catalog::StableDatabaseId(*entry));
+    const auto* definition = assignment ? configuration::Find(state.configurations, assignment->configuration_id) : nullptr;
+    add_row(L"Конфигурация", definition ? configuration::Label(*definition) : L"Не указана");
+    add_row(L"Версия конфигурации", assignment && !assignment->version.empty() ? assignment->version : L"Не указана");
+  }
   for (const auto& field : entry->fields) {
     if (_wcsicmp(field.key.c_str(), L"Connect") == 0) continue;
     auto value = SingleLine(field.value);

@@ -17,7 +17,8 @@ class MenuController final {
 
   void Create(HWND window, HINSTANCE instance);
   void RefreshFile(const storage::Settings& settings);
-  void RefreshMain(const storage::Settings& settings);
+  void RefreshMain(const storage::Settings& settings, std::wstring_view available_update = {},
+      bool update_check_active = false);
   void Clear() noexcept;
 
   [[nodiscard]] HMENU file_menu() const noexcept { return file_menu_; }
@@ -35,6 +36,7 @@ class MenuController final {
   HMENU file_menu_{};
   HMENU view_menu_{};
   HMENU settings_menu_{};
+  HMENU tools_menu_{};
   HMENU help_menu_{};
   OwnerDrawMenuItems main_menu_items_;
   OwnerDrawMenuItems file_menu_items_;

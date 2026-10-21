@@ -40,9 +40,9 @@ void EraseTagStyle(storage::TagStyles& styles, std::wstring_view name);
 [[nodiscard]] std::vector<catalog::TreeItem> FilterTreeItems(const catalog::Catalog& catalog,
     const std::vector<catalog::TreeItem>& items, std::wstring_view search_filter,
     const TreeTagFilter& tag_filter, const storage::DatabaseTags& tags,
-    const std::vector<std::wstring>& favorites);
+    const std::vector<std::wstring>& favorites, const storage::CatalogState* configurations = nullptr);
 [[nodiscard]] bool MatchesSearchFilter(const catalog::Catalog& catalog, const catalog::TreeItem& item,
-    std::wstring_view search_filter, const storage::DatabaseTags& tags);
+    std::wstring_view search_filter, const storage::DatabaseTags& tags, const storage::CatalogState* configurations = nullptr);
 [[nodiscard]] bool MatchesTagFilter(const catalog::Catalog& catalog, const catalog::TreeItem& item,
     const TreeTagFilter& filter, const storage::DatabaseTags& tags, const std::vector<std::wstring>& favorites);
 
@@ -50,6 +50,6 @@ void EraseTagStyle(storage::TagStyles& styles, std::wstring_view name);
     const storage::Settings& settings, const storage::DatabaseTags& tags,
     const storage::DatabaseMetricsById& metrics, const storage::TagStyles& styles,
     const std::vector<domain::HistoryItem>& history, LPARAM recent_root_item_data,
-    std::wstring_view search_filter, HFONT controls_font, HFONT controls_bold_font);
+    std::wstring_view search_filter, HFONT controls_font, HFONT controls_bold_font, const storage::CatalogState* configurations = nullptr);
 
 }  // namespace ibstart::ui::presentation

@@ -2,10 +2,12 @@
 
 #include "ui/advanced_database_options_dialog.hpp"
 #include "ui/dialog_support.hpp"
+#include "ui/configuration_catalog_dialog.hpp"
 
 #include "core/catalog/catalog.hpp"
 #include "core/connection/connection_string.hpp"
 #include "core/windows_path.hpp"
+#include "core/domain/utf.hpp"
 
 #include <CommCtrl.h>
 
@@ -72,7 +74,8 @@ enum DatabaseEditorControl : int {
   kLaunchWindowsAuth,
   kLaunchSpeed,
   kLaunchArchitecture,
-  kOpenAdvancedDatabaseOptions
+  kOpenAdvancedDatabaseOptions,
+  kConfiguration, kConfigurationVersion, kConfigurationCatalog
 };
 
 struct DatabaseEditorState {
@@ -94,9 +97,14 @@ struct DatabaseEditorState {
   HWND app{};
   HWND windows_auth{};
   HWND speed{};
+  HWND configuration{}, configuration_version{};
+  catalog::CatalogMetadataService* metadata{};
+  std::vector<std::wstring> configuration_ids;
+  bool filtering_configurations{false};
   HFONT font{};
   HFONT button_font{};
   DatabaseEditorData initial;
+  std::span<const domain::PlatformInstallation> installations;
   std::optional<DatabaseEditorData> result;
   DatabaseConnectionKind kind{DatabaseConnectionKind::server};
   bool done{false};
@@ -215,6 +223,42 @@ void BrowseForFileBase(HWND window, DatabaseEditorState& state) {
   SetWindowTextW(state.file, path->c_str());
 }
 
+void RefreshConfigurations(DatabaseEditorState& state, std::wstring_view selected, std::wstring_view query = {}) {
+  if (!state.configuration || !state.metadata) return;
+  SendMessageW(state.configuration, CB_RESETCONTENT, 0, 0);
+  SendMessageW(state.configuration, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(L"Не указана"));
+  state.configuration_ids = {L""};
+  int selection = 0;
+  auto definitions = state.metadata->Read().configurations;
+  std::sort(definitions.begin(), definitions.end(), [](const auto& a, const auto& b) { return configuration::Label(a) < configuration::Label(b); });
+  for (const auto& d : definitions) {
+    if (!query.empty() && utf::FindNoCaseOrdinal(d.name, query) == std::wstring_view::npos &&
+        utf::FindNoCaseOrdinal(d.title, query) == std::wstring_view::npos &&
+        utf::FindNoCaseOrdinal(d.short_name, query) == std::wstring_view::npos) continue;
+    auto label = configuration::Label(d);
+    if (!d.short_name.empty()) label = d.short_name + L" — " + label;
+    const auto index = SendMessageW(state.configuration, CB_ADDSTRING, 0, reinterpret_cast<LPARAM>(label.c_str()));
+    state.configuration_ids.push_back(d.id);
+    if (domain::EqualIdentifier(d.id, selected)) selection = static_cast<int>(index);
+  }
+  SendMessageW(state.configuration, CB_SETCURSEL, query.empty() ? selection : static_cast<WPARAM>(-1), 0);
+}
+
+std::optional<std::wstring> SelectedConfiguration(const DatabaseEditorState& state) {
+  const auto index = SendMessageW(state.configuration, CB_GETCURSEL, 0, 0);
+  if (index != CB_ERR && static_cast<size_t>(index) < state.configuration_ids.size()) return state.configuration_ids[static_cast<size_t>(index)];
+  const auto text = configuration::Trim(ReadControlText(state.configuration));
+  if (text.empty() || EqualNoCase(text, L"Не указана")) return std::wstring{};
+  std::optional<std::wstring> found;
+  for (const auto& d : state.metadata->Read().configurations) {
+    if (EqualNoCase(text, d.name) || EqualNoCase(text, d.title) || (!d.short_name.empty() && EqualNoCase(text, d.short_name))) {
+      if (found) return std::nullopt;
+      found = d.id;
+    }
+  }
+  return found;
+}
+
 std::optional<std::wstring> CollectDatabaseEditorResult(DatabaseEditorState& state) {
   DatabaseEditorData result = state.initial;
   result.kind = state.kind;
@@ -225,7 +269,8 @@ std::optional<std::wstring> CollectDatabaseEditorResult(DatabaseEditorState& sta
   const auto server = TrimText(ReadControlText(state.server));
   const auto reference = TrimText(ReadControlText(state.reference));
   if (state.kind == DatabaseConnectionKind::file && file.empty()) return L"Укажите путь к файловой базе.";
-  if (state.kind == DatabaseConnectionKind::file) {
+  if (state.kind == DatabaseConnectionKind::file && (state.initial.connect.empty() ||
+      file != connection::ValueOrEmpty(state.initial.connect, L"File"))) {
     const std::filesystem::path database_path(file);
     if (!windows_path::IsWithinLimit(database_path)) return windows_path::LengthError(database_path);
     const auto database_file = database_path / L"1Cv8.1CD";
@@ -253,6 +298,11 @@ std::optional<std::wstring> CollectDatabaseEditorResult(DatabaseEditorState& sta
     const auto connection_kind = state.kind == DatabaseConnectionKind::file ? connection::ConnectionKind::file :
         state.kind == DatabaseConnectionKind::web ? connection::ConnectionKind::web : connection::ConnectionKind::server;
     result.connect = connection::BuildConnection(connection_kind, state.initial.connect, file, web, server, reference);
+    const bool same_address = state.kind == state.initial.kind &&
+        (state.kind == DatabaseConnectionKind::file ? file == connection::ValueOrEmpty(state.initial.connect, L"File") :
+         state.kind == DatabaseConnectionKind::web ? web == catalog::Catalog::WebUrl(state.initial.connect).value_or(L"") :
+         server == connection::ValueOrEmpty(state.initial.connect, L"Srvr") && reference == connection::ValueOrEmpty(state.initial.connect, L"Ref"));
+    if (same_address) result.connect = state.initial.connect;
   } catch (const std::invalid_argument&) {
     return L"Строку подключения нельзя безопасно разобрать из-за незакрытой или неоднозначной кавычки.";
   }
@@ -262,6 +312,17 @@ std::optional<std::wstring> CollectDatabaseEditorResult(DatabaseEditorState& sta
   result.wa = FlagValue(state.windows_auth, state.initial.wa);
   result.client_connection_speed = SpeedValue(ReadControlText(state.speed));
   result.app_arch = ArchitectureValue(ReadControlText(state.architecture));
+  // Preserve absent/default fields when the user only changes local metadata.
+  if (ReadControlText(state.app) == ApplicationLabel(state.initial.app)) result.app = state.initial.app;
+  if (ReadControlText(state.speed) == SpeedLabel(state.initial.client_connection_speed)) result.client_connection_speed = state.initial.client_connection_speed;
+  if ((SendMessageW(state.windows_auth, BM_GETCHECK, 0, 0) == BST_CHECKED) == IsEnabledFlag(state.initial.wa)) result.wa = state.initial.wa;
+  if (state.metadata) {
+    const auto selected = SelectedConfiguration(state);
+    if (!selected) return L"Выберите конфигурацию из списка или откройте справочник. Неоднозначное имя требует выбора конкретной записи.";
+    result.configuration_id = *selected;
+    result.configuration_version = configuration::Trim(ReadControlText(state.configuration_version));
+    if (!configuration::ValidText(result.configuration_version, 128)) return L"Версия должна содержать до 128 символов без переносов строк.";
+  }
   state.result = std::move(result);
   return std::nullopt;
 }
@@ -345,9 +406,25 @@ void CreateDatabaseEditorControls(HWND window, DatabaseEditorState& state,
       IsEnabledFlag(state.initial.wa) ? BST_CHECKED : BST_UNCHECKED, 0);
   create(0, L"BUTTON", L"Дополнительные настройки…", WS_TABSTOP,
       28, 468, 230, 28, kOpenAdvancedDatabaseOptions, button_font);
+  if (state.metadata) {
+    create(0, L"BUTTON", L"Конфигурация информационной базы", BS_GROUPBOX, 14, 514, 632, 92, 0, text_font);
+    create(0, L"STATIC", L"Конфигурация:", 0, 28, 536, 110, 20, 0, text_font);
+    state.configuration = create(0, WC_COMBOBOXW, L"", WS_TABSTOP | CBS_DROPDOWN | CBS_AUTOHSCROLL | WS_VSCROLL,
+        140, 532, 376, 250, kConfiguration, text_font);
+    SendMessageW(state.configuration, CB_SETDROPPEDWIDTH, px(620), 0);
+    SendMessageW(state.configuration, CB_LIMITTEXT, 256, 0);
+    RefreshConfigurations(state, state.initial.configuration_id);
+    create(0, L"BUTTON", L"Справочник…", WS_TABSTOP, 526, 532, 108, 25, kConfigurationCatalog, button_font);
+    create(0, L"STATIC", L"Версия:", 0, 28, 572, 104, 20, 0, text_font);
+    state.configuration_version = create(WS_EX_CLIENTEDGE, L"EDIT", state.initial.configuration_version,
+        WS_TABSTOP | ES_AUTOHSCROLL, 140, 568, 210, 25, kConfigurationVersion, text_font);
+    SendMessageW(state.configuration_version, EM_SETLIMITTEXT, 128, 0);
+    create(0, L"STATIC", L"Сведения заполняются вручную", 0, 366, 572, 260, 20, 0, text_font);
+  }
+  const int button_y = state.metadata ? 618 : 532;
   create(0, L"BUTTON", L"Сохранить", WS_TABSTOP | BS_DEFPUSHBUTTON,
-      430, 532, 110, 28, IDOK, button_font);
-  create(0, L"BUTTON", L"Отмена", WS_TABSTOP, 550, 532, 96, 28, IDCANCEL, button_font);
+      430, button_y, 110, 28, IDOK, button_font);
+  create(0, L"BUTTON", L"Отмена", WS_TABSTOP, 550, button_y, 96, 28, IDCANCEL, button_font);
   state.kind = state.initial.kind;
   UpdateConnectionControls(state);
 }
@@ -357,13 +434,22 @@ LRESULT CALLBACK DatabaseEditorProc(HWND window, UINT message, WPARAM wparam, LP
   if (message == WM_NCCREATE) {
     SetWindowLongPtrW(window, GWLP_USERDATA,
         reinterpret_cast<LONG_PTR>(reinterpret_cast<CREATESTRUCTW*>(lparam)->lpCreateParams));
-    return TRUE;
+    return DefWindowProcW(window, message, wparam, lparam);
   }
   if (message == WM_CTLCOLORSTATIC || message == WM_CTLCOLORBTN) {
     return DialogControlColor(message, wparam, lparam);
   }
   if (message == WM_COMMAND && state) {
     const int command = LOWORD(wparam);
+    if (command == kConfiguration && HIWORD(wparam) == CBN_EDITCHANGE && state->metadata && !state->filtering_configurations) {
+      state->filtering_configurations = true;
+      const auto query = ReadControlText(state->configuration);
+      RefreshConfigurations(*state, {}, query);
+      SetWindowTextW(state->configuration, query.c_str());
+      SendMessageW(state->configuration, CB_SETEDITSEL, 0, MAKELPARAM(-1, -1));
+      state->filtering_configurations = false;
+      return 0;
+    }
     if (command == kConnectionFile || command == kConnectionWeb || command == kConnectionServer) {
       state->kind = command == kConnectionFile ? DatabaseConnectionKind::file :
           command == kConnectionWeb ? DatabaseConnectionKind::web : DatabaseConnectionKind::server;
@@ -374,11 +460,37 @@ LRESULT CALLBACK DatabaseEditorProc(HWND window, UINT message, WPARAM wparam, LP
       BrowseForFileBase(window, *state);
       return 0;
     }
+    if (command == kConfigurationCatalog && state->metadata) {
+      const auto selected = SelectedConfiguration(*state).value_or(L"");
+      const auto chosen = EditConfigurations(window, *state->metadata, true, selected);
+      RefreshConfigurations(*state, chosen.value_or(selected));
+      return 0;
+    }
     if (command == kOpenAdvancedDatabaseOptions) {
-      if (const auto updated = EditAdvancedDatabaseOptions(window, state->initial)) state->initial = *updated;
+      auto initial = state->initial;
+      initial.version = ReadControlText(state->version);
+      initial.app = ApplicationValue(ReadControlText(state->app));
+      if (const auto updated = EditAdvancedDatabaseOptions(window, std::move(initial), state->installations)) state->initial = *updated;
       return 0;
     }
     if (command == IDOK) {
+      if (state->metadata) {
+        const auto selected = SelectedConfiguration(*state);
+        const auto version = configuration::Trim(ReadControlText(state->configuration_version));
+        const auto original_version = configuration::Trim(state->initial.configuration_version);
+        const auto current_connect = state->kind == DatabaseConnectionKind::file ? ReadControlText(state->file) :
+            state->kind == DatabaseConnectionKind::web ? ReadControlText(state->web) : ReadControlText(state->server) + L";" + ReadControlText(state->reference);
+        const auto original_connect = state->initial.kind == DatabaseConnectionKind::file ? connection::ValueOrEmpty(state->initial.connect, L"File") :
+            state->initial.kind == DatabaseConnectionKind::web ? catalog::Catalog::WebUrl(state->initial.connect).value_or(L"") :
+            connection::ValueOrEmpty(state->initial.connect, L"Srvr") + L";" + connection::ValueOrEmpty(state->initial.connect, L"Ref");
+        if (selected && !version.empty() && version == original_version &&
+            (*selected != state->initial.configuration_id || current_connect != original_connect)) {
+          const int choice = MessageBoxW(window, L"Изменена конфигурация или подключение базы.\n\nОчистить прежнюю версию?\nДа — очистить, Нет — сохранить введённую версию.",
+              L"Версия конфигурации", MB_YESNOCANCEL | MB_ICONQUESTION);
+          if (choice == IDCANCEL) return 0;
+          if (choice == IDYES) SetWindowTextW(state->configuration_version, L"");
+        }
+      }
       if (const auto error = CollectDatabaseEditorResult(*state)) {
         Message(window, *error, L"Проверка данных", MB_OK | MB_ICONWARNING);
         return 0;
@@ -401,9 +513,11 @@ LRESULT CALLBACK DatabaseEditorProc(HWND window, UINT message, WPARAM wparam, LP
 }  // namespace
 
 std::optional<DatabaseEditorData> EditDatabase(HWND owner, std::wstring_view title, DatabaseEditorData initial,
-    const std::vector<domain::PlatformInstallation>& platforms) {
+    const std::vector<domain::PlatformInstallation>& platforms, catalog::CatalogMetadataService* metadata) {
   DatabaseEditorState state;
+  state.metadata = metadata;
   state.initial = std::move(initial);
+  state.installations = platforms;
   static ATOM atom = [] {
     WNDCLASSW klass{};
     klass.hInstance = GetModuleHandleW(nullptr);
@@ -416,7 +530,7 @@ std::optional<DatabaseEditorData> EditDatabase(HWND owner, std::wstring_view tit
   (void)atom;
   constexpr DWORD style = WS_CAPTION | WS_SYSMENU | WS_POPUP;
   constexpr DWORD extended_style = WS_EX_DLGMODALFRAME | WS_EX_CONTROLPARENT;
-  const SIZE outer_size = DialogOuterSize(owner, 660, 570, style, extended_style);
+  const SIZE outer_size = DialogOuterSize(owner, 660, metadata ? 656 : 570, style, extended_style);
   HWND window = CreateWindowExW(extended_style, kDatabaseEditorClass, std::wstring(title).c_str(), style,
       CW_USEDEFAULT, CW_USEDEFAULT, outer_size.cx, outer_size.cy, owner, nullptr, GetModuleHandleW(nullptr), &state);
   if (!window) return std::nullopt;

@@ -135,6 +135,11 @@ void CatalogMetadataService::RenameDatabaseMetadata(std::wstring previous_name, 
   const bool connection_changed = previous_connect != updated_connect;
   if (previous_name == updated_name && EqualNoCase(previous_tag_id, updated_tag_id) && !connection_changed) return;
   repository_.Update([&](storage::CatalogState& state) {
+    for (auto& assignment : state.database_configurations) {
+      if (EqualNoCase(assignment.catalog_path, state.configuration_scope) && EqualNoCase(assignment.database_id, previous_tag_id)) {
+        assignment.database_id = updated_tag_id;
+      }
+    }
     if (previous_name != updated_name || !EqualNoCase(previous_tag_id, updated_tag_id)) {
       for (auto& favorite : state.favorites) {
         if (EqualNoCase(favorite, previous_name)) favorite = updated_name;
@@ -234,5 +239,60 @@ void CatalogMetadataService::RemoveHistory(std::wstring_view database_id) {
 }
 
 void CatalogMetadataService::ClearHistory() { repository_.ClearHistory(); }
+
+void CatalogMetadataService::SetConfigurationScope(const std::filesystem::path& path) {
+  repository_.SetConfigurationScope(path);
+}
+
+void CatalogMetadataService::SaveConfiguration(configuration::Definition definition) {
+  definition.name = configuration::Trim(definition.name);
+  definition.title = configuration::Trim(definition.title);
+  definition.short_name = configuration::Trim(definition.short_name);
+  if (definition.name.empty() || definition.title.empty() || !configuration::ValidText(definition.name) ||
+      !configuration::ValidText(definition.title) || !configuration::ValidText(definition.short_name, 80)) {
+    throw std::runtime_error("Укажите имя и наименование. Допустимо до 256 символов, краткое наименование — до 80, без переносов строк.");
+  }
+  if (definition.id.empty()) definition.id = configuration::NewId();
+  repository_.UpdateConfigurations([&](auto& definitions, const auto&) {
+    for (const auto& existing : definitions) {
+      if (!EqualNoCase(existing.id, definition.id) && EqualNoCase(existing.name, definition.name) &&
+          EqualNoCase(existing.title, definition.title)) {
+        throw std::runtime_error("Конфигурация с таким именем и наименованием уже существует.");
+      }
+    }
+    const auto it = std::find_if(definitions.begin(), definitions.end(), [&](const auto& d) { return EqualNoCase(d.id, definition.id); });
+    if (it == definitions.end()) definitions.push_back(definition);
+    else *it = definition;
+  });
+}
+
+void CatalogMetadataService::DeleteConfiguration(std::wstring_view id) {
+  repository_.UpdateConfigurations([&](auto& definitions, const auto& assignments) {
+    const auto count = std::count_if(assignments.begin(), assignments.end(), [&](const auto& a) { return EqualNoCase(a.configuration_id, id); });
+    if (count) throw std::runtime_error("Конфигурация используется базами (" + std::to_string(count) + "). Сначала измените или очистите их привязки.");
+    std::erase_if(definitions, [&](const auto& d) { return EqualNoCase(d.id, id); });
+  });
+}
+
+void CatalogMetadataService::SetDatabaseConfiguration(std::wstring database_id, std::wstring configuration_id, std::wstring version) {
+  version = configuration::Trim(version);
+  if (database_id.empty() || !configuration::ValidText(version, 128)) throw std::runtime_error("Некорректная версия конфигурации.");
+  repository_.Update([&](storage::CatalogState& state) {
+    if (state.configuration_scope.empty()) throw std::runtime_error("Не выбран список баз.");
+    if (!configuration_id.empty() && !configuration::Find(state.configurations, configuration_id)) {
+      throw std::runtime_error("Конфигурация удалена из справочника. Выберите конфигурацию заново.");
+    }
+    std::erase_if(state.database_configurations, [&](const auto& a) {
+      return EqualNoCase(a.catalog_path, state.configuration_scope) && EqualNoCase(a.database_id, database_id);
+    });
+    if (!configuration_id.empty() || !version.empty()) {
+      state.database_configurations.push_back({state.configuration_scope, std::move(database_id), std::move(configuration_id), std::move(version)});
+    }
+  });
+}
+
+void CatalogMetadataService::RemoveDatabaseConfiguration(std::wstring_view database_id) {
+  SetDatabaseConfiguration(std::wstring(database_id), {}, {});
+}
 
 }  // namespace ibstart::catalog

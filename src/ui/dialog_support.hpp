@@ -17,6 +17,7 @@ void PositionDialogNearOwner(HWND dialog, HWND owner);
 void DisableModalOwner(HWND owner);
 void CloseModalDialog(HWND dialog, HWND owner);
 void RestoreModalOwner(HWND owner);
+[[nodiscard]] bool CopyTextToClipboard(HWND owner, std::wstring_view text);
 
 // The legacy common-dialog API stores the selected name in a MAX_PATH-sized
 // caller buffer. IFileDialog returns the complete filesystem path instead.
