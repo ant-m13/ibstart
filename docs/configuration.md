@@ -426,9 +426,9 @@ data\
 | --- | --- |
 | `cmake/IBStartVersion.cmake` | Единственный источник номера версии. `IBSTART_VERSION` — SemVer без build metadata; `IBSTART_GITHUB_OWNER` и `IBSTART_GITHUB_REPOSITORY` определяют репозиторий для проверки обновлений и страницы релиза. |
 | `CMakePresets.json` | Два Release-пресета с `BUILD_TESTING=ON`: `msvc-x64-release` для Ninja в `out/build/msvc-x64-release` и `vs2022-x64-release` для Visual Studio 2022 в `out/build/vs2022-x64-release`. |
-| `.github/workflows/build.yml` | Проверяет версию и соответствующий раздел changelog, собирает Release, запускает CTest, проверяет размер EXE (не более 8 МиБ), создаёт portable ZIP и проверяет маркер внутри него. |
+| `.github/workflows/build.yml` | Проверяет справочные данные и Python-тесты, версию и соответствующий раздел changelog, собирает Release, запускает CTest, проверяет размер EXE (не более 8 МиБ), создаёт portable ZIP и проверяет маркер внутри него. |
 | `.github/workflows/codeql.yml` | Анализирует C++-код CodeQL при pull request в `main`, изменениях `main`, раз в неделю и вручную. Для корректного анализа запускает фактическую MSVC/CMake-сборку; результаты доступны в GitHub Code Scanning. |
-| `.github/workflows/release.yml` | После merge PR в `main` повторно собирает выпуск, создаёт тег, GitHub Release, EXE, portable ZIP, `checksums.txt` и `IBStart.version`. Подробный процесс описан в [release-process.md](release-process.md). |
+| `.github/workflows/release.yml` | После merge PR в `main` проверяет справочные данные и Python-тесты, повторно собирает выпуск и запускает CTest, создаёт тег, GitHub Release, EXE, portable ZIP, `checksums.txt` и `IBStart.version`. Подробный процесс описан в [release-process.md](release-process.md). |
 
 `IBStart.version` — не конфигурация пользователя, а release asset с единственной SemVer-строкой и переводом строки. Приложение получает его при запуске, если включено `check_updates_on_startup`, либо по явной команде **Справка → Проверить обновления…**. Результат проверки хранится только до закрытия приложения. `checksums.txt` содержит SHA-256 для `IBStart.exe` и portable ZIP; используйте его для проверки скачанных файлов.
 

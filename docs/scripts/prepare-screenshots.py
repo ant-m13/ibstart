@@ -39,6 +39,7 @@ def main():
         "selected_entry": "Бухгалтерия — учебная",
         "window_x": 80, "window_y": 80,
         "window_width": 1180, "window_height": 720,
+        "check_updates_on_startup": 0,
         "credentials_schema_version": 1,
         "credentials": [{
             "id": "ibstart-docs-account", "title": "Учебные базы",
