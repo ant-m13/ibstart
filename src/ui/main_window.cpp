@@ -55,7 +55,7 @@ using presentation::TagId;
 using presentation::TagsFor;
 using presentation::TagsText;
 namespace {
-constexpr wchar_t kProjectWebsiteUrl[] = L"https://github.com/ant-m13/ibstart";
+constexpr wchar_t kProjectWebsiteUrl[] = L"https://ant-m13.github.io/ibstart/";
 constexpr wchar_t kClassName[] = L"IBStart.MainWindow";
 constexpr UINT kActivateMessage = WM_APP + 23;
 constexpr UINT kUpdateCheckFinishedMessage = WM_APP + 24;
