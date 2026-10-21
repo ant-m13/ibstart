@@ -122,6 +122,7 @@ set(IBSTART_ICON_FILES
   "${IBSTART_RESOURCE_DIR}/icons/file_database.ico"
   "${IBSTART_RESOURCE_DIR}/icons/server_database.ico"
   "${IBSTART_RESOURCE_DIR}/icons/update.ico"
+  "${IBSTART_RESOURCE_DIR}/icons/website.ico"
   "${IBSTART_RESOURCE_DIR}/icons/exit.ico"
   "${IBSTART_RESOURCE_DIR}/icons/cache_size.ico"
 )

@@ -2513,6 +2513,59 @@ void TestConfigurationCatalog() {
   std::error_code error; std::filesystem::remove_all(directory, error);
 }
 
+void TestProfileTransferRejectsInterruptedTransaction() {
+  using namespace ibstart;
+  const auto directory = Temp(L"profile-interrupted-transaction");
+  const storage::StorageLayout source{directory / L"source", true};
+  const storage::StorageLayout target{directory / L"target", true};
+  storage::EnsureWritable(source);
+  storage::EnsureWritable(target);
+  storage::SaveSettings(source, {});
+  storage::SaveCatalogState(source, {});
+  storage::SaveSettings(target, {});
+  storage::SaveCatalogState(target, {});
+  static_cast<void>(storage::LoadCatalogState(target));
+  storage::Settings source_settings;
+  source_settings.selected_entry = L"imported";
+  storage::SaveSettings(source, source_settings);
+  const auto settings_before = ReadBytes(target.root / L"settings.json");
+  const auto state_before = ReadBytes(target.root / L"catalog-state.json");
+  const auto definitions_before = ReadBytes(target.root / L"configurations.json");
+  for (const auto name : {L"settings.json.profile-backup.4294967295", L"catalog-state.json.profile-txn.4294967295",
+      L"configurations.json.profile-backup.4294967295"}) {
+    const auto interrupted = target.root / name;
+    WriteBytes(interrupted, "previous process recovery data");
+    for (const bool import : {true, false}) {
+      bool rejected = false;
+      try {
+        if (import) storage::ImportProfile(source.root, target, false);
+        else storage::ExportProfile(source, target.root, false);
+      } catch (const std::runtime_error&) { rejected = true; }
+      CHECK(rejected);
+      CHECK(ReadBytes(target.root / L"settings.json") == settings_before);
+      CHECK(ReadBytes(target.root / L"catalog-state.json") == state_before);
+      CHECK(ReadBytes(target.root / L"configurations.json") == definitions_before);
+      CHECK(ReadBytes(interrupted) == "previous process recovery data");
+    }
+    std::filesystem::remove(interrupted);
+    const auto source_interrupted = source.root / name;
+    WriteBytes(source_interrupted, "previous process recovery data");
+    for (const bool import : {true, false}) {
+      bool rejected = false;
+      try {
+        if (import) storage::ImportProfile(source.root, target, false);
+        else storage::ExportProfile(source, target.root, false);
+      } catch (const std::runtime_error&) { rejected = true; }
+      CHECK(rejected);
+      CHECK(ReadBytes(target.root / L"settings.json") == settings_before);
+      CHECK(ReadBytes(source_interrupted) == "previous process recovery data");
+    }
+    std::filesystem::remove(source_interrupted);
+  }
+  std::error_code error;
+  std::filesystem::remove_all(directory, error);
+}
+
 void TestConfigurationSearchAndIsolation() {
   using namespace ibstart;
   const auto directory = Temp(L"configuration-search");
@@ -4341,6 +4394,27 @@ void TestLaunchChecksActualParameterVersion() {
     CHECK(command.arguments.back() == value);
   }
 }
+
+void TestBuilderEmptyPasswordLaunch() {
+  using namespace ibstart;
+  domain::Database database;
+  database.connect = L"File=\"C:\\synthetic-base\"";
+  domain::PlatformInstallation platform;
+  platform.executable = L"C:\\synthetic-platform\\1cv8.exe";
+  platform.version = L"8.5.1.100";
+  domain::LaunchOptions options;
+  database.additional_parameters = launcher::SetLaunchParameter(L"", Parameter(L"/P"), L"");
+  CHECK(launcher::ValidateParameterDraft(database.additional_parameters).empty());
+  CHECK(launcher::ValidateLaunchParameters(database, options).empty());
+  const auto command = launcher::BuildCommand(database, platform, options);
+  CHECK(command.arguments.size() >= 2);
+  CHECK(command.arguments[command.arguments.size() - 2] == L"/P");
+  CHECK(command.arguments.back().empty());
+  for (const auto invalid : {L"/P", L"/P /L ru", L"/N \"\""}) {
+    database.additional_parameters = invalid;
+    CHECK(!launcher::ValidateLaunchParameters(database, options).empty());
+  }
+}
 }  // namespace
 
 int wmain(int argc, wchar_t* argv[]) {
@@ -4402,6 +4476,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"ZeroArgumentCommandEditors", TestZeroArgumentCommandEditors);
   run(L"AddCommandWithoutArguments", TestAddCommandWithoutArguments);
   run(L"LaunchChecksActualParameterVersion", TestLaunchChecksActualParameterVersion);
+  run(L"BuilderEmptyPasswordLaunch", TestBuilderEmptyPasswordLaunch);
   run(L"PlatformDiscoveryLargeVersions", TestPlatformDiscoveryLargeVersions);
   run(L"StandaloneThinClientDiscovery", TestStandaloneThinClientDiscovery);
   run(L"ThinClientValidation", TestThinClientValidation);
@@ -4431,6 +4506,7 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"CacheIdentifiersDoNotCollide", TestCacheIdentifiersDoNotCollide);
   run(L"PortableMode", TestPortableMode);
   run(L"ProfileTransfer", TestProfileTransfer);
+  run(L"ProfileTransferRejectsInterruptedTransaction", TestProfileTransferRejectsInterruptedTransaction);
   run(L"StartupUpdateSettings", TestStartupUpdateSettings);
   run(L"WindowsPathLimit", TestWindowsPathLimit);
   run(L"StorageFileSizeLimit", TestStorageFileSizeLimit);

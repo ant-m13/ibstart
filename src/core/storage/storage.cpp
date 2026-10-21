@@ -303,10 +303,26 @@ std::vector<configuration::Definition> ReadConfigurations(const StorageLayout& l
   return definitions;
 }
 
+void RejectInterruptedProfileTransaction(const StorageLayout& layout) {
+  // A restart changes the PID. Inspect all transaction suffixes so an import
+  // cannot overwrite a partially committed profile from a previous process.
+  if (!std::filesystem::exists(layout.root)) return;
+  for (const auto& entry : std::filesystem::directory_iterator(layout.root)) {
+    const auto name = entry.path().filename().wstring();
+    for (const auto file : {L"settings.json", L"catalog-state.json", L"configurations.json"}) {
+      if (name.starts_with(std::wstring(file) + L".profile-txn.") ||
+          name.starts_with(std::wstring(file) + L".profile-backup.")) {
+        throw std::runtime_error("An unfinished profile transaction requires recovery before import or export.");
+      }
+    }
+  }
+}
+
 void ReplaceProfileFiles(const StorageLayout& layout, std::string_view settings_contents,
     std::string_view state_contents, std::string_view configurations_contents) {
   EnsureProfileDirectory(layout.root);
   StorageMutex mutex(layout);
+  RejectInterruptedProfileTransaction(layout);
   struct File {
     std::filesystem::path path, temporary, backup;
     std::string_view contents;
@@ -322,12 +338,6 @@ void ReplaceProfileFiles(const StorageLayout& layout, std::string_view settings_
         PathFor(layout, name + L".profile-backup." + suffix), contents, FingerprintOf(PathFor(layout, name))});
   }
   std::error_code error;
-  // Do not remove evidence/backups left by an interrupted transaction.
-  for (const auto& file : files) {
-    if (std::filesystem::exists(file.temporary) || std::filesystem::exists(file.backup)) {
-      throw std::runtime_error("An unfinished profile transaction requires recovery before import.");
-    }
-  }
   try {
     for (const auto& file : files) WriteProfileTemporary(file.temporary, file.contents);
     for (const auto& file : files) VerifyFingerprint(file.path, file.expected);
@@ -1064,6 +1074,7 @@ void ExportProfile(const StorageLayout& source, const std::filesystem::path& tar
   EnsureProfileDirectory(target);
   auto [settings, state] = [&] {
     StorageMutex mutex(source);
+    RejectInterruptedProfileTransaction(source);
     return std::pair{LoadSettings(source), LoadCatalogState(source)};
   }();
   if (!include_credentials) settings.credentials.clear();
@@ -1077,6 +1088,7 @@ void ImportProfile(const std::filesystem::path& source, const StorageLayout& tar
   EnsureProfileDirectory(target.root);
   const auto snapshots = [&] {
     StorageMutex mutex({source, false});
+    RejectInterruptedProfileTransaction({source, false});
     return std::vector<FileSnapshot>{ReadFileSnapshot(source / L"settings.json"),
         ReadFileSnapshot(source / L"catalog-state.json"), ReadFileSnapshot(source / L"configurations.json")};
   }();
@@ -1085,7 +1097,6 @@ void ImportProfile(const std::filesystem::path& source, const StorageLayout& tar
   ValidateSettingsProfile(source_settings.contents);
   ValidateCatalogStateProfile(source_state.contents);
   auto imported = ParseSettings(source_settings.contents);
-  if (!include_credentials) imported.credentials = LoadSettings(target).credentials;
   const auto& source_definitions = snapshots[2];
   const auto definitions = source_definitions.fingerprint ? ParseConfigurations(source_definitions.contents) : configuration::BuiltInDefinitions();
   const auto state = ParseCatalogState(source_state.contents);
@@ -1094,6 +1105,8 @@ void ImportProfile(const std::filesystem::path& source, const StorageLayout& tar
       throw std::runtime_error("Imported database refers to a missing configuration.");
     }
   }
+  StorageMutex mutex(target);
+  if (!include_credentials) imported.credentials = LoadSettings(target).credentials;
   ReplaceProfileFiles(target, SerializeSettings(imported), SerializeCatalogState(state), SerializeConfigurations(definitions));
 }
 
