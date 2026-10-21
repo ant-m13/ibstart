@@ -16,6 +16,8 @@ struct NestedParameterDefinition {
 // Exact profile used by option editors; unknown families return zero.
 [[nodiscard]] uint32_t ParameterVersionProfile(std::wstring_view version);
 [[nodiscard]] std::wstring ParameterPrimaryOperandLabel(std::wstring_view command, std::wstring_view version);
+// Number of positional values represented by the primary editor in this profile.
+[[nodiscard]] size_t ParameterPrimaryOperandCount(std::wstring_view command, std::wstring_view version);
 [[nodiscard]] std::vector<NestedParameterDefinition> ParameterNestedOptions(std::wstring_view command, std::wstring_view version);
 [[nodiscard]] bool NestedParameterRequired(std::wstring_view command, std::wstring_view option,
     std::wstring_view version, std::wstring_view text);
@@ -34,6 +36,8 @@ struct NestedParameterDefinition {
 // Changes one nested option and orders known options for the selected profile,
 // preserving parent operands, sibling values, gaps and unknown tokens.
 // Repeated parent commands/options are ambiguous and cannot be edited structurally.
+// A single primary value is quoted automatically; multi-value primary fields
+// retain their explicit command-line syntax. An already quoted single value is accepted.
 [[nodiscard]] std::wstring SetNestedParameter(std::wstring_view text, const ParameterDefinition& command,
     const NestedParameterDefinition& option, std::wstring_view value, bool enabled = true);
 }  // namespace ibstart::launcher

@@ -39,6 +39,7 @@
 #include <exception>
 #include <cstdint>
 #include <mutex>
+#include <set>
 #include <string_view>
 #include <stop_token>
 #include <stdexcept>
@@ -4267,6 +4268,109 @@ void TestPrimaryOnlyCommandEditors() {
   CHECK(ValidateParameterDraft(L"/EmailAuth user@example.com", stable).empty());
 }
 
+void TestSinglePrimaryOperandQuoting() {
+  using namespace ibstart::launcher;
+  std::set<std::wstring> commands;
+  size_t profiles{};
+  for (const auto& version : LaunchParameterVersions()) {
+    for (const auto& command : LaunchParameterCatalog()) {
+      if (ParameterEditorDefinition(command, version).kind != ParameterValueKind::reference) continue;
+      const auto label = ParameterPrimaryOperandLabel(command.key, version);
+      if (label.empty() || label.find(L';') != std::wstring::npos ||
+          !NestedParameterChoices(command.key, L"", version).empty()) continue;
+      CHECK(ParameterPrimaryOperandCount(command.key, version) == 1);
+      const NestedParameterDefinition operand{L"", label, OptionStyle::space, true, 0, ParameterVersionProfile(version)};
+      commands.insert(std::wstring(command.key));
+      ++profiles;
+      for (const auto value : {L"C:\\work files\\dump.cf", L"\\\\server\\shared folder\\",
+          L"Каталог\\имя файла.cf", L"value with \"quotes\" and \\"}) {
+        const auto draft = SetNestedParameter(L"", command, operand, value);
+        const auto tokens = SplitCommandArguments(draft);
+        CHECK(tokens.size() == 2);
+        if (tokens.size() == 2) CHECK(tokens[1] == value);
+        const auto explicit_quotes = SetNestedParameter(L"", command, operand, QuoteWindowsArgument(value));
+        CHECK(explicit_quotes == draft);
+        CHECK(SetNestedParameter(L"", command, operand, L"  " + QuoteWindowsArgument(value) + L"\t") == draft);
+        const auto read = ReadNestedParameter(draft, command, operand);
+        CHECK(read.has_value());
+        if (read) CHECK(SetNestedParameter(draft, command, operand, *read) == draft);
+      }
+      const auto updated = SetNestedParameter(L"  /L ru  " + std::wstring(command.key) +
+          L" old.value -Future \"keep this\"  /C unchanged ", command, operand, L"C:\\new dir\\file.cf");
+      CHECK(updated == L"  /L ru  " + std::wstring(command.key) +
+          L" \"C:\\new dir\\file.cf\" -Future \"keep this\"  /C unchanged ");
+    }
+  }
+  CHECK(commands.size() == 40);
+  CHECK(profiles == 716);
+  std::cout << "Single-primary quoting checked: " << commands.size() << " commands, " << profiles << " command/profile pairs\n";
+
+  const auto& dump = Parameter(L"/DumpCfg");
+  const NestedParameterDefinition operand{L"", L"file", OptionStyle::space, true, 0, ParameterVersionProfile(L"8.5.1")};
+  ibstart::domain::Database database;
+  database.connect = L"File=\"C:\\synthetic-base\"";
+  database.additional_parameters = SetNestedParameter(L"", dump, operand, L"C:\\work files\\dump.cf");
+  ibstart::domain::PlatformInstallation platform;
+  platform.executable = L"C:\\synthetic-platform\\1cv8.exe";
+  platform.version = L"8.5.1.100";
+  ibstart::domain::LaunchOptions options;
+  options.mode = ibstart::domain::LaunchMode::designer;
+  const auto launch = BuildCommand(database, platform, options);
+  CHECK(launch.arguments.back() == L"C:\\work files\\dump.cf");
+  CHECK(launch.arguments.size() == 5);
+
+  for (const auto key : {L"/DumpExternalDataProcessorOrReportToFiles", L"/LoadExternalDataProcessorOrReportFromFiles"}) {
+    const auto& command = Parameter(key);
+    for (const auto& version : LaunchParameterVersions()) {
+      const auto label = ParameterPrimaryOperandLabel(key, version);
+      if (label.empty()) continue;
+      CHECK(ParameterPrimaryOperandCount(key, version) == 2);
+      const NestedParameterDefinition multiple{L"", label, OptionStyle::space, true, 0, ParameterVersionProfile(version)};
+      const std::wstring values = L"\"C:\\root folder\\root.xml\" \"C:\\processor folder\\test.epf\"";
+      const auto draft = SetNestedParameter(L"", command, multiple, values);
+      CHECK(draft == std::wstring(key) + L" " + values);
+      const auto tokens = SplitCommandArguments(draft);
+      CHECK(tokens.size() == 3);
+      if (tokens.size() == 3) {
+        CHECK(tokens[1] == L"C:\\root folder\\root.xml");
+        CHECK(tokens[2] == L"C:\\processor folder\\test.epf");
+      }
+      CHECK(ReadNestedParameter(draft, command, multiple) == std::optional<std::wstring>(values));
+    }
+  }
+  bool rejected = false;
+  try { static_cast<void>(SetNestedParameter(L"", dump, operand, L"\"one.cf\" \"two.cf\"")); }
+  catch (const std::invalid_argument&) { rejected = true; }
+  CHECK(rejected);
+  CHECK(ParameterPrimaryOperandCount(L"/debug", L"8.5.1") == 1);
+  CHECK(ParameterPrimaryOperandCount(L"/DumpCfg", L"8.5.3") == 0);
+}
+
+void TestOtherEditorsQuoteValues() {
+  using namespace ibstart::launcher;
+  size_t simple_checked{}, nested_checked{};
+  const std::wstring value = L"C:\\folder with spaces\\quoted\"value\\";
+  for (const auto& command : LaunchParameterCatalog()) {
+    if ((command.kind == ParameterValueKind::text || command.kind == ParameterValueKind::file) && command.choices.empty()) {
+      const auto tokens = SplitCommandArguments(SetLaunchParameter(L"", command, value));
+      CHECK(tokens.size() == 2);
+      if (tokens.size() == 2) CHECK(tokens[1] == value);
+      ++simple_checked;
+    }
+    for (const auto& version : LaunchParameterVersions()) {
+      for (const auto& option : ParameterNestedOptions(command.key, version)) {
+        if (option.style == OptionStyle::flag || !NestedParameterChoices(command.key, option.key, version).empty()) continue;
+        const auto draft = SetNestedParameter(L"", command, option, value);
+        CHECK(ReadNestedParameter(draft, command, option) == std::optional<std::wstring>(value));
+        ++nested_checked;
+      }
+    }
+  }
+  CHECK(simple_checked > 0 && nested_checked > 0);
+  std::cout << "Other quoted editors checked: " << simple_checked << " simple commands, "
+            << nested_checked << " named-option/profile pairs\n";
+}
+
 void TestNestedCommandOptions() {
   using namespace ibstart::launcher;
   const auto& create = Parameter(L"/ConfigurationRepositoryCreate");
@@ -4473,6 +4577,8 @@ int wmain(int argc, wchar_t* argv[]) {
   run(L"OperandDomains", TestOperandDomains);
   run(L"ReviewedLaunchSemantics", TestReviewedLaunchSemantics);
   run(L"PrimaryOnlyCommandEditors", TestPrimaryOnlyCommandEditors);
+  run(L"SinglePrimaryOperandQuoting", TestSinglePrimaryOperandQuoting);
+  run(L"OtherEditorsQuoteValues", TestOtherEditorsQuoteValues);
   run(L"ZeroArgumentCommandEditors", TestZeroArgumentCommandEditors);
   run(L"AddCommandWithoutArguments", TestAddCommandWithoutArguments);
   run(L"LaunchChecksActualParameterVersion", TestLaunchChecksActualParameterVersion);

@@ -334,12 +334,14 @@ void ShowDefinition(State& state, bool reveal_nested = false) {
   }
   ShowWindow(state.value, flag ? SW_HIDE : SW_SHOW);
   ShowWindow(state.value_label, flag ? SW_HIDE : SW_SHOW);
+  const bool multiple_primary = launcher::ParameterPrimaryOperandCount(def.key, context.version) > 1;
   const std::wstring value_label = nested && nested->key.empty() ?
-      state.primary_label.find(L';') == std::wstring::npos ? state.primary_label + L":" :
+      !multiple_primary ? state.primary_label + L":" :
       L"Аргументы (пути с пробелами — в кавычках):" : L"Значение:";
   SetWindowTextW(state.value_label, value_label.c_str());
   if (nested && nested->key.empty() && !choice) {
-    detail += L"\r\n\r\nЗначения с пробелами заключайте в двойные кавычки.";
+    detail += multiple_primary ? L"\r\n\r\nЗначения с пробелами заключайте в двойные кавычки." :
+        L"\r\n\r\nВведите одно значение целиком. Кавычки для пробелов добавляются автоматически.";
     SetDescription(state, detail);
   }
   ShowWindow(state.browse, def.kind == launcher::ParameterValueKind::file ? SW_SHOW : SW_HIDE);
