@@ -182,5 +182,13 @@ if(BUILD_TESTING)
   target_compile_options(ibstart_update_ui_tests PRIVATE /W4 /WX /permissive- /EHsc /Zc:__cplusplus /utf-8)
   add_test(NAME ibstart.startup_update_contracts COMMAND ibstart_update_ui_tests)
   set_tests_properties(ibstart.startup_update_contracts PROPERTIES TIMEOUT 60)
+  add_executable(ibstart_context_menu_tests tests/ui/test_context_menu_icons.cpp
+    src/ui/context_menu_controller.cpp src/ui/owner_draw_menu.cpp src/ui/dialog_support.cpp)
+  target_link_libraries(ibstart_context_menu_tests PRIVATE ibstart_core Comctl32 Comdlg32)
+  target_compile_definitions(ibstart_context_menu_tests PRIVATE
+    UNICODE _UNICODE WIN32_LEAN_AND_MEAN NOMINMAX WINVER=0x0A00 _WIN32_WINNT=0x0A00)
+  target_compile_options(ibstart_context_menu_tests PRIVATE /W4 /WX /permissive- /EHsc /Zc:__cplusplus /utf-8)
+  add_test(NAME ibstart.context_menu_icon_contracts COMMAND ibstart_context_menu_tests)
+  set_tests_properties(ibstart.context_menu_icon_contracts PROPERTIES TIMEOUT 15)
   set_tests_properties(ibstart.unit PROPERTIES WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}")
 endif()

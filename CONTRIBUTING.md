@@ -14,10 +14,17 @@
 Требуются Visual Studio Build Tools 2022 или новее с компонентом **Desktop development with C++**, CMake 3.24+, Ninja и Windows SDK. В x64 Native Tools Command Prompt из корня репозитория выполните:
 
 ```powershell
+chcp 65001
 cmake --preset msvc-x64-release
 cmake --build --preset msvc-x64-release
 ctest --preset msvc-x64-release
 ```
+
+При смене кодовой страницы или использовании ранее настроенной русской MSVC-сборки
+выполните `cmake --fresh --preset msvc-x64-release`, затем сборку с `--clean-first`.
+В старом кэше может сохраниться неверно распознанный префикс `/showIncludes`:
+Ninja тогда пропускает изменения заголовков и смешивает несовместимые модули.
+Перед выпуском полная пересборка обязательна.
 
 Для справочных данных и генераторов требуется Python 3.10 или новее.
 Проверки используют стандартную библиотеку и не требуют исходных страниц 1С:

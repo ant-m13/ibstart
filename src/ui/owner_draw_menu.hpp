@@ -9,17 +9,18 @@
 namespace ibstart::ui {
 
 enum class OwnerDrawMenuIcon {
-  standard,
-  move_up,
-  move_down,
-  compact_mode,
-  settings,
-  credentials,
-  configurations,
-  tag,
-  launch_parameters,
-  sort_ascending,
-  sort_descending,
+  // Keep existing IDs stable when adding icons used by separate UI modules.
+  standard = 0,
+  move_up = 1,
+  move_down = 2,
+  compact_mode = 3,
+  settings = 4,
+  tag = 5,
+  launch_parameters = 6,
+  sort_ascending = 7,
+  sort_descending = 8,
+  credentials = 9,
+  configurations = 10,
 };
 
 struct OwnerDrawMenuItem {

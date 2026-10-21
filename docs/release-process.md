@@ -9,10 +9,18 @@
 3. Локально выполните Release-сборку и тесты:
 
    ```powershell
-   cmake --preset msvc-x64-release
-   cmake --build --preset msvc-x64-release
+   chcp 65001
+   cmake --fresh --preset msvc-x64-release
+   cmake --build --preset msvc-x64-release --clean-first
    ctest --preset msvc-x64-release
    ```
+
+   Для выпуска используйте полную пересборку. На локализованном MSVC кодовая
+   страница при определении компилятора должна совпадать с выводом компилятора:
+   ошибочно распознанный префикс `/showIncludes` оставляет Ninja без зависимостей
+   от заголовков. `chcp 65001` перед `cmake --fresh` устраняет обнаруженное
+   несовпадение UTF-8/OEM на русской установке Build Tools. Убедитесь, что
+   `ninja -C out/build/msvc-x64-release -t deps` содержит зависимости от заголовков.
 
 4. Проверьте справочные данные без исходных страниц 1С:
 
